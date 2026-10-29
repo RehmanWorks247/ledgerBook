@@ -1,0 +1,52 @@
+{
+  "name": "ledgerbook",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": [
+    "apps/web"
+  ],
+  "engines": {
+    "node": ">=22.14"
+  },
+  "scripts": {
+    "local": "npm run build:web && node --import tsx scripts/local.ts",
+    "local:start": "npm run build:web && node scripts/local-control.cjs start",
+    "local:stop": "node scripts/local-control.cjs stop",
+    "local:status": "node scripts/local-control.cjs status",
+    "dev:api": "node --env-file-if-exists=.env --import tsx --watch apps/api/src/main.ts",
+    "dev:web": "npm run dev --workspace @ledgerbook/web",
+    "build": "npm run build:api && npm run build:web",
+    "build:api": "tsc -p apps/api/tsconfig.json",
+    "build:web": "npm run build --workspace @ledgerbook/web",
+    "start": "node --env-file-if-exists=.env dist/api/main.js",
+    "typecheck": "tsc --noEmit -p tsconfig.json && npm run typecheck --workspace @ledgerbook/web",
+    "lint": "eslint apps tests scripts",
+    "test": "node --env-file-if-exists=.env --import tsx --test --test-concurrency=1 tests/*.test.ts && npm run test --workspace @ledgerbook/web",
+    "db:migrate": "node --env-file-if-exists=.env --import tsx scripts/migrate.ts",
+    "admin:create": "node --env-file-if-exists=.env --import tsx scripts/bootstrap.ts",
+    "seed": "node --env-file-if-exists=.env --import tsx scripts/seed.ts",
+    "db:cleanup": "node --env-file-if-exists=.env --import tsx scripts/cleanup.ts"
+  },
+  "dependencies": {
+    "@nestjs/common": "11.1.27",
+    "@nestjs/core": "11.1.27",
+    "@nestjs/platform-express": "11.1.27",
+    "express": "^5.1.0",
+    "helmet": "^8.1.0",
+    "pg": "^8.21.0",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.2",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "0.4.1",
+    "@eslint/js": "^10.0.1",
+    "@types/express": "^4.17.25",
+    "@types/node": "^25.9.1",
+    "@types/pg": "^8.15.0",
+    "eslint": "^10.4.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.9.0",
+    "typescript-eslint": "^8.69.0"
+  }
+}

@@ -1,0 +1,21 @@
+# Local development only. Production must supply its own private database and secrets.
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: ledgerbook
+      POSTGRES_USER: ledgerbook
+      POSTGRES_PASSWORD: local-only-change-me
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - ledgerbook_dev_postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ledgerbook -d ledgerbook"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+volumes:
+  ledgerbook_dev_postgres:
