@@ -16,6 +16,19 @@ import { CustomersController } from './customers/customers.controller';
 import { DatabaseModule } from './database/database.module';
 import { DatabaseService } from './database/database.service';
 import { config } from './config';
+import { CurrencyController } from './currency/currency.controller';
+import { CurrencyService } from './currency/currency.service';
+import { RatesService } from './currency/rates.service';
+import { BookingsController } from './bookings/bookings.controller';
+import { BookingsService } from './bookings/bookings.service';
+import { DocumentStorage } from './bookings/document-storage';
+import { DocumentUploadInterceptor } from './bookings/document-upload.interceptor';
+import { DocumentDownloadInterceptor } from './bookings/document-download.interceptor';
+import { DashboardService } from './dashboard/dashboard.service';
+import { PaymentsService } from './payments/payments.service';
+import { PaymentsController, PaymentReviewController, PaymentUploadGuard } from './payments/payments.controller';
+import { PaymentEmailOutbox } from './payments/email-outbox.service';
+import { PaymentEmailStatusController } from './payments/email-status.controller';
 
 @Controller()
 class HealthController {
@@ -46,9 +59,11 @@ class SafeExceptionFilter implements ExceptionFilter {
   }
 }
 
-export async function createApp(options:{database?:DatabaseService;logger?:false}={}) {
+export async function createApp(options:{database?:DatabaseService;logger?:false;paymentEmails?:boolean}={}) {
   @Module({imports:[DatabaseModule.forRoot(options.database),AuthModule,InvitationsModule],
-    controllers:[HealthController,CustomersController],providers:[AccessService,LedgerService,CustomersService]})
+    controllers:[HealthController,CustomersController,CurrencyController,BookingsController,PaymentsController,PaymentReviewController,PaymentEmailStatusController],
+    providers:[AccessService,LedgerService,CustomersService,CurrencyService,RatesService,BookingsService,DocumentStorage,DocumentUploadInterceptor,DocumentDownloadInterceptor,DashboardService,
+      PaymentsService,PaymentUploadGuard,PaymentEmailOutbox,{provide:'PAYMENT_EMAIL_WORKER_ENABLED',useValue:options.paymentEmails ?? true}]})
   class ApplicationModule {}
   const app=await NestFactory.create<NestExpressApplication>(ApplicationModule,{
     logger:options.logger===false?false:['error','warn','log'],bodyParser:false,abortOnError:false,
@@ -59,7 +74,7 @@ export async function createApp(options:{database?:DatabaseService;logger?:false
   app.use(helmet({
     referrerPolicy:{policy:'no-referrer'},
     strictTransportSecurity:config.production?{maxAge:31536000,includeSubDomains:true}:false,
-    contentSecurityPolicy:{directives:{defaultSrc:["'self'"],scriptSrc:["'self'"],objectSrc:["'none'"],frameAncestors:["'none'"],formAction:["'self'"],baseUri:["'self'"],upgradeInsecureRequests:config.production?[]:null}},
+    contentSecurityPolicy:{directives:{defaultSrc:["'self'"],scriptSrc:["'self'"],imgSrc:["'self'",'data:','blob:'],objectSrc:["'none'"],frameAncestors:["'none'"],formAction:["'self'"],baseUri:["'self'"],upgradeInsecureRequests:config.production?[]:null}},
   }));
   app.use((req:Request,res:Response,next:NextFunction)=>{
     if(req.path.startsWith('/api')) {
@@ -74,7 +89,10 @@ export async function createApp(options:{database?:DatabaseService;logger?:false
   });
   app.use(express.json({limit:'16kb'}));
   app.use((err:unknown,_req:Request,res:Response,next:NextFunction)=>{
-    if(err) { res.status((err as {type?:string}).type==='entity.too.large'?413:400).json({message:'Request body must be valid JSON and at most 16 KB.'});return; }
+    if(err) {
+      const pdf = _req.is('application/pdf');
+      res.status((err as {type?:string}).type==='entity.too.large'?413:400).json({message:pdf ? 'PDF uploads must be at most 10 MB.' : 'Request body must be valid JSON and at most 16 KB.'});return;
+    }
     next();
   });
   app.useGlobalFilters(new SafeExceptionFilter());

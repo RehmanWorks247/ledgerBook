@@ -1,0 +1,37 @@
+purpose:
+  stands_in_for: General-purpose unversioned S3 PUT, GET and DELETE for private PDF documents, with checksum enforcement and transient or persistent 503 responses.
+  unblocks: Real AWS SDK serialization, encryption/checksum headers, retries and sanitized outage handling without accessing AWS or customer files.
+assumptions:
+  - id: documented-object-operations
+    status: supported
+    claim: S3 PutObject stores the complete object on success, GetObject returns its bytes, and DeleteObject removes the current object in an unversioned bucket.
+    reason: These behaviors are defined by the official AWS API contract; versioned buckets have distinct delete-marker behavior not modeled here.
+    verification: On 2026-11-06 read official PutObject, GetObject and DeleteObject documentation. No live AWS request was made.
+    source: https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutObject.html; https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetObject.html; https://docs.aws.amazon.com/AmazonS3/latest/API/API_DeleteObject.html
+    updated_at: "2026-11-06"
+  - id: sdk-retries-and-storage-errors
+    status: supported
+    claim: The real DocumentStorage adapter preserves the tested ASCII-PDF bytes through PUT and GET, deletes the modeled object, retries two transient 503s, and returns a sanitized 503 after three failed attempts during a persistent outage.
+    reason: The production AWS SDK adapter ran against the local Postman member, whose handler validates the checksum, encryption, content type and cache headers.
+    verification: On 2026-11-06 tests/document-storage.simulation.ts passed. Observed request log PUT200, GET200, DELETE204, GET404, PUT503/503/200, GET200, then PUT503/503/503. Final modeled state was seven PUTs, three GETs, one DELETE and one stored object.
+    source: tests/document-storage.simulation.ts; postman/mocks/s3-documents/default.js; apps/api/src/bookings/document-storage.ts
+    updated_at: "2026-11-06"
+  - id: postman-binary-body-preservation
+    status: contradicted
+    claim: Postman CLI 1.75 simulation request interception preserves arbitrary PDF binary bytes.
+    reason: The local runtime decodes intercepted application/pdf bodies as UTF-8 strings. A 29-byte fixture containing 0xFF and 0x80 arrived as 33 bytes containing replacement characters; the strict checksum correctly rejected it. Disabling interception and using a handler path still left the raw stream consumed.
+    verification: Reproduced locally on 2026-11-06, then limited this Postman smoke to an ASCII PDF. tests/document-storage.test.ts independently uses a raw node:http S3 stand-in and binary fixtures containing 0x00, 0xFF and 0x80 to verify exact binary transport through the same production SDK.
+    source: tests/document-storage.test.ts; tests/document-storage.simulation.ts; postman/mocks/s3-documents/config.yaml
+    updated_at: "2026-11-06"
+  - id: deployed-storage-permissions
+    status: unknown
+    claim: The deployment has a private bucket, correct IAM permissions and matching regional configuration.
+    reason: No deployed bucket or credentials were supplied. The local stand-in checks signing syntax only, not signature validity, IAM, encryption at rest, versioning or network policies.
+    verification: Not verified against AWS. Owner mock discovery was skipped because this CLI installation does not support postman status. The local contract subset was built from official AWS documentation; no mock was published or deployed.
+    source: postman/mocks/s3-documents/contract.openapi.json; .env.example
+    updated_at: "2026-11-06"
+fingerprints:
+  - id: local-storage-implementation
+    date: "2026-11-06"
+    commit: 67288b9d3f14e66ed8f3bcf1172b92a669682068 (dirty working tree with document storage implementation)
+    cli: "1.75.0"

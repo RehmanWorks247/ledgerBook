@@ -8,15 +8,17 @@ export const AuthContext = createContext<{
 export const OrganizationContext = createContext<Membership>(null!);
 export const useOrganization = () => useContext(OrganizationContext);
 // Email link tokens exist only in memory, never in queries, storage, or analytics.
-export const emailLink = {
-  token: window.location.hash.slice(1),
-  purpose: window.location.pathname === "/invite" ? "invite" : "reset",
-};
-if (emailLink.token)
-  window.history.replaceState(
-    null,
-    "",
-    window.location.pathname + window.location.search,
-  );
+export const emailLink = { token: "", purpose: "" };
+export function captureEmailLink(): boolean {
+  const { pathname, search, hash } = window.location;
+  if (!hash || (pathname !== "/invite" && pathname !== "/reset-password"))
+    return false;
+  const token = hash.slice(1);
+  emailLink.purpose = pathname === "/invite" ? "invite" : "reset";
+  emailLink.token = /^[A-Za-z0-9_-]{43}$/.test(token) ? token : "";
+  window.history.replaceState(window.history.state, "", pathname + search);
+  return true;
+}
+captureEmailLink();
 export const pendingInvitation = () =>
   Boolean(emailLink.token && emailLink.purpose === "invite");

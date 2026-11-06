@@ -1,0 +1,96 @@
+.booking-list { margin-bottom: 24px; }
+.booking-message, .booking-editor, .booking-customer { padding: 24px; }
+.booking-customer { margin-bottom: 24px; }
+.booking-summary { display: grid; grid-template-columns: minmax(150px, .6fr) 1.4fr; gap: 24px; padding: 22px 24px; margin-bottom: 24px; }
+.booking-summary > div { display: flex; flex-direction: column; gap: 8px; }
+.booking-summary strong { font-size: 22px; }
+.booking-summary small { color: var(--muted); }
+.booking-list:has(+ .ufe), .ufe + .booking-list { margin-top: 24px; }
+.booking-services, .booking-instalments { border: 1px solid var(--line); border-radius: var(--radius); padding: 18px; margin: 0; }
+.booking-services legend, .booking-instalments legend { font-size: 13px; font-weight: 600; padding: 0 5px; }
+.booking-services > div { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; margin-top: 16px; }
+.booking-services label { flex-direction: row; align-items: center; }
+.booking-services input[type="checkbox"] { width: 16px; height: 16px; padding: 0; accent-color: var(--accent); }
+.booking-instalment-row { display: grid; grid-template-columns: 1fr 1fr auto; align-items: end; gap: 16px; margin: 18px 0; }
+.booking-instalments > button { display: inline-flex; align-items: center; gap: 5px; margin-top: 12px; }
+@media (max-width: 620px) {
+  .booking-summary { grid-template-columns: 1fr; }
+  .booking-services > div { grid-template-columns: 1fr 1fr; }
+  .booking-editor, .booking-customer, .booking-summary { padding: 20px 17px; }
+  .booking-instalment-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; gap: 8px; }
+}
+
+.booking-customer { padding: 0; max-width: 600px; margin-bottom: 20px; }
+
+.booking-payments { margin-bottom: 24px; overflow: hidden; }
+.booking-payments .panel-heading p { margin: 0; color: var(--muted); font-size: 13px; }
+.booking-payments .panel-heading h2 { margin-bottom: 4px; }
+.payment-notice { margin: 0 24px 20px; }
+.payment-upload { padding: 0 24px 24px; border-bottom: 1px solid var(--line); }
+.payment-upload > fieldset { border: 1px solid var(--line); border-radius: var(--radius); padding: 20px; margin: 0; min-width: 0; display: grid; gap: 18px; }
+.payment-upload legend { padding: 0 8px; font-weight: 600; font-size: 14px; }
+.payment-upload legend svg { vertical-align: middle; margin-right: 6px; }
+.payment-upload p { margin: 0; font-size: 13px; }
+.payment-upload label, .payment-confirmation label { display: flex; flex-direction: column; gap: 8px; font-size: 13px; font-weight: 500; }
+.payment-upload label small { font-weight: 400; color: var(--muted); }
+.payment-file-picker { border: 1px dashed var(--line-strong); padding: 18px; border-radius: var(--radius); display: grid; gap: 12px; background: var(--surface-subtle); }
+.payment-file-picker > label { flex-direction: row; align-items: center; gap: 8px; }
+.payment-file-picker input[type="file"] { font-size: 13px; padding: 0; background: transparent; border: 0; width: 100%; min-width: 0; }
+.payment-file-picker input::file-selector-button { border: 1px solid var(--line-strong); border-radius: 6px; padding: 8px 12px; margin-right: 10px; background: var(--surface); color: var(--text); font: inherit; cursor: pointer; }
+.payment-file-picker p { color: var(--muted); font-size: 12px; }
+.payment-previews { display: grid; gap: 8px; }
+.payment-preview { display: flex; gap: 12px; align-items: center; padding: 8px 12px 8px 8px; border: 1px solid var(--line); border-radius: 7px; }
+.payment-preview img { width: 54px; height: 54px; object-fit: contain; border-radius: 4px; background: var(--surface-subtle); }
+.payment-preview > div { display: grid; gap: 3px; min-width: 0; flex: 1; }
+.payment-preview strong { overflow-wrap: anywhere; font-size: 13px; font-weight: 500; }
+.payment-preview small { color: var(--muted); }
+.payment-upload-footer, .payment-card-heading, .payment-actions { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.payment-upload-footer, .payment-card-heading { justify-content: space-between; }
+.payment-upload-footer > span { font-size: 12px; color: var(--muted); }
+.payment-history { padding: 24px; display: grid; gap: 18px; }
+.payment-card { border: 1px solid var(--line); border-radius: var(--radius); padding: 22px; min-width: 0; background: var(--surface); }
+.payment-card-heading > div { display: flex; align-items: center; flex-wrap: wrap; gap: 14px; }
+.payment-card-heading > a { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; }
+.payment-amount { font-size: 22px; letter-spacing: -.4px; }
+.payment-status { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; padding: 5px 9px; border-radius: 5px; background: var(--surface-subtle); font-weight: 500; }
+.payment-status-approved { color: var(--success); background: var(--success-soft); }
+.payment-status-pending { color: var(--warning); background: var(--warning-soft); }
+.payment-status-rejected { color: var(--danger); background: var(--danger-soft); }
+.payment-booking { margin: 12px 0 0; font-size: 13px; }
+.payment-booking span { color: var(--muted); margin-left: 7px; }
+.payment-metadata { display: flex; flex-wrap: wrap; gap: 16px 30px; padding: 16px 0; margin: 0; }
+.payment-metadata > div { display: grid; gap: 5px; }
+.payment-metadata dt { color: var(--muted); font-size: 11px; }
+.payment-metadata dd { margin: 0; font-size: 12px; }
+.payment-metadata small { color: var(--muted); font-size: 11px; }
+.payment-note, .payment-rejection { font-size: 13px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; margin: 0 0 16px; }
+.payment-note > span, .payment-rejection > strong { display: block; font-size: 11px; color: var(--muted); margin-bottom: 4px; font-weight: 500; }
+.payment-rejection { padding: 12px 14px; background: var(--danger-soft); border: 1px solid var(--line); border-radius: 6px; }
+.payment-rejection > span { display: block; margin-top: 6px; color: var(--muted); font-size: 12px; }
+.payment-receipts { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 12px; max-width: 920px; }
+.payment-receipt { display: flex; min-width: 0; max-width: 240px; flex-direction: column; border: 1px solid var(--line); border-radius: 7px; overflow: hidden; color: var(--text); }
+.payment-receipt img { height: 150px; width: 100%; object-fit: contain; background: var(--surface-subtle); }
+.payment-receipt > span { display: flex; align-items: center; gap: 6px; padding: 9px 10px; font-size: 11px; }
+.payment-receipt > span > span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.payment-receipt:hover { border-color: var(--accent); }
+.payment-pending-note { color: var(--muted); font-size: 12px; margin: 14px 0 0; }
+.payment-review-controls { border-top: 1px solid var(--line); padding-top: 18px; margin-top: 18px; }
+.payment-confirmation { min-width: 0; border: 1px solid var(--line-strong); border-radius: 7px; padding: 16px; margin: 0; display: grid; gap: 16px; }
+.payment-confirmation legend { padding: 0 7px; font-size: 13px; font-weight: 600; }
+.payment-confirmation p { font-size: 13px; margin: 0; }
+.payment-confirmation .payment-verified { display: flex; flex-direction: row; align-items: flex-start; gap: 10px; font-size: 13px; line-height: 1.5; }
+.payment-verified input { flex-shrink: 0; width: 16px; height: 16px; padding: 0; margin: 2px 0 0; }
+.payment-review-list { display: grid; gap: 18px; }
+.payment-filters { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 22px; }
+@media (max-width: 620px) {
+  .booking-payments .panel-heading { flex-wrap: wrap; gap: 12px; }
+  .payment-upload { padding: 0 16px 20px; }
+  .payment-upload > fieldset, .payment-card { padding: 16px; }
+  .payment-upload-footer > .button { width: 100%; justify-content: center; }
+  .payment-history { padding: 16px; }
+  .payment-notice { margin: 0 16px 16px; }
+  .payment-metadata { gap: 12px 20px; }
+  .payment-receipts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .payment-receipt img { height: 120px; }
+  .payment-booking span { display: block; margin: 4px 0 0; }
+}

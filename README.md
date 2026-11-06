@@ -6,25 +6,51 @@ An organization administrator can create customer accounts, invite customers, po
 
 ## Local setup
 
-### Run immediately without Docker
+### Start everything with one command
 
-Dependencies are installed in this workspace. Run `npm run local`, or double-click `Start-LedgerBook.cmd` on Windows. The command builds React, starts NestJS at **http://localhost:3000**, applies migrations, and uses a persistent local PostgreSQL engine (PGlite). It listens only on `127.0.0.1` and is explicitly blocked in production mode.
+From the project folder in PowerShell:
 
-**Keep the launcher terminal open while using LedgerBook.** Closing that window stops the server; reopen the launcher before visiting the URL again. If a chat-managed process reports startup success but the browser cannot connect, stop that process and launch `Start-LedgerBook.cmd` directly from File Explorer. Restricted execution environments can block localhost connections or terminate their processes when the session ends. A running process alone does not prove browser connectivity.
+```powershell
+cd F:\Dev\LedgerBook
+pnpm start
+```
 
-The first run creates **LedgerBook Local**, using **PKR**, with email **admin@ledgerbook.local** and a unique randomly generated password. Open `.local/admin-login.txt` for the initial login; the password is never printed to logs. No customer accounts, sample financial transactions, shared demo passwords, or public registration bypasses are installed. The original password is never restored over a password you change.
+Open **http://localhost:3000** after the terminal says `LedgerBook is running`.
+`pnpm start` builds the React frontend, serves it through the NestJS backend,
+starts the persistent local PostgreSQL engine (PGlite), and applies migrations
+automatically. No `.env`, Docker, separate database server, or additional service
+command is needed. **Keep the terminal open while using the app.** Alternatively,
+double-click `Start-LedgerBook.cmd` on Windows.
+
+Dependencies are already installed on this computer. On a fresh checkout, install
+Node.js 24 and pnpm 11, then run `pnpm install --frozen-lockfile` once before
+`pnpm start`. If PowerShell blocks the pnpm script, use `pnpm.cmd` instead of `pnpm`.
+
+To stop everything cleanly, press **Ctrl+C** in the launcher terminal, or run
+`pnpm stop` from another terminal in the project folder. `pnpm status` reports
+whether the local process is running. Accounts and ledger data survive restarts
+in `.local/database`.
+
+This command serves a built frontend; restart it after editing source files.
+For frontend hot reload with a separate PostgreSQL server, use the development
+setup below. Local mode listens only on `127.0.0.1` and is blocked when
+`NODE_ENV=production`.
+
+The first run creates **LedgerBook Local**, using **GBP**, with email **admin@ledgerbook.local** and a unique randomly generated password. Open `.local/admin-login.txt` for the initial login; the password is never printed to logs. No customer accounts, sample financial transactions, shared demo passwords, or public registration bypasses are installed. The original password is never restored over a password you change.
 
 For a fresh local database, choose different initial details with:
 
 ```sh
-npm run local -- --name "Your Business" --email owner@example.com --currency GBP
+pnpm start --name "Your Business" --email owner@example.com --currency GBP
 ```
 
-Local mode does not load the production `.env`. It uses a fixed same-origin browser URL and local email files. Your database is saved in `.local/database`, and invitation/reset messages are saved in `.local/mail`. Open the latest `.eml` file to use its one-time link on this computer. These messages are **not delivered to real inboxes**. Keep the entire `.local` directory private and out of source archives. Stop the app before backing up its local database files.
+Local mode does not load the production `.env`. It uses a same-origin browser URL and defaults to local email files. Your database is saved in `.local/database`, and invitation/reset/payment messages are saved in `.local/mail`. Open the latest `.eml` file to use its one-time link on this computer. These default messages are **not delivered to real inboxes**. Keep the entire `.local` directory private and out of source archives. Stop the app before backing up its local database files.
 
-From a normal terminal, `npm run local:start` starts it in the background; `npm run local:status` checks its process; `npm run local:stop` shuts it down cleanly. `Stop-LedgerBook.cmd` also stops it. Restricted execution environments may terminate detached child processes; use `npm run local` in a persistent terminal there. Data and accounts survive restarts. Two processes cannot open the same local database concurrently.
+To explicitly enable live Resend email for this local application, create the private, gitignored `.local/email.env` with exactly `EMAIL_MODE=resend`, `EMAIL_FROM="LedgerBook <your-verified-sender@example.com>"`, and `RESEND_API_KEY=your-resend-api-key`, each on its own line. Use a sender verified in your Resend account and a key authorized to send from it; never commit or share the file. Restart the application after changing it. Startup reports `Email delivery: Resend (live email enabled)` without displaying the key. An invalid or incomplete file stops startup instead of silently falling back to local email. Removing the file, or replacing its contents with only `EMAIL_MODE=file`, restores local files. This file cannot override database, origin, or other production settings. Email links use the launcher's existing `--public-url` setting when supplied; otherwise they point to `http://localhost:3000` (or your selected port).
 
-Use `npm run local -- --port 3001` if port 3000 is occupied. Add `--verify` to run the nine startup HTTP checks again; these use normal login rate limits. The first successful provisioning runs them automatically. The checks create and revoke a temporary session without adding financial data. If TCP is denied by the execution environment, the checks explicitly report native in-process HTTP verification instead.
+For background operation, `pnpm local:start` starts the same application and writes logs to `.local/local.log`; use `pnpm status` and `pnpm stop` to manage it. `Stop-LedgerBook.cmd` also stops it. The existing `npm run local`, `local:start`, `local:status`, and `local:stop` commands remain available. Two processes cannot open the same local database concurrently.
+
+Use `pnpm start --port 3001` if port 3000 is occupied. Add `--verify` to run the nine startup HTTP checks again; these use normal login rate limits. The first successful provisioning runs them automatically. The checks create and revoke a temporary session without adding financial data. If TCP is denied by the execution environment, the checks explicitly report native in-process HTTP verification instead.
 
 This is a local development instance. Continue with the PostgreSQL configuration below for server deployments; PGlite local mode does not replace the production PostgreSQL adapter.
 
@@ -40,7 +66,7 @@ Copy `.env.example` to `.env`. For the supplied local PostgreSQL container, run 
 
 ```sh
 npm run db:migrate
-npm run admin:create -- --name "Your Business" --email owner@example.com --currency PKR
+npm run admin:create -- --name "Your Business" --email owner@example.com --currency GBP
 ```
 
 The bootstrap command creates the initial organization and its administrator. It prompts for a new identity's password without displaying it. For automation, `--password-stdin` reads a password from standard input; do not place passwords in command arguments or source control. If the email already has a login identity, the command reuses it without changing its password. Run this privileged command only through an authorized deployment/operations session. There is no public registration endpoint and no built-in demonstration login.
@@ -84,6 +110,8 @@ Seeding requires a database on a local host and is disabled otherwise. It adds f
 Local emails are written to private `.eml` files and are **not** printed to logs. Open the file to obtain an invitation or reset link. These files contain bearer secrets: do not share or commit them. Production email uses Resend's HTTPS API through the focused notification adapter; configure a verified sender and the provider's DNS records, then test invitation and recovery delivery before onboarding users. Replacing the email provider requires changing only that adapter.
 
 ## Application behavior
+
+- Customers can submit one to five receipt images inside a booking. Administrators review them under **Payment reviews** or in the booking itself. Submissions stay pending until approval; approval posts one ledger payment and queues the customer's confirmation email. Admins receive an email when a customer submits receipts. See [payment receipts and delivery operations](docs/payment-receipts.md) for upload limits, migrations, security, and retry behavior.
 
 - A **positive** balance means the customer owes the business. A **negative** balance means the customer has credit. The dashboard reports debt and credits separately.
 - Each organization has one currency and its minor-unit precision. Amounts are parsed from decimal strings into integers; JavaScript floating-point arithmetic is never used for ledger money. API money values and ledger IDs are strings.
@@ -138,7 +166,7 @@ For production database behavior, set `TEST_DATABASE_URL` to a disposable Postgr
 ```sh
 npm run build
 npm run db:migrate
-npm start
+npm run start:api
 ```
 
 Set production variables through the deployment's secret store. Serve the React build and API on the configured origin behind an HTTPS reverse proxy. Do not use Vite's development server in production. Run migrations as a controlled deployment step before serving traffic; a failed migration must stop the deployment. The migration runner records applied versions.
@@ -147,4 +175,65 @@ Use a dedicated PostgreSQL role with only required runtime privileges, a separat
 
 Password recovery email is dispatched asynchronously in the API process so the public response does not expose whether an address exists. Graceful shutdown waits for pending work; abrupt termination may lose an in-flight email, and the user can request another link. No persistent background queue is introduced in this initial scope.
 
-Out of scope: invoicing, inventory, payment collection, subscriptions, taxes, currency conversion, and full double-entry accounting. This code supplies a receivables foundation; deploying it still requires your database, email sender, TLS, monitoring, backup policy, and an end-to-end deployment smoke test.
+Out of scope: invoicing, inventory, payment collection, subscriptions, taxes, and full double-entry accounting. This code supplies a receivables foundation; deploying it still requires your database, email sender, TLS, monitoring, backup policy, and an end-to-end deployment smoke test.
+
+## Currencies and exchange rates
+
+Travel dashboards, customer records, statements and CSV exports display GBP. New bookings and the travel transaction form require a GBP accounting workspace. Existing non-GBP history is preserved and displayed using the existing GBP rate; unavailable conversion is shown explicitly. Settings retains administrator-managed reference rates. Currency APIs and stored preferences remain compatible, but travel ledger screens use GBP regardless of the saved preference. Other open currency views refresh on focus and every minute.
+
+Amounts remain stored and entered in the workspace's accounting currency. Changing display currency or a rate does not rewrite posted transactions. Converted values use current reference rates, not historical settlement rates. CSV exports include accounting amounts and rate provenance when converted. Integer arithmetic preserves precision and rounds half away from zero to the target currency's accounting precision.
+
+Automatic rates come from [Frankfurter's daily reference-rate API](https://frankfurter.dev/), without an API key. The server caches snapshots for one hour, retains a durable database fallback for up to seven days, and labels stale rates during provider failures. Observations older than seven days become unavailable. Manual rates remain in effect until an administrator removes them. No invented fallback rates are used.
+
+For Redis, start `docker compose up -d redis` and set `REDIS_URL=redis://127.0.0.1:6379` in the API environment. Redis has bounded connection/command timeouts and falls back to the database cache if unavailable. The local launcher works without Redis; to enable it for that launcher, set `REDIS_URL` in the shell environment before starting it (local mode does not load `.env`). Production migrations must run before starting the updated API; the local launcher applies them on startup.
+
+See [currency API and cache behavior](docs/currencies.md) for endpoints, configuration and verification.
+
+## Customer travel workspace
+
+The overview connects Customer Data, the combined Customer Ledger, booking creation,
+payment entry, instalment attention, departures and dated activity. Each booking has
+its own six service folders and authenticated PDF storage. Existing explorer styling
+and controls are retained. Local file bytes, associations and upload audit events
+commit together in PostgreSQL. Production can keep new document bytes in private
+AWS S3 with metadata and audit in PostgreSQL. Drag-and-drop uploads show per-file
+progress, safe retries and a compact success toast. See
+[file storage](docs/file-storage.md) and [hosted PostgreSQL setup](docs/hosted-postgres.md).
+
+Restart the local launcher to apply migrations 003 and 004 automatically. Server
+deployments should run `npm run db:migrate` before starting the new API. Fresh local
+workspaces default to GBP; existing non-GBP accounts are preserved and require an
+agreed accounting migration before new GBP bookings or travel transactions.
+`BUSINESS_TIME_ZONE` defaults to UTC and can be set to the agency's IANA time zone.
+
+See [dashboard calculations and filters](docs/customer-dashboard.md),
+[booking/document contracts](docs/bookings.md), and
+[travel workspace verification](docs/travel-verification.md).
+
+## Local travel demo data
+
+The repeatable Autumn 2026 fixture creates a separate **LedgerBook Demo — Autumn 2026**
+workspace with 50 fictional customers and bookings dated September 1–November 6,
+2026. It includes instalments, paid/partial/unpaid balances, pending and reviewed
+payment evidence, sample flight itineraries, hotel vouchers, and service documents.
+It uses your existing local administrator and never replaces other workspaces.
+
+```sh
+pnpm stop
+pnpm seed:demo
+node scripts/local-control.cjs start --verify
+```
+
+Stop the app before importing: the local PGlite database permits one process at a
+time. The command only opens this project's `.local/database`; it does not load
+production `.env` or Resend credentials. All fixture rows commit atomically, all
+database constraints remain enabled, and another run returns the existing data
+without resetting later edits. Its report is saved to `.local/demo-seed-report.json`.
+Select the demo workspace after refreshing/signing in with your existing admin login.
+
+No invitations or email notifications are queued during import. Synthetic customer
+logins are disabled and their addresses use `example.test`. Documents are visibly
+marked **SAMPLE / NOT VALID FOR TRAVEL**; receipt images say **TEST PAYMENT / NO MONEY
+MOVED**. Routes, flight numbers, hotels, and prices are illustrative fixtures, not
+real reservations or current offers. Normal manual actions in the app still use
+the configured email mode (local files by default).

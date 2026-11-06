@@ -1,0 +1,13 @@
+version: 1
+name: S3 private document contract subset
+slug: s3-documents
+protocol: http
+origin: https://s3.eu-west-2.amazonaws.com
+# CLI 1.75 decodes PDF bodies as UTF-8. This mock exercises ASCII PDF fixtures;
+# arbitrary binary HTTP transport is covered by tests/document-storage.test.ts.
+interceptRequests: true
+port: 4501
+scenarios:
+  - name: default
+    path: ./default.js
+    default: true

@@ -4,6 +4,8 @@ import { z } from 'zod';
 import { AccessService, type Membership } from '../access/access.service';
 import { DatabaseService } from '../database/database.service';
 import { InvitationService } from '../invitations/invitation.service';
+import { config } from '../config';
+import { validDate } from '../ledger/money';
 
 const profile = z.object({
   name: z.string().trim().min(1).max(160),
@@ -18,13 +20,15 @@ const listSchema = z.object({
   page_size:z.coerce.number().int().min(1).max(100).default(25),
   search:z.string().trim().max(160).default(''),
   status:z.enum(['active','archived','all']).default('all'),
+  start:z.string().refine(value=>!value || validDate(value),'Use a valid date in YYYY-MM-DD format.').optional(),
+  end:z.string().refine(value=>!value || validDate(value),'Use a valid date in YYYY-MM-DD format.').optional(),
 }).strict();
 function parse<T>(schema:z.ZodType<T>, value:unknown):T {
   const parsed=schema.safeParse(value);
   if (!parsed.success) throw new BadRequestException(parsed.error.issues.map(i=>`${i.path.join('.')}: ${i.message}`));
   return parsed.data;
 }
-const decoratedCustomer = `SELECT c.*, COALESCE(b.balance_minor,0)::text AS balance_minor,
+const decoratedCustomer = (extraColumns = '') => `SELECT c.*${extraColumns}, COALESCE(b.balance_minor,0)::text AS balance_minor,
   CASE WHEN m.is_active THEN 'accepted'
        WHEN i.revoked_at IS NOT NULL THEN 'revoked'
        WHEN i.accepted_at IS NOT NULL THEN 'access_revoked'
@@ -47,20 +51,27 @@ export class CustomersService {
   async list(member:Membership, raw:unknown) {
     const active=await this.access.membership(member.user_id,member.organization_id,true);
     const filter=parse(listSchema,raw);
+    if(filter.start && filter.end && filter.start>filter.end) throw new BadRequestException('Start date must be on or before end date.');
     const search=`%${filter.search.replace(/[\\%_]/g,'\\$&')}%`;
     const where=`c.organization_id=$1 AND ($2='all' OR c.status=$2)
-      AND ($3='%%' OR c.name ILIKE $3 OR c.email ILIKE $3 OR c.phone ILIKE $3)`;
-    const params=[active.organization_id,filter.status,search];
-    const result=await this.db.query(`${decoratedCustomer} WHERE ${where} ORDER BY c.name,c.id LIMIT $4 OFFSET $5`,
-      [...params,filter.page_size,(filter.page-1)*filter.page_size]);
+      AND ($3='%%' OR c.customer_code ILIKE $3 OR c.id::text ILIKE $3 OR c.name ILIKE $3 OR c.email ILIKE $3 OR c.phone ILIKE $3
+        OR to_char(c.created_at AT TIME ZONE $6,'YYYY-MM-DD') ILIKE $3
+        OR to_char(c.created_at AT TIME ZONE $6,'DD Mon YYYY') ILIKE $3)
+      AND ($4::date IS NULL OR (c.created_at AT TIME ZONE $6)::date >= $4::date)
+      AND ($5::date IS NULL OR (c.created_at AT TIME ZONE $6)::date <= $5::date)`;
+    const params=[active.organization_id,filter.status,search,filter.start||null,filter.end||null,config.businessTimeZone];
     const count=await this.db.query(`SELECT COUNT(*)::int AS total FROM customers c WHERE ${where}`,params);
-    return {items:result.rows,total:count.rows[0].total,page:filter.page,page_size:filter.page_size};
+    const total=count.rows[0].total;
+    const page=Math.min(filter.page,Math.max(1,Math.ceil(total/filter.page_size)));
+    const result=await this.db.query(`${decoratedCustomer(", to_char(c.created_at AT TIME ZONE $6,'YYYY-MM-DD') AS created_date")} WHERE ${where} ORDER BY c.name,c.id LIMIT $7 OFFSET $8`,
+      [...params,filter.page_size,(page-1)*filter.page_size]);
+    return {items:result.rows,total,page,page_size:filter.page_size,time_zone:config.businessTimeZone};
   }
 
   async get(member:Membership, customerId:string) {
     const active=await this.access.membership(member.user_id,member.organization_id);
     await this.access.customer(active,customerId);
-    const result=await this.db.query(`${decoratedCustomer} WHERE c.organization_id=$1 AND c.id=$2`,[active.organization_id,customerId]);
+    const result=await this.db.query(`${decoratedCustomer()} WHERE c.organization_id=$1 AND c.id=$2`,[active.organization_id,customerId]);
     const customer=result.rows[0];
     if(active.role==='customer') {
       // Internal account notes and delivery/access metadata are administrator-only.

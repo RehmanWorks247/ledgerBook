@@ -108,6 +108,8 @@ export interface LocalDatabase {
   /** The application uses only query, transaction and shutdown on this adapter. */
   db: DatabaseService;
   dataDirectory: string;
+  /** Logical PostgreSQL dump, for an offline export to an empty hosted database. */
+  exportSql(): Promise<string>;
   close(): Promise<void>;
 }
 
@@ -115,7 +117,7 @@ export interface LocalDatabase {
  * Explicit, single-process development database. Production always uses the
  * PostgreSQL pool; this adapter is never selected by production configuration.
  */
-export async function openLocalDatabase(options: { directory?: string; migrationsDirectory?: string } = {}): Promise<LocalDatabase> {
+export async function openLocalDatabase(options: { directory?: string; migrationsDirectory?: string; migrate?: boolean } = {}): Promise<LocalDatabase> {
   if (!['development', 'test'].includes(process.env.NODE_ENV ?? '')) {
     throw new Error('The local embedded database requires NODE_ENV=development or test.');
   }
@@ -130,7 +132,7 @@ export async function openLocalDatabase(options: { directory?: string; migration
     await mkdir(dataDirectory, { recursive: true, mode: 0o700 });
     engine = new PGlite(dataDirectory, { relaxedDurability: false });
     await engine.waitReady;
-    await applyMigrations(engine, resolve(options.migrationsDirectory ?? 'apps/api/src/database/migrations'));
+    if (options.migrate !== false) await applyMigrations(engine, resolve(options.migrationsDirectory ?? 'apps/api/src/database/migrations'));
   } catch (error) {
     try { if (engine) await engine.close(); }
     finally { await releaseLock(); }
@@ -180,5 +182,15 @@ export async function openLocalDatabase(options: { directory?: string; migration
     close,
     onApplicationShutdown: close,
   } as unknown as DatabaseService;
-  return { db, dataDirectory, close };
+  const exportSql = () => serial(async () => {
+    const { pgDump } = await import('@electric-sql/pglite-tools');
+    const dump = await pgDump({ pg: activeEngine, args: ['--no-owner', '--no-acl', '--schema=public', '--quote-all-identifiers'] });
+    const sql = await dump.text();
+    // Managed PostgreSQL already creates the standard empty public schema.
+    // This still fails on existing application tables; it never overwrites them.
+    // transaction_timeout was introduced in PG17; the dump also targets PG15/16.
+    return sql.replace('\nCREATE SCHEMA "public";\n', '\nCREATE SCHEMA IF NOT EXISTS "public";\n')
+      .replace('\nSET transaction_timeout = 0;\n', '\n');
+  });
+  return { db, dataDirectory, exportSql, close };
 }

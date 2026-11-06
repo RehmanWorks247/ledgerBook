@@ -36,7 +36,7 @@ async function main(){
     if(status?.state==='running'&&state==='running') console.log(`LedgerBook is running at ${status.url}`);
     else if(status&&['running','starting'].includes(status.state)&&state==='unknown') console.log('LedgerBook process status could not be verified. Check the terminal that started it.');
     else if(status?.state==='starting'&&state==='running') console.log(`LedgerBook is starting at ${status.url}`);
-    else console.log('LedgerBook is not running. Start it with npm run local:start.');
+    else console.log('LedgerBook is not running. Start it with pnpm start.');
     return;
   }
   if(action==='stop'){

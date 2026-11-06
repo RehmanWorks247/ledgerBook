@@ -69,7 +69,7 @@ export class InvitationService {
       await this.notifications.send({
         to: delivery.customer.email,
         subject: 'Your LedgerBook account invitation',
-        text: `${delivery.organizationName} has invited you to view your customer account in LedgerBook.\n\n${base}/invite#${delivery.token}\n\nThis link expires in ${config.invitationTtlHours} hours and can only be used once. Existing users must sign in with the invited email. Your administrator never sets or sees your password.`,
+        text: `${delivery.organizationName} invited you to view your balance and statements in LedgerBook. Open the link to join and choose your password. If you already have an account, sign in with ${delivery.customer.email} to accept.\n\n${base}/invite#${delivery.token}\n\nThis link expires in ${config.invitationTtlHours} hours and can only be used once.`,
       });
       delivered = true;
     } catch {

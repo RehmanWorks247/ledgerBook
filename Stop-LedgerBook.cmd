@@ -1,4 +1,4 @@
 @echo off
 cd /d "%~dp0"
-call npm.cmd run local:stop
+call pnpm.cmd stop
 if errorlevel 1 pause

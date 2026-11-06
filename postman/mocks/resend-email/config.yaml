@@ -1,0 +1,12 @@
+version: 1
+id: 9e19a487-ef65-490c-beb9-3952643e7d49
+name: Resend email contract subset
+slug: resend-email-contract-subset
+protocol: http
+origin: https://api.resend.com
+interceptRequests: true
+port: 4500
+scenarios:
+  - name: default
+    path: ./default.js
+    default: true

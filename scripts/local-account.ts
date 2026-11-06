@@ -31,7 +31,7 @@ export async function ensureLocalAccount(db:DatabaseService,options:{directory?:
   let created=false;
   if(existing.rows[0].count==='0') {
     if(!credentials) {
-      const identity=identitySchema.parse({email:options.email??'admin@ledgerbook.local',name:options.name??'LedgerBook Local',currency:options.currency??'PKR'});
+      const identity=identitySchema.parse({email:options.email??'admin@ledgerbook.local',name:options.name??'LedgerBook Local',currency:options.currency??'GBP'});
       credentials={...identity,userId:randomUUID(),organizationId:randomUUID(),password:randomBytes(24).toString('base64url'),createdAt:new Date().toISOString()};
       // Save before the transaction so an interrupted first start can recover its password.
       await writeFile(jsonPath,JSON.stringify(credentials,null,2)+'\n',{flag:'wx',mode:0o600});

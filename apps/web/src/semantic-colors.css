@@ -1,0 +1,30 @@
+/* Meaningful color is independent of the user's chosen navigation accent. */
+:root .money-payment { color: var(--success); }
+:root .money-charge, :root .money-negative { color: var(--danger); }
+
+.stat-success .stat-icon { color: var(--success); background: var(--success-soft); }
+.stat-danger .stat-icon { color: var(--danger); background: var(--danger-soft); }
+.stat-warning .stat-icon { color: var(--warning); background: var(--warning-soft); }
+.stat-info .stat-icon { color: var(--info); background: var(--info-soft); }
+.stat-violet .stat-icon { color: var(--violet); background: var(--violet-soft); }
+.primary-stat.stat-danger { border-top-color: var(--danger); }
+
+.button.button-success { background: var(--success); border-color: var(--success); color: var(--on-success); }
+.button.button-success:hover:not(:disabled) { background: color-mix(in srgb, var(--success) 87%, var(--text)); border-color: transparent; color: var(--on-success); }
+.button.button-danger { background: var(--danger-soft); border-color: color-mix(in srgb, var(--danger) 30%, var(--line)); color: var(--danger); }
+.button.button-danger:hover:not(:disabled) { background: color-mix(in srgb, var(--danger-soft) 85%, var(--danger)); border-color: var(--danger); color: var(--danger); }
+
+.sidebar nav .icon-info { color: var(--info); }
+.sidebar nav .icon-success { color: var(--success); }
+.sidebar nav .icon-warning { color: var(--warning); }
+.sidebar nav .icon-violet { color: var(--violet); }
+.workspace-icon, .helper-icon { background: var(--info-soft); color: var(--info); }
+.user-directory-avatar, .record-monogram { background: var(--info-soft); color: var(--info); border-color: color-mix(in srgb, var(--info) 18%, var(--line)); }
+.record-contact svg { color: var(--info); }
+.payment-receipt-count svg, .payment-receipt > span > svg:first-child { color: var(--info); }
+.payment-row-actions .button.secondary svg { color: var(--info); }
+.payment-file-picker > label > svg { color: var(--info); }
+.ufe-file-art[data-tone="info"] { background: var(--info-soft); color: var(--info); }
+.ufe-file-art[data-tone="success"] { background: var(--success-soft); color: var(--success); }
+.ufe-file-art[data-tone="danger"] { background: var(--danger-soft); color: var(--danger); }
+.ufe-file-art[data-tone="violet"] { background: var(--violet-soft); color: var(--violet); }

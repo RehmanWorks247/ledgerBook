@@ -19,6 +19,7 @@ import {
 import { errorMessage, mutate } from "../api";
 import { AuthContext, emailLink, pendingInvitation } from "../state";
 import { Brand, ErrorNotice, Loading } from "../components";
+import { ThemeToggle } from "../theme";
 function PasswordField({
   value,
   onChange,
@@ -93,6 +94,9 @@ function AuthFrame({ children }: { children: ReactNode }) {
         </span>
       </aside>
       <section className="auth-main">
+        <div className="auth-theme">
+          <ThemeToggle />
+        </div>
         <div className="mobile-brand">
           <Brand />
         </div>
@@ -132,11 +136,13 @@ export function AuthPage({ mode }: { mode: "login" | "forgot" | "reset" }) {
         setDone(true);
       }
       if (mode === "reset") {
+        const token = emailLink.token;
         await mutate("/auth/reset-password", {
-          token: emailLink.token,
+          token,
           password,
         });
-        emailLink.token = "";
+        if (emailLink.token === token) emailLink.token = "";
+        setPassword("");
         await refresh();
         setDone(true);
       }
@@ -229,6 +235,11 @@ export function AuthPage({ mode }: { mode: "login" | "forgot" | "reset" }) {
               Back to sign in
             </Link>
           )}
+          {mode === "reset" && error && (
+            <Link className="center-link" to="/forgot-password">
+              Request a new reset link
+            </Link>
+          )}
         </form>
       )}
       {mode === "login" && (
@@ -247,7 +258,7 @@ type InviteInfo = {
   existingUser?: boolean;
 };
 export function InvitationPage() {
-  const { session, refresh } = useContext(AuthContext);
+  const { session, loading, refresh } = useContext(AuthContext);
   const navigate = useNavigate();
   const [info, setInfo] = useState<InviteInfo>();
   const [error, setError] = useState("");
@@ -259,9 +270,12 @@ export function InvitationPage() {
       return;
     }
     let active = true;
-    mutate<InviteInfo>("/auth/invitations/inspect", { token: emailLink.token })
+    const token = emailLink.token;
+    mutate<InviteInfo>("/auth/invitations/inspect", { token })
       .then((value) => {
-        if (active) setInfo(value);
+        if (!active || emailLink.token !== token) return;
+        if (value.status !== "valid") emailLink.token = "";
+        setInfo(value);
       })
       .catch((error) => {
         if (active) setError(errorMessage(error));
@@ -272,13 +286,15 @@ export function InvitationPage() {
   }, []);
   async function accept(event: FormEvent) {
     event.preventDefault();
+    const token = emailLink.token;
     setBusy(true);
     setError("");
     try {
       await mutate("/auth/invitations/accept", {
-        token: emailLink.token,
+        token,
         ...(info?.existingUser ? {} : { password }),
       });
+      if (emailLink.token !== token) return;
       emailLink.token = "";
       await refresh();
       navigate("/");
@@ -290,10 +306,12 @@ export function InvitationPage() {
   }
   async function signOut() {
     setBusy(true);
+    setError("");
+    const token = emailLink.token;
     try {
       await mutate("/auth/logout");
       await refresh();
-      navigate("/login");
+      if (info?.existingUser && emailLink.token === token) navigate("/login");
     } catch (error) {
       setError(errorMessage(error));
     } finally {
@@ -308,7 +326,7 @@ export function InvitationPage() {
       <span className="eyebrow">YOU’RE INVITED</span>
       <h1>{invalid ? "Invitation unavailable" : "Your account starts here"}</h1>
       <ErrorNotice message={error} />
-      {!info && !error && <Loading />}
+      {(!info || loading) && !error && <Loading />}
       {invalid && (
         <>
           <p className="muted">
@@ -320,12 +338,12 @@ export function InvitationPage() {
                   ? "This invitation has been revoked. Contact the business for access."
                   : "This invitation link is invalid or missing. Open the latest invitation email, or ask the business to resend it."}
           </p>
-          <Link to="/login" className="button">
-            Go to sign in
+          <Link to={session ? "/" : "/login"} className="button">
+            {session ? "Back to LedgerBook" : "Go to sign in"}
           </Link>
         </>
       )}
-      {info?.status === "valid" && (
+      {info?.status === "valid" && !loading && (
         <>
           <p className="muted">
             Join <strong>{info.organizationName}</strong> to view your balance
@@ -338,7 +356,7 @@ export function InvitationPage() {
           {mismatch ? (
             <>
               <ErrorNotice
-                message={`You’re signed in as ${session.user.email}. Sign in with the invited email to continue.`}
+                message={`You’re signed in as ${session.user.email}. Switch accounts to continue as ${info.email}.`}
               />
               <button
                 className="button"
@@ -356,6 +374,9 @@ export function InvitationPage() {
               </p>
               <Link to="/login" className="button">
                 Sign in to accept <ArrowRight size={17} />
+              </Link>
+              <Link to="/forgot-password" className="form-link">
+                Forgot password?
               </Link>
             </>
           ) : (

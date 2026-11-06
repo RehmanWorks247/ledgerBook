@@ -100,6 +100,25 @@ describe(`ledger integrity (${integrationBackend})`, () => {
     assert.equal(own.customer.id, seed.customerId);
   });
 
+  it('finds statement entries by ID and displayed date without discarding preceding balance movements', async () => {
+    const id = await account();
+    await ledger.post(seed.admin, id, entry({ amount: '80.00', effective_date: '2025-08-01' }));
+    const payment = await ledger.post(seed.admin, id, entry({ kind: 'payment', amount: '25.00', effective_date: '2025-08-06', reference: 'BANK-SEARCH' }));
+    for (const search of [`#${payment.id}`, '2025-08-06', '06 Aug 2025', 'BANK-SEARCH', 'payment']) {
+      const found = await ledger.statement(seed.admin, id, { search, page_size: 1 });
+      assert.equal(found.total, 1, search);
+      assert.equal(found.entries[0].id, payment.id, search);
+      assert.equal(found.entries[0].running_balance_minor, '5500');
+      assert.equal(found.current_balance_minor, '5500');
+    }
+    assert.equal((await ledger.statement(seed.admin, id, { search: 'Test customer' })).total, 2);
+    assert.equal((await ledger.statement(seed.admin, id, { search: id })).total, 2);
+    assert.equal((await ledger.statement(seed.admin, id, { search: '%' })).total, 0);
+    const csv = await ledger.csv(seed.admin, id, { search: `#${payment.id}` });
+    assert.equal(csv.trim().split('\r\n').length, 2);
+    assert.match(csv, /BANK-SEARCH/);
+  });
+
   it('rejects malformed transaction bodies and unsupported fields with client errors', async () => {
     for (const body of [null, undefined, [], 'charge', { ...entry(), balance_minor: '500' }]) {
       await assert.rejects(ledger.post(seed.admin, seed.customerId, body as PostEntryInput), (error: unknown) =>

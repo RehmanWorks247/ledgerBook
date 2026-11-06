@@ -13,14 +13,15 @@ import { navigateTo, subscribeToNavigation } from "./history";
 
 // A small same-origin history router. The application needs only static paths,
 // named path parameters, nested layouts, and links; no data-router framework.
-const LocationContext = createContext(window.location.pathname);
+const browserLocation = () => window.location.pathname + (window.location.search || "");
+const LocationContext = createContext(browserLocation());
 const ParametersContext = createContext<Record<string, string>>({});
 const OutletContext = createContext<ReactNode>(null);
 
 export function BrowserRouter({ children }: { children: ReactNode }) {
-  const [path, setPath] = useState(window.location.pathname);
+  const [path, setPath] = useState(browserLocation());
   useEffect(
-    () => subscribeToNavigation(() => setPath(window.location.pathname)),
+    () => subscribeToNavigation(() => setPath(browserLocation())),
     [],
   );
   useEffect(() => {
@@ -33,6 +34,11 @@ export function BrowserRouter({ children }: { children: ReactNode }) {
 
 export function useNavigate() {
   return useCallback(navigateTo, []);
+}
+
+export function useSearch() {
+  const location = useContext(LocationContext);
+  return location.includes("?") ? location.slice(location.indexOf("?") + 1) : "";
 }
 
 export function Navigate({
@@ -88,7 +94,7 @@ export function NavLink({
   to,
   ...props
 }: Parameters<typeof Link>[0] & { end?: boolean }) {
-  const path = useContext(LocationContext);
+  const path = useContext(LocationContext).split("?")[0];
   const active = end ? path === to : path === to || path.startsWith(`${to}/`);
   return (
     <Link
@@ -157,7 +163,7 @@ function matchRoutes(
 }
 
 export function Routes({ children }: { children: ReactNode }) {
-  const path = useContext(LocationContext);
+  const path = useContext(LocationContext).split("?")[0];
   const match = matchRoutes(children, path.split("/").filter(Boolean));
   if (!match) return null;
   let rendered: ReactNode = null;

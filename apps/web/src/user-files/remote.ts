@@ -1,0 +1,260 @@
+import { api, ApiError, errorMessage, mutate } from "../api";
+import type { FileNode, FileStore, ImportEntry, UploadItem, UploadResult } from "./model";
+
+export type BookingFileContext = {
+  organizationId: string;
+  customerId: string;
+  bookingId: string;
+};
+
+export const MAX_UPLOAD_FILES = 100;
+const MAX_DOCUMENT_BYTES = 10 * 1024 * 1024;
+const MAX_BATCH_BYTES = 100 * 1024 * 1024;
+const UPLOAD_CONCURRENCY = 3;
+
+export function bookingFilesPath(context: BookingFileContext) {
+  const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  if (![context.organizationId, context.customerId, context.bookingId].every((id) => uuid.test(id)))
+    throw new Error("Select a customer and one of their bookings before uploading documents.");
+  return `/organizations/${context.organizationId}/customers/${context.customerId}/bookings/${context.bookingId}`;
+}
+
+// Context, destination, filename and content form a stable retry key, including
+// when a response was lost after the server committed the document.
+async function submissionKey(value: string) {
+  const bytes = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value)));
+  bytes[6] = (bytes[6] & 15) | 64;
+  bytes[8] = (bytes[8] & 63) | 128;
+  const hex = Array.from(bytes.slice(0, 16), (byte) => byte.toString(16).padStart(2, "0")).join("");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+async function fileDigest(file: File) {
+  const digest = await crypto.subtle.digest("SHA-256", await file.arrayBuffer());
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function abortError() { return new DOMException("Upload stopped. Retry to confirm whether the file was saved.", "AbortError"); }
+
+// XHR provides actual transmitted-byte progress. Completion is reported only
+// after the API confirms storage and metadata have both committed.
+export function uploadDocument(path: string, file: File, name: string, key: string, signal: AbortSignal,
+  onProgress: (loaded: number) => void): Promise<FileNode> {
+  const headers = { "Content-Type": "application/pdf", "X-File-Name": encodeURIComponent(name), "Idempotency-Key": key };
+  if (signal.aborted) return Promise.reject(abortError());
+  if (typeof XMLHttpRequest === "undefined") return api<FileNode>(path, { method: "POST", headers, body: file, signal });
+  return new Promise((resolve, reject) => {
+    const request = new XMLHttpRequest();
+    const abort = () => request.abort();
+    const finish = (error?: Error, node?: FileNode) => {
+      signal.removeEventListener("abort", abort);
+      if (error) reject(error); else resolve(node!);
+    };
+    request.open("POST", `/api${path}`);
+    request.withCredentials = true;
+    request.timeout = 180_000;
+    request.setRequestHeader("X-CSRF-Protection", "1");
+    for (const [header, value] of Object.entries(headers)) request.setRequestHeader(header, value);
+    request.upload.onprogress = (event) => onProgress(Math.min(event.loaded, file.size));
+    request.onload = () => {
+      let data: FileNode & { message?: string | string[] };
+      try { data = JSON.parse(request.responseText); }
+      catch { finish(new Error("The upload response was interrupted. Retry this file safely.")); return; }
+      if (request.status >= 200 && request.status < 300) finish(undefined, data);
+      else finish(new ApiError(Array.isArray(data.message) ? data.message.join(" ") : data.message || "The file could not be uploaded. Please retry.", request.status));
+    };
+    request.onerror = () => finish(new Error("Connection interrupted. Retry this file safely."));
+    request.ontimeout = () => finish(new Error("The upload timed out. Retry this file safely."));
+    request.onabort = () => finish(abortError());
+    signal.addEventListener("abort", abort, { once: true });
+    request.send(file);
+  });
+}
+
+type UploadJob = { item: UploadItem; entry: Extract<ImportEntry, { kind: "file" }>; destination: string; key?: string };
+
+export class BookingFileStore implements FileStore {
+  private nodes: FileNode[] = [];
+  private listeners = new Set<() => void>();
+  private uploadListeners = new Set<() => void>();
+  private uploads: UploadItem[] = [];
+  private jobs: UploadJob[] = [];
+  private controller: AbortController | undefined;
+  private loadVersion = 0;
+  readonly path: string;
+
+  constructor(context: BookingFileContext) { this.path = bookingFilesPath(context); }
+
+  getSnapshot = (): readonly FileNode[] => this.nodes;
+  getUploads = (): readonly UploadItem[] => this.uploads;
+  subscribe = (listener: () => void) => {
+    this.listeners.add(listener);
+    return () => { this.listeners.delete(listener); };
+  };
+  subscribeUploads = (listener: () => void) => {
+    this.uploadListeners.add(listener);
+    return () => { this.uploadListeners.delete(listener); };
+  };
+  private commit(nodes: FileNode[]) {
+    this.nodes = nodes;
+    this.listeners.forEach((listener) => listener());
+  }
+  private upsert(node: FileNode) {
+    // Ignore older list requests that started before this mutation committed.
+    ++this.loadVersion;
+    this.commit([...this.nodes.filter((existing) => existing.id !== node.id), node]);
+  }
+  private publishUploads() {
+    this.uploads = this.jobs.map(({ item }) => ({ ...item }));
+    this.uploadListeners.forEach((listener) => listener());
+  }
+  clearUploads = () => {
+    if (this.controller) return;
+    this.jobs = [];
+    this.publishUploads();
+  };
+  cancelUploads = () => { this.controller?.abort(); };
+  load = async () => {
+    const version = ++this.loadVersion;
+    try {
+      const data = await api<{ items: FileNode[] }>(`${this.path}/files`);
+      if (version === this.loadVersion) this.commit(data.items);
+    } catch (error) {
+      // A temporary outage must not erase successfully saved documents. Access
+      // denial does clear them, so revoked records do not remain visible.
+      if (version === this.loadVersion && error instanceof ApiError && [401, 403, 404].includes(error.status)) this.commit([]);
+      throw error;
+    }
+  };
+
+  private serviceDestination(parentId: string | null) {
+    if (!parentId) throw new Error("Open a service folder in this booking before adding files.");
+    let folder = this.nodes.find((node) => node.id === parentId && node.kind === "folder");
+    const visited = new Set<string>();
+    while (folder) {
+      if (folder.serviceKey) return;
+      if (visited.has(folder.id)) break;
+      visited.add(folder.id);
+      folder = this.nodes.find((node) => node.id === folder?.parentId && node.kind === "folder");
+    }
+    throw new Error("Choose a service folder belonging to the selected booking.");
+  }
+
+  private async folder(parentId: string | null, name: string, signal?: AbortSignal) {
+    const result = await api<FileNode>(`${this.path}/folders`, {
+      method: "POST", signal,
+      body: JSON.stringify({ parent_id: parentId, name, idempotency_key: await submissionKey(`${this.path}/folder/${parentId}/${name.trim()}`) }),
+    });
+    this.upsert(result);
+    return result;
+  }
+
+  async createFolder(parentId: string | null, name: string) {
+    const key = name.trim().normalize().toLowerCase();
+    if (this.nodes.some((node) => node.parentId === parentId && node.name.normalize().toLowerCase() === key))
+      throw new Error("An item with this name already exists here.");
+    await this.folder(parentId, name);
+  }
+
+  async importEntries(parentId: string | null, entries: ImportEntry[]): Promise<UploadResult> {
+    if (this.controller) throw new Error("Wait for the current upload to finish.");
+    this.serviceDestination(parentId);
+    const controller = new AbortController();
+    this.controller = controller;
+    let files = 0, bytes = 0, folders = 0;
+    const validate = async (list: ImportEntry[], depth = 0): Promise<void> => {
+      if (depth > 12) throw new Error("Choose folders no more than 12 levels deep.");
+      for (const entry of list) {
+        if (controller.signal.aborted) throw abortError();
+        if (!entry.name.trim() || entry.name.length > 240 || /[/\\]/.test(entry.name)
+          || Array.from(entry.name).some((char) => char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127)
+          || [".", ".."].includes(entry.name.trim()))
+          throw new Error("Use file and folder names up to 240 characters without slashes or control characters.");
+        if (entry.kind === "folder") {
+          if (++folders > 100) throw new Error("Choose at most 100 folders at a time.");
+          await validate(entry.children, depth + 1);
+        } else {
+          if (++files > MAX_UPLOAD_FILES || (bytes += entry.file.size) > MAX_BATCH_BYTES)
+            throw new Error("Choose at most 100 files totalling 100 MB at a time.");
+          if (!entry.name.toLowerCase().endsWith(".pdf") || entry.file.size > MAX_DOCUMENT_BYTES)
+            throw new Error(`${entry.name}: choose a PDF document up to 10 MB.`);
+          if (entry.file.size < 12 || !(await entry.file.slice(0, 5).text()).startsWith("%PDF-") || !(await entry.file.slice(-1024).text()).includes("%%EOF"))
+            throw new Error(`${entry.name} is not a valid PDF document.`);
+        }
+      }
+    };
+    try {
+      // Validate the complete selection before creating folders or uploading.
+      await validate(entries);
+      this.jobs = [];
+      this.publishUploads();
+      const planned: UploadJob[] = [];
+      const append = async (list: ImportEntry[], destination: string): Promise<void> => {
+        for (const entry of list) {
+          if (controller.signal.aborted) throw abortError();
+          if (entry.kind === "folder") {
+            const folder = await this.folder(destination, entry.name, controller.signal);
+            await append(entry.children, folder.id);
+          } else planned.push({ entry, destination, item: { id: crypto.randomUUID(), name: entry.name, status: "queued", loaded: 0, total: entry.file.size } });
+        }
+      };
+      await append(entries, parentId!);
+      this.jobs = planned;
+      this.publishUploads();
+      return await this.runUploads(this.jobs, controller.signal);
+    } finally { this.controller = undefined; }
+  }
+
+  retryUploads = async (): Promise<UploadResult> => {
+    if (this.controller) throw new Error("Wait for the current upload to finish.");
+    const pending = this.jobs.filter(({ item }) => ["failed", "cancelled"].includes(item.status));
+    const controller = new AbortController();
+    this.controller = controller;
+    try {
+      for (const job of pending) job.item = { ...job.item, status: "queued", loaded: 0, error: undefined };
+      this.publishUploads();
+      return await this.runUploads(pending, controller.signal);
+    } finally { this.controller = undefined; }
+  };
+
+  private async runUploads(jobs: UploadJob[], signal: AbortSignal): Promise<UploadResult> {
+    let index = 0;
+    const work = async () => {
+      while (index < jobs.length) {
+        const job = jobs[index++];
+        try {
+          if (signal.aborted) throw abortError();
+          job.item.status = "uploading";
+          this.publishUploads();
+          // Hash only the bounded number of active files, not the entire batch.
+          job.key ??= await submissionKey(`${this.path}/${job.destination}/${job.entry.name}/${await fileDigest(job.entry.file)}`);
+          if (signal.aborted) throw abortError();
+          const node = await uploadDocument(`${this.path}/folders/${job.destination}/documents`, job.entry.file, job.entry.name, job.key, signal, (loaded) => {
+            job.item.loaded = loaded;
+            job.item.status = loaded >= job.item.total ? "saving" : "uploading";
+            this.publishUploads();
+          });
+          this.upsert(node);
+          job.item.status = "complete";
+          job.item.loaded = job.item.total;
+        } catch (error) {
+          job.item.status = signal.aborted ? "cancelled" : "failed";
+          job.item.error = signal.aborted ? abortError().message : errorMessage(error);
+        }
+        this.publishUploads();
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(UPLOAD_CONCURRENCY, jobs.length) }, work));
+    return {
+      succeeded: jobs.filter(({ item }) => item.status === "complete").length,
+      failed: jobs.filter(({ item }) => item.status === "failed").length,
+      cancelled: jobs.filter(({ item }) => item.status === "cancelled").length,
+    };
+  }
+
+  async move(id: string, parentId: string | null) {
+    await mutate(`${this.path}/files/${encodeURIComponent(id)}`, { parent_id: parentId }, "PATCH");
+    await this.load();
+  }
+}
+

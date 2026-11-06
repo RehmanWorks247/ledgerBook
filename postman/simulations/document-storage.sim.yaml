@@ -1,0 +1,6 @@
+simulation: Private S3 document storage
+routing: path
+mocks:
+  - name: S3 private document contract subset
+    routeKey: s3
+    path: ../mocks/s3-documents/config.yaml

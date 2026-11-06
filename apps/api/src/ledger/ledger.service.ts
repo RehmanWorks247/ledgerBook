@@ -4,6 +4,8 @@ import type { PoolClient, QueryResultRow } from 'pg';
 import { AccessService, type Membership } from '../access/access.service';
 import { DatabaseService } from '../database/database.service';
 import { formatMoney, parseMoney, UUID_PATTERN, validDate } from './money';
+import { convertMinor } from '../currency/math';
+import type { Rate } from '../currency/rates.service';
 
 export interface PostEntryInput {
   kind: 'opening' | 'charge' | 'payment' | 'reversal';
@@ -182,9 +184,12 @@ export class LedgerService {
     const criteria: string[] = [];
     if (normalized.start) { values.push(normalized.start); criteria.push(`effective_date >= $${values.length}::date`); }
     if (normalized.end) { values.push(normalized.end); criteria.push(`effective_date <= $${values.length}::date`); }
-    if (normalized.search) {
+    const matchesAccount = [customer.id, customer.name, customer.customer_code, customer.email, customer.phone]
+      .some(value => typeof value === 'string' && value.toLowerCase().includes(normalized.search.toLowerCase()));
+    if (normalized.search && !matchesAccount) {
       values.push(normalized.search);
-      criteria.push(`(position(lower($${values.length}) in lower(description)) > 0 OR position(lower($${values.length}) in lower(reference)) > 0)`);
+      criteria.push(`position(lower($${values.length}) in lower(concat_ws(' ', '#' || id::text, description, reference, kind,
+        effective_date::text, to_char(effective_date,'DD Mon YYYY'), currency))) > 0`);
     }
     const where = criteria.length ? `AND ${criteria.join(' AND ')}` : '';
     const count = await client.query<{ total: string }>(
@@ -234,18 +239,26 @@ export class LedgerService {
     });
   }
 
-  async csv(member: Membership, customerId: string, filters: StatementFilters = {}): Promise<string> {
+  async csv(member: Membership, customerId: string, filters: StatementFilters = {}, conversion?: { code: string; exponent: number; rate: Rate }): Promise<string> {
     if (!UUID_PATTERN.test(customerId)) throw new BadRequestException('Invalid customer account.');
     const statement = await this.db.transaction(async (client) => {
       await client.query('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ');
       return this.statementData(client, member, customerId, filters, true);
     });
-    const lines = [['Transaction ID', 'Effective date', 'Type', 'Description', 'Reference', 'Currency', 'Amount', 'Running balance', 'Reversal of'].map((value) => csvCell(value)).join(',')];
+    const converted = conversion && conversion.code !== statement.currency;
+    const amount = (value: string) => converted
+      ? formatMoney(convertMinor(value, statement.currency_exponent, conversion.exponent, conversion.rate.rate), conversion.exponent)
+      : formatMoney(value, statement.currency_exponent);
+    const headers = ['Transaction ID', 'Effective date', 'Type', 'Description', 'Reference', 'Currency', 'Amount', 'Running balance', 'Reversal of'];
+    if (converted) headers.push('Accounting currency', 'Accounting amount', 'Exchange rate', 'Rate date', 'Rate source', 'Stale rate');
+    const lines = [headers.map((value) => csvCell(value)).join(',')];
     for (const entry of statement.entries) {
       lines.push([
         csvCell(entry.id), csvCell(entry.effective_date), csvCell(entry.kind), csvCell(entry.description, true),
-        csvCell(entry.reference, true), csvCell(entry.currency), csvCell(formatMoney(entry.amount_minor, statement.currency_exponent)),
-        csvCell(formatMoney(entry.running_balance_minor!, statement.currency_exponent)), csvCell(entry.reversal_of),
+        csvCell(entry.reference, true), csvCell(converted ? conversion.code : entry.currency), csvCell(amount(entry.amount_minor)),
+        csvCell(amount(entry.running_balance_minor!)), csvCell(entry.reversal_of),
+        ...(converted ? [csvCell(statement.currency), csvCell(formatMoney(entry.amount_minor, statement.currency_exponent)),
+          csvCell(conversion.rate.rate), csvCell(conversion.rate.date), csvCell(conversion.rate.source), csvCell(conversion.rate.stale)] : []),
       ].join(','));
     }
     return `${lines.join('\r\n')}\r\n`;

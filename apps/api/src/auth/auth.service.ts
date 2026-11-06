@@ -65,7 +65,7 @@ export class AuthService {
        FROM memberships m JOIN organizations o ON o.id=m.organization_id
        WHERE m.user_id=$1 AND m.is_active=true ORDER BY o.name,m.id`, [user.id],
     );
-    return { user, memberships: memberships.rows };
+    return { user, memberships: memberships.rows.map(member => ({ ...member, time_zone: config.businessTimeZone })) };
   }
 
   /** All requests return before identity lookup or email, including unknown addresses. */

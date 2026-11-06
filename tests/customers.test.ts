@@ -5,6 +5,7 @@ import { after, before, describe, it } from 'node:test';
 import { AccessService } from '../apps/api/src/access/access.service';
 import { AuthService } from '../apps/api/src/auth/auth.service';
 import { CustomersService } from '../apps/api/src/customers/customers.service';
+import { config } from '../apps/api/src/config';
 import { InvitationService } from '../apps/api/src/invitations/invitation.service';
 import { LedgerService } from '../apps/api/src/ledger/ledger.service';
 import { NotificationsService, type EmailMessage } from '../apps/api/src/notifications/notifications.service';
@@ -103,6 +104,31 @@ describe('customer account lifecycle', () => {
     await assert.rejects(customers.list(seed.admin, { search: ['one', 'two'] }));
   });
 
+  it('searches customer identity and dates across pages and combines inclusive date-added filters', async () => {
+    const created = (await database.db.query(`INSERT INTO customers
+      (id,organization_id,name,email,phone,created_by,idempotency_key,request_hash,created_at)
+      VALUES ($1,$2,'Date Search Account','date-search@example.test','555-9876',$3,$4,$5,
+        '2024-03-07 23:59:59'::timestamp AT TIME ZONE $6) RETURNING *`,
+    [randomUUID(),seed.orgId,seed.adminId,randomUUID(),'0'.repeat(64),config.businessTimeZone])).rows[0];
+    for (const search of [created.id, created.customer_code.toLowerCase(), 'Date Search', 'date-search@example.test', '555-9876', '2024-03-07', '07 Mar 2024']) {
+      const found = await customers.list(seed.admin, { search, page_size: 1 });
+      assert.equal(found.total, 1, search);
+      assert.equal(found.items[0].id, created.id, search);
+      assert.equal(found.items[0].created_date, '2024-03-07');
+    }
+    const matching = await customers.list(seed.admin, { start: '2024-03-07', end: '2024-03-07', search: 'Date Search', page: 100 });
+    assert.equal(matching.total, 1);
+    assert.equal(matching.page, 1, 'out-of-range pages recover to the last available page');
+    assert.equal(matching.items[0].id, created.id);
+    assert.equal((await customers.list(seed.admin, { start: '2024-03-08', search: created.id })).total, 0);
+    assert.equal((await customers.list(seed.admin, { end: '2024-03-06', search: created.id })).total, 0);
+    assert.equal((await customers.list(seed.otherAdmin, { search: created.id })).total, 0);
+    assert.equal((await customers.list(seed.admin, { start: '', end: '', search: created.id })).total, 1);
+    for (const filters of [{ start: '2024-02-30' }, { end: ['2024-03-07'] }, { start: '2024-03-08', end: '2024-03-07' }]) {
+      await assert.rejects(customers.list(seed.admin, filters));
+    }
+  });
+
   it('archives without erasing financial history and records profile/access audits', async () => {
     await ledger.post(seed.admin, seed.customerId, {
       kind: 'charge', amount: '42.50', effective_date: '2026-02-01', description: 'Preserved charge', idempotency_key: randomUUID(),
@@ -128,4 +154,18 @@ describe('customer account lifecycle', () => {
     assert.ok(audit.rows.some((row) => row.action === 'customer.updated'));
     assert.ok(audit.rows.some((row) => row.action === 'customer.access_revoked'));
   });
+  it('assigns unique eight-character customer IDs and searches them within the tenant', async () => {
+    const records = await Promise.all(Array.from({ length: 8 }, (_, index) => customers.create(seed.admin, {
+      name: `Short ID ${index}`, email: `short-id-${index}@example.test`, idempotency_key: randomUUID(),
+    })));
+    assert.equal(new Set(records.map(row => row.customer_code)).size, records.length);
+    for (const row of records) assert.match(row.customer_code, /^UK[0-9]{6}$/);
+    const found = await customers.list(seed.admin, { search: records[0].customer_code.toLowerCase() });
+    assert.deepEqual(found.items.map(row => row.id), [records[0].id]);
+    assert.equal((await customers.list(seed.otherAdmin, { search: records[0].customer_code })).total, 0);
+    await assert.rejects(database.db.query('UPDATE customers SET customer_code=$1 WHERE id=$2', ['UK999999', records[0].id]), /cannot be changed/i);
+    const unchanged = await customers.get(seed.admin, records[0].id);
+    assert.equal(unchanged.customer_code, records[0].customer_code);
+  });
+
 });

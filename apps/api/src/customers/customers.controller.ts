@@ -6,6 +6,8 @@ import { RateLimitService } from '../auth/rate-limit.service';
 import { InvitationService } from '../invitations/invitation.service';
 import { LedgerService } from '../ledger/ledger.service';
 import { CustomersService } from './customers.service';
+import { CurrencyService } from '../currency/currency.service';
+import { DashboardService } from '../dashboard/dashboard.service';
 
 type AuthRequest=Request & {user:{id:string;email:string}};
 @Controller('organizations/:orgId')
@@ -15,11 +17,17 @@ export class CustomersController {
     @Inject(CustomersService) private readonly customers:CustomersService,
     @Inject(LedgerService) private readonly ledger:LedgerService,
     @Inject(InvitationService) private readonly invitations:InvitationService,
-    @Inject(RateLimitService) private readonly rate:RateLimitService) {}
+    @Inject(RateLimitService) private readonly rate:RateLimitService,
+    @Inject(CurrencyService) private readonly currencies:CurrencyService,
+    @Inject(DashboardService) private readonly dashboardService:DashboardService) {}
 
   @Get('dashboard')
-  async dashboard(@Req() req:AuthRequest,@Param('orgId',ParseUUIDPipe) orgId:string) {
-    return this.ledger.dashboard(await this.access.membership(req.user.id,orgId,true));
+  async dashboard(@Req() req:AuthRequest,@Param('orgId',ParseUUIDPipe) orgId:string,@Query() query:unknown) {
+    return this.dashboardService.overview(await this.access.membership(req.user.id,orgId,true),query);
+  }
+  @Get('customer-ledger')
+  async combinedLedger(@Req() req:AuthRequest,@Param('orgId',ParseUUIDPipe) orgId:string,@Query() query:unknown) {
+    return this.dashboardService.combinedLedger(await this.access.membership(req.user.id,orgId,true),query);
   }
   @Get('customers')
   async list(@Req() req:AuthRequest,@Param('orgId',ParseUUIDPipe) orgId:string,@Query() query:unknown) {
@@ -65,9 +73,12 @@ export class CustomersController {
     return this.ledger.statement(await this.access.membership(req.user.id,orgId),id,query);
   }
   @Get('customers/:id/statement.csv')
-  async csv(@Req() req:AuthRequest,@Param('orgId',ParseUUIDPipe) orgId:string,@Param('id',ParseUUIDPipe) id:string,@Query() query:Parameters<LedgerService['csv']>[2],@Res() res:Response) {
+  async csv(@Req() req:AuthRequest,@Param('orgId',ParseUUIDPipe) orgId:string,@Param('id',ParseUUIDPipe) id:string,@Query() query:Parameters<LedgerService['csv']>[2] & {currency?:string},@Res() res:Response) {
     await this.rate.consume('statement-export',req.user.id,20,60);
-    const csv=await this.ledger.csv(await this.access.membership(req.user.id,orgId),id,query);
+    const member = await this.access.membership(req.user.id,orgId);
+    await this.access.customer(member,id);
+    const { currency, ...filters } = query ?? {};
+    const csv=await this.ledger.csv(member,id,filters,await this.currencies.conversion(member,currency));
     res.setHeader('Content-Type','text/csv; charset=utf-8');
     res.setHeader('Content-Disposition',`attachment; filename="statement-${id}.csv"`);
     res.send(csv);

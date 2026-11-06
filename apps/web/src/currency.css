@@ -1,0 +1,21 @@
+.currency-selector { display:flex; align-items:center; gap:8px; font-size:12px; color:var(--text-secondary); }
+.currency-selector select, .currency-search input, .rate-editor input { background:var(--surface); color:var(--text); border:1px solid var(--line-strong); border-radius:6px; }
+.currency-selector select { width:auto; min-width:90px; padding:7px 26px 7px 10px; font-weight:600; }
+.currency-notice { display:flex; flex-wrap:wrap; justify-content:space-between; gap:8px; padding:12px 16px; margin-bottom:20px; border:1px solid var(--line); border-radius:8px; font-size:12px; background:var(--surface); }
+.currency-settings { padding:28px; margin-bottom:24px; }
+.currency-settings header { display:flex; justify-content:space-between; flex-wrap:wrap; gap:16px; }
+.currency-settings h2 { margin:0 0 8px; font-size:18px; }
+.currency-settings p { font-size:13px; line-height:1.7; }
+.currency-rate-meta { display:flex; justify-content:space-between; align-items:center; gap:12px; font-size:12px; }
+.currency-search { display:block; max-width:360px; margin:20px 0; font-size:12px; }
+.currency-search input { display:block; width:100%; margin-top:8px; padding:10px 12px; }
+.currency-rate-list { max-height:580px; overflow:auto; }
+.currency-rate-row { padding:16px 0; border-top:1px solid var(--line); display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; }
+.currency-rate-row strong { font-size:13px; }
+.currency-rate-row strong span { font-weight:400; margin-left:8px; }
+.currency-rate-row small { display:block; margin-top:6px; color:var(--text-secondary); }
+.rate-editor { display:flex; align-items:center; flex-wrap:wrap; gap:8px; font-size:12px; max-width:540px; }
+.rate-editor label { display:flex; align-items:center; gap:8px; }
+.rate-editor input { width:145px; padding:8px; }
+.rate-save-status { flex-basis:100%; }
+@media(max-width:700px) { .currency-settings { padding:18px; } .currency-selector > span { display:none; } .currency-rate-meta { align-items:flex-start; flex-direction:column; } }

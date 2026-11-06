@@ -1,2 +1,13 @@
+packages:
+  - apps/web
+
+overrides:
+  multer: 2.5.0
+
 allowBuilds:
-  esbuild: set this to true or false
+  esbuild: true
+  '@nestjs/core': false
+  sharp: true
+
+minimumReleaseAgeExclude:
+  - '@aws-sdk/client-s3@3.1163.0'

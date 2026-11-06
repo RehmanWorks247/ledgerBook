@@ -11,25 +11,26 @@ import {
   ChevronLeft,
   ChevronRight,
   Download,
+  FolderOpen,
   Mail,
   Plus,
   RefreshCw,
-  Search,
-  ShieldCheck,
   X,
 } from "lucide-react";
 import {
   dateLabel,
   errorMessage,
-  money,
   mutate,
-  today,
   useResource,
   type Customer,
   type Entry,
   type Statement,
 } from "../api";
 import { useOrganization } from "../state";
+import { useLedgerMoney as useMoney } from '../currency';
+import { businessDate } from './booking-model';
+import { useDirectoryFilters } from "./directory-filters";
+import { amountTone } from "../money-tone";
 import {
   Badge,
   Empty,
@@ -43,19 +44,12 @@ type CustomerListData = {
   page: number;
   page_size: number;
   total: number;
+  time_zone?: string;
 };
 export function CustomerList() {
+  const money = useMoney();
   const member = useOrganization();
-  const [search, setSearch] = useState("");
-  const [query, setQuery] = useState("");
-  const [status, setStatus] = useState("");
-  const [page, setPage] = useState(1);
-  const params = new URLSearchParams({
-    search: query,
-    page: String(page),
-    page_size: "25",
-    ...(status ? { status } : {}),
-  });
+  const { search, setSearch, status, setStatus, dates, setDate, setPage, params, clear, invalidDates, filtered } = useDirectoryFilters();
   const { data, error, loading, refresh } = useResource<CustomerListData>(
     `/organizations/${member.organization_id}/customers?${params}`,
   );
@@ -64,9 +58,7 @@ export function CustomerList() {
   return (
     <>
       <PageHeading
-        eyebrow="CUSTOMER ACCOUNTS"
-        title="Your customers"
-        description="A clear account of every customer relationship."
+        title="Customer Data"
         actions={
           <Link
             to={`/o/${member.organization_id}/customers/new`}
@@ -79,41 +71,11 @@ export function CustomerList() {
       />
       <ErrorNotice message={error} />
       <section className="panel">
-        <form
-          className="toolbar"
-          onSubmit={(event) => {
-            event.preventDefault();
-            setQuery(search);
-            setPage(1);
-          }}
-        >
-          <label className="search-field">
-            <Search size={18} />
-            <span className="sr-only">Search customers by name or email</span>
-            <input
-              placeholder="Search by name or email…"
-              value={search}
-              maxLength={160}
-              onChange={(event) => setSearch(event.target.value)}
-            />
-          </label>
-          <label className="filter-select">
-            <span className="sr-only">Account status</span>
-            <select
-              value={status}
-              onChange={(event) => {
-                setStatus(event.target.value);
-                setPage(1);
-              }}
-            >
-              <option value="">All accounts</option>
-              <option value="active">Active</option>
-              <option value="archived">Archived</option>
-            </select>
-          </label>
-          <button className="button secondary" disabled={loading}>
-            Search
-          </button>
+        <div className="record-filters" role="search" aria-label="Filter customers">
+          <label className="record-filter-search">Search customers<input type="search" placeholder="ID, name, email, phone or date" value={search} maxLength={160} onChange={event => setSearch(event.target.value)} /></label>
+          <label className="record-filter-select">Account status<select value={status} onChange={event => setStatus(event.target.value)}><option value="all">All accounts</option><option value="active">Active</option><option value="archived">Archived</option></select></label>
+          <label className="record-filter-date">Added from<input type="date" value={dates.start} max={dates.end || undefined} onChange={event => setDate("start", event.target.value)} aria-invalid={invalidDates || undefined} /></label>
+          <label className="record-filter-date">Added to<input type="date" value={dates.end} min={dates.start || undefined} onChange={event => setDate("end", event.target.value)} aria-invalid={invalidDates || undefined} /></label>
           <button
             type="button"
             className="icon-button"
@@ -123,15 +85,16 @@ export function CustomerList() {
           >
             <RefreshCw size={17} />
           </button>
-        </form>
-        {loading && !data ? (
+        </div>
+        <div className="record-filter-summary"><p role="status">{loading ? "Searching…" : data ? `${data.total} customer${data.total === 1 ? "" : "s"}${data.time_zone ? ` · Dates in ${data.time_zone}` : ""}` : "Customers"}</p>{filtered && <button type="button" className="text-link" onClick={clear}>Clear filters</button>}</div>
+        {invalidDates ? <div className="record-filter-error"><ErrorNotice message="Added from must be on or before added to." /></div> : error ? <div className="record-filter-summary"><button type="button" className="text-link" onClick={refresh}>Try again</button></div> : loading && !data ? (
           <Loading />
         ) : (
           data && (
             <>
               {data.items.length ? (
                 <div className="table-scroll">
-                  <table>
+                  <table className="compact-record-table">
                     <thead>
                       <tr>
                         <th>Customer</th>
@@ -157,6 +120,7 @@ export function CustomerList() {
                               <span>
                                 <strong>{customer.name}</strong>
                                 <small>{customer.email}</small>
+                                <small className="customer-reference">{customer.customer_code}</small>
                               </span>
                             </Link>
                           </td>
@@ -176,7 +140,7 @@ export function CustomerList() {
                             )}
                           </td>
                           <td
-                            className={`align-right amount ${BigInt(customer.balance_minor || "0") < 0n ? "credit-amount" : ""}`}
+                            className={`align-right amount ${amountTone(customer.balance_minor)}`}
                           >
                             {money(
                               customer.balance_minor,
@@ -201,19 +165,19 @@ export function CustomerList() {
               ) : (
                 <Empty
                   title={
-                    query || status
+                    filtered
                       ? "No matching customers"
                       : "Your first customer is a fresh start"
                   }
                   detail={
-                    query || status
-                      ? "Try a different name, email address, or account status."
+                    filtered
+                      ? "Try another ID, name, contact detail, date or account status, or clear the filters."
                       : "Create a customer account to start recording transactions and invite them to view their statements."
                   }
                 />
               )}
               <Pagination
-                page={page}
+                page={data.page}
                 total={data.total}
                 size={data.page_size}
                 onPage={setPage}
@@ -307,15 +271,9 @@ function CustomerForm({ initial }: { initial?: Customer }) {
         {initial ? "Back to account" : "Back to customers"}
       </Link>
       <PageHeading
-        eyebrow="CUSTOMER ACCOUNTS"
-        title={initial ? "Manage customer" : "A new customer account"}
-        description={
-          initial
-            ? "Keep contact details and account access up to date."
-            : "Start their ledger today. They can accept their invitation later."
-        }
+        title={initial ? "Manage customer" : "Add Customer"}
       />
-      <div className="editor-layout">
+      <div className="editor-layout customer-editor-layout">
         <section className="panel form-panel">
           <h2>Customer details</h2>
           <ErrorNotice message={error} />
@@ -400,35 +358,14 @@ function CustomerForm({ initial }: { initial?: Customer }) {
             </div>
           </form>
         </section>
-        <aside className="helper-card">
-          <span className="helper-icon">
-            <ShieldCheck size={25} />
-          </span>
-          <h3>A secure start</h3>
-          <p>
-            Customers choose their own passwords. You never need to set or share
-            one.
-          </p>
-          <ul>
-            <li>The account is ready for transactions immediately.</li>
-            <li>
-              The invitation gives access only to this customer’s account.
-            </li>
-            <li>You can resend an invitation if email delivery fails.</li>
-          </ul>
-          <div className="helper-divider" />
-          <h3>Opening balance</h3>
-          <p>
-            Add an opening balance as the first transaction after creating the
-            account. It stays part of the account’s history.
-          </p>
-        </aside>
+
       </div>
     </>
   );
 }
 
-export function CustomerDetail() {
+export function CustomerDetail({ recordPayment = false }: { recordPayment?: boolean }) {
+  const money = useMoney();
   const member = useOrganization();
   const { customerId: routeCustomerId } = useParams();
   const customerId = routeCustomerId || member.customer_id;
@@ -437,7 +374,7 @@ export function CustomerDetail() {
   const [filters, setFilters] = useState({ start: "", end: "", search: "" });
   const [applied, setApplied] = useState(filters);
   const [page, setPage] = useState(1);
-  const [modal, setModal] = useState<{ reversal?: Entry } | null>(null);
+  const [modal, setModal] = useState<{ reversal?: Entry; kind?: string } | null>(recordPayment ? { kind: "payment" } : null);
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState("");
   const [notice, setNotice] = useState("");
@@ -459,12 +396,13 @@ export function CustomerDetail() {
     account.refresh();
   };
   useEffect(() => {
+    setModal(recordPayment ? { kind: "payment" } : null);
     setPage(1);
     setFilters({ start: "", end: "", search: "" });
     setApplied({ start: "", end: "", search: "" });
     setNotice("");
     setActionError("");
-  }, [customerId]);
+  }, [customerId, recordPayment]);
   async function accessAction(
     action: "invite" | "revoke-invitation" | "revoke-access",
   ) {
@@ -481,18 +419,21 @@ export function CustomerDetail() {
     setActionError("");
     setNotice("");
     try {
-      await mutate(
+      const result = await mutate<{ delivery_status?: string }>(
         `${base}/${action === "revoke-access" ? "revoke-access" : "invitations"}`,
         undefined,
         action === "revoke-invitation" ? "DELETE" : "POST",
       );
-      setNotice(
-        action === "invite"
-          ? "Invitation requested. Check the delivery status below."
-          : action === "revoke-access"
+      if (action === "invite") {
+        if (result.delivery_status === "sent" && account.data)
+          setNotice(`Invitation sent to ${account.data.email}.`);
+      } else {
+        setNotice(
+          action === "revoke-access"
             ? "Customer access revoked. Financial history is preserved."
             : "Invitation revoked.",
-      );
+        );
+      }
       refresh();
     } catch (error) {
       setActionError(errorMessage(error));
@@ -504,7 +445,9 @@ export function CustomerDetail() {
     setBusy(true);
     setActionError("");
     try {
-      const response = await fetch(`/api${base}/statement.csv?${query}`, {
+      const exportQuery = new URLSearchParams(query);
+      exportQuery.set('currency', 'GBP');
+      const response = await fetch(`/api${base}/statement.csv?${exportQuery}`, {
         credentials: "include",
       });
       if (!response.ok) {
@@ -542,18 +485,22 @@ export function CustomerDetail() {
         </Link>
       )}
       <PageHeading
-        eyebrow={admin ? "CUSTOMER ACCOUNT" : "YOUR ACCOUNT"}
+        eyebrow={data?.customer.customer_code}
         title={
           data?.customer.name ||
           (admin ? "Customer account" : "Account overview")
         }
-        description={
-          admin
-            ? "Every transaction. One complete picture."
-            : `Your balance and transaction history with ${member.organization_name}.`
-        }
         actions={
           <>
+            {data && (
+              <Link
+                className="button secondary"
+                to={`/o/${member.organization_id}/users/${data.customer.id}`}
+              >
+                <FolderOpen size={16} />
+                {admin ? "Profile, bookings & documents" : "My bookings & files"}
+              </Link>
+            )}
             {admin && data && (
               <Link
                 className="button secondary"
@@ -585,7 +532,7 @@ export function CustomerDetail() {
             <div className="account-summary">
               <div className="balance-card">
                 <span className="eyebrow">CURRENT BALANCE</span>
-                <strong>
+                <strong className={amountTone(data.current_balance_minor)}>
                   {money(
                     data.current_balance_minor,
                     data.currency,
@@ -656,21 +603,26 @@ export function CustomerDetail() {
                 <div>
                   <button
                     className="text-link"
-                    disabled={busy || data.customer.status === "archived"}
+                    disabled={
+                      busy || !account.data || data.customer.status === "archived" ||
+                      data.customer.invitation_status === "accepted"
+                    }
                     onClick={() => void accessAction("invite")}
                   >
-                    Send / resend invitation
+                    {data.customer.invitation_status === "not_invited"
+                      ? "Send invitation"
+                      : "Resend invitation"}
                   </button>
                   <button
                     className="text-link muted"
-                    disabled={busy}
+                    disabled={busy || data.customer.invitation_status !== "pending"}
                     onClick={() => void accessAction("revoke-invitation")}
                   >
                     Revoke invitation
                   </button>
                   <button
                     className="text-link danger-text"
-                    disabled={busy}
+                    disabled={busy || data.customer.invitation_status !== "accepted"}
                     onClick={() => void accessAction("revoke-access")}
                   >
                     Revoke access
@@ -678,13 +630,13 @@ export function CustomerDetail() {
                 </div>
               </div>
             )}
-            {data.customer.delivery_status === "failed" && admin && (
-              <ErrorNotice message="The customer account was saved, but its invitation email could not be delivered. Use Send / resend invitation to try again." />
+            {data.customer.delivery_status === "failed" && data.customer.invitation_status === "pending" && admin && (
+              <ErrorNotice message="The invitation email could not be delivered. Use Resend invitation to send a fresh link." />
             )}
             <section className="panel statement-panel">
               <div className="panel-heading">
                 <div>
-                  <span className="eyebrow">A COMPLETE RECORD</span>
+
                   <h2>Account statement</h2>
                 </div>
                 <button
@@ -697,7 +649,7 @@ export function CustomerDetail() {
                 </button>
               </div>
               <form
-                className="statement-filters"
+                className="record-filters"
                 aria-label="Filter statement"
                 onSubmit={(event) => {
                   event.preventDefault();
@@ -716,31 +668,33 @@ export function CustomerDetail() {
                   setPage(1);
                 }}
               >
-                <label>
+                <label className="record-filter-date">
                   From
                   <input
                     type="date"
+                    max={filters.end || undefined}
                     value={filters.start}
                     onChange={(event) =>
                       setFilters({ ...filters, start: event.target.value })
                     }
                   />
                 </label>
-                <label>
+                <label className="record-filter-date">
                   To
                   <input
                     type="date"
+                    min={filters.start || undefined}
                     value={filters.end}
                     onChange={(event) =>
                       setFilters({ ...filters, end: event.target.value })
                     }
                   />
                 </label>
-                <label className="statement-search">
-                  Description or reference
+                <label className="record-filter-search">
+                  Search transactions
                   <input
                     type="search"
-                    placeholder="Search transactions…"
+                    placeholder="Entry ID, date, description or reference"
                     maxLength={200}
                     value={filters.search}
                     onChange={(event) =>
@@ -751,7 +705,7 @@ export function CustomerDetail() {
                 <button className="button secondary" disabled={loading}>
                   Apply filters
                 </button>
-                {Object.values(applied).some(Boolean) && (
+                {Object.values(filters).some(Boolean) && (
                   <button
                     type="button"
                     className="text-link"
@@ -760,6 +714,7 @@ export function CustomerDetail() {
                       setFilters(empty);
                       setApplied(empty);
                       setPage(1);
+                      setActionError("");
                     }}
                   >
                     Clear
@@ -769,7 +724,7 @@ export function CustomerDetail() {
               <div className="period-summary">
                 <span>
                   Balance before period{" "}
-                  <strong>
+                  <strong className={amountTone(data.opening_balance_minor)}>
                     {money(
                       data.opening_balance_minor,
                       data.currency,
@@ -779,7 +734,7 @@ export function CustomerDetail() {
                 </span>
                 <span>
                   Balance at period end{" "}
-                  <strong>
+                  <strong className={amountTone(data.closing_balance_minor)}>
                     {money(
                       data.closing_balance_minor,
                       data.currency,
@@ -835,7 +790,7 @@ export function CustomerDetail() {
                             <Badge value={entry.kind} />
                           </td>
                           <td
-                            className={`align-right amount ${BigInt(entry.amount_minor) < 0n ? "credit-amount" : ""}`}
+                            className={`align-right amount ${amountTone(entry.amount_minor, entry.kind)}`}
                           >
                             {money(
                               entry.amount_minor,
@@ -843,7 +798,7 @@ export function CustomerDetail() {
                               data.currency_exponent,
                             )}
                           </td>
-                          <td className="align-right amount running-amount">
+                          <td className={`align-right amount running-amount ${amountTone(entry.running_balance_minor)}`}>
                             {money(
                               entry.running_balance_minor,
                               data.currency,
@@ -880,7 +835,9 @@ export function CustomerDetail() {
                       : "No transactions yet"
                   }
                   detail={
-                    admin
+                    Object.values(applied).some(Boolean)
+                      ? "Try another entry ID, date, description or reference, or clear the filters."
+                      : admin
                       ? "Record an opening balance, a charge, or a payment to start this customer’s ledger."
                       : "Transactions recorded by the business will appear here."
                   }
@@ -893,15 +850,12 @@ export function CustomerDetail() {
                 onPage={setPage}
               />
             </section>
-            <p className="ledger-footnote">
-              <ShieldCheck size={16} />
-              Posted entries are preserved. Corrections appear as linked
-              reversals.
-            </p>
+
             {modal && (
               <EntryDialog
                 customer={data.customer}
                 reversal={modal.reversal}
+                initialKind={modal.kind}
                 onClose={() => setModal(null)}
                 onSaved={() => {
                   setModal(null);
@@ -920,19 +874,22 @@ export function CustomerDetail() {
 function EntryDialog({
   customer,
   reversal,
+  initialKind,
   onClose,
   onSaved,
 }: {
   customer: Customer;
   reversal?: Entry;
+  initialKind?: string;
   onClose: () => void;
   onSaved: () => void;
 }) {
   const member = useOrganization();
   const dialog = useRef<HTMLDialogElement>(null);
-  const [kind, setKind] = useState(reversal ? "reversal" : "charge");
+  const money = useMoney();
+  const [kind, setKind] = useState(reversal ? "reversal" : initialKind || "charge");
   const [amount, setAmount] = useState("");
-  const [date, setDate] = useState(today());
+  const [date, setDate] = useState(() => businessDate(member.time_zone || 'UTC'));
   const [description, setDescription] = useState("");
   const [reference, setReference] = useState("");
   const [idempotencyKey] = useState(() => crypto.randomUUID());
@@ -943,6 +900,10 @@ function EntryDialog({
   }, []);
   async function submit(event: FormEvent) {
     event.preventDefault();
+    if (member.currency !== 'GBP' && !reversal) {
+      setError('New travel transactions require a GBP accounting workspace.');
+      return;
+    }
     setBusy(true);
     setError("");
     try {
@@ -991,17 +952,18 @@ function EntryDialog({
         </button>
       </div>
       <ErrorNotice message={error} />
+      {member.currency !== 'GBP' && !reversal && <ErrorNotice message="New travel transactions require a GBP accounting workspace. Existing ledger history must be migrated with an agreed conversion rate before posting GBP amounts." />}
       <form className="stack-form" onSubmit={submit} aria-busy={busy}>
         {reversal ? (
           <div className="notice neutral">
             <strong>Reversing entry #{reversal.id}</strong>
             <p>
               {reversal.description} ·{" "}
-              {money(
+              <span className={amountTone(reversal.amount_minor, reversal.kind)}>{money(
                 reversal.amount_minor,
                 member.currency,
                 member.currency_exponent,
-              )}
+              )}</span>
             </p>
             The original entry stays intact. An equal and opposite entry will be
             recorded. To replace it, record a new charge or payment afterward.
@@ -1022,7 +984,7 @@ function EntryDialog({
               </select>
             </label>
             <label>
-              Amount ({member.currency})
+              Amount (GBP)
               <input
                 type="text"
                 inputMode="decimal"
@@ -1092,7 +1054,7 @@ function EntryDialog({
           >
             Cancel
           </button>
-          <button className="button" disabled={busy}>
+          <button className={`button${!reversal && kind === "payment" ? " button-success" : !reversal && kind === "charge" ? " button-danger" : ""}`} disabled={busy || (member.currency !== 'GBP' && !reversal)}>
             {busy
               ? "Recording…"
               : reversal

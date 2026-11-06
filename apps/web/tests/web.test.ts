@@ -16,6 +16,47 @@ test("client money formatting preserves integer precision, sign, and currency ex
   assert.equal(dateLabel("2026-01-01"), "01 Jan 2026");
 });
 
+test("opening another email in the same tab replaces the token and removes it from the URL", async () => {
+  const inviteToken = "a".repeat(43);
+  const resetToken = "b".repeat(43);
+  let location = new URL(`https://ledgerbook.test/invite#${inviteToken}`);
+  const fakeWindow = {
+    get location() { return location; },
+    history: {
+      replaceState(_state: unknown, _title: string, path: string) {
+        location = new URL(path, location);
+      },
+    },
+  };
+  Object.defineProperty(globalThis, "window", { value: fakeWindow, configurable: true });
+  try {
+    const { captureEmailLink, emailLink, pendingInvitation } = await import("../src/state");
+    assert.equal(emailLink.token, inviteToken);
+    assert.equal(pendingInvitation(), true);
+    assert.equal(location.hash, "");
+
+    location = new URL(`/reset-password#${resetToken}`, location);
+    assert.equal(captureEmailLink(), true);
+    assert.equal(emailLink.purpose, "reset");
+    assert.equal(emailLink.token, resetToken);
+    assert.equal(location.hash, "");
+    assert.equal(pendingInvitation(), false);
+    assert.equal(captureEmailLink(), false);
+    assert.equal(emailLink.token, resetToken);
+
+    location = new URL("/reset-password#broken-link", location);
+    assert.equal(captureEmailLink(), true);
+    assert.equal(emailLink.token, "");
+    assert.equal(location.hash, "");
+
+    location = new URL("/o/example#main", location);
+    assert.equal(captureEmailLink(), false);
+    assert.equal(location.hash, "#main");
+  } finally {
+    Reflect.deleteProperty(globalThis, "window");
+  }
+});
+
 test("router preserves nested layouts, account parameters, deep links, and history events", async () => {
   let location = new URL("http://ledgerbook.test/o/acme/customers/customer-7");
   const target = new EventTarget();

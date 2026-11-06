@@ -1,0 +1,30 @@
+purpose:
+  stands_in_for: Resend POST /emails acceptance, transient failure, and idempotent replay for payment notifications.
+  unblocks: Real HTTP verification of LedgerBook's durable notification worker without sending customer email.
+assumptions:
+  - id: same-email-key-within-24-hours
+    status: supported
+    claim: Resend deduplicates identical POST /emails requests with the same Idempotency-Key within 24 hours.
+    reason: The provider's published contract explicitly states this retention window. It does not guarantee deduplication after the window.
+    verification: On 2026-11-06 read official Send Email and Idempotency Keys documentation. No live provider delivery was attempted.
+    source: https://resend.com/docs/dashboard/emails/idempotency-keys
+    updated_at: "2026-11-06"
+  - id: worker-keeps-event-and-key-on-failure
+    status: supported
+    claim: LedgerBook retains a notification after a simulated HTTP 500, retries with the same request key, and records acceptance without another modeled email on replay.
+    reason: The real NotificationsService fetch adapter and PaymentEmailOutbox ran against the local Postman simulation using an isolated SQL database.
+    verification: On 2026-11-06 tests/payment-provider.simulation.ts passed. Simulation log showed POST /emails 500, 200, 200; state showed three calls and one accepted message. This tests caller behavior against the stand-in, not actual inbox delivery.
+    source: tests/payment-provider.simulation.ts; postman/mocks/resend-email/default.js; apps/api/src/payments/email-outbox.service.ts
+    updated_at: "2026-11-06"
+  - id: actual-inbox-delivery
+    status: unknown
+    claim: The production sender is configured and approval emails arrive in customer inboxes.
+    reason: No production sender credentials or deployment were provided. Local mode writes email files, and provider acceptance alone is not inbox delivery.
+    verification: Not verified; configure the existing production Resend credentials and verified sender, then perform a controlled delivery check before release.
+    source: .env.example; docs/payment-receipts.md
+    updated_at: "2026-11-06"
+fingerprints:
+  - id: local-payment-implementation
+    date: "2026-11-06"
+    commit: 67288b9d3f14e66ed8f3bcf1172b92a669682068 (dirty working tree with payment implementation)
+    cli: "1.75.0"

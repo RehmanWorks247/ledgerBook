@@ -3,11 +3,17 @@ import { createHash } from 'node:crypto';
 import { readdir, readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { DatabaseService } from '../apps/api/src/database/database.service';
+import { migrationDatabaseUrl } from '../apps/api/src/database/pool-config';
+import { config } from '../apps/api/src/config';
 
 async function migrate() {
-  const db=new DatabaseService();
+  const db=new DatabaseService(migrationDatabaseUrl(process.env,config.databaseUrl));
   try {
     await db.transaction(async client=>{
+      // Schema changes may exceed the API's short per-query limit. Lock waits
+      // stay bounded so competing deployments fail instead of waiting forever.
+      await client.query("SET LOCAL statement_timeout = '5min'");
+      await client.query("SET LOCAL lock_timeout = '15s'");
       await client.query("SELECT pg_advisory_xact_lock(hashtextextended('ledgerbook-migrations',0))");
       await client.query('CREATE TABLE IF NOT EXISTS schema_migrations(name text PRIMARY KEY,checksum text NOT NULL,applied_at timestamptz NOT NULL DEFAULT now())');
       const directory=resolve('apps/api/src/database/migrations');

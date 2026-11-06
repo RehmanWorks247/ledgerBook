@@ -9,6 +9,7 @@ import type { NestExpressApplication } from '@nestjs/platform-express';
 import { createApp } from '../apps/api/src/app';
 import { config } from '../apps/api/src/config';
 import { AuthService } from '../apps/api/src/auth/auth.service';
+import { RatesService } from '../apps/api/src/currency/rates.service';
 import { NotificationsService, type EmailMessage } from '../apps/api/src/notifications/notifications.service';
 import { setupTestDatabase, testPassword, type TestDatabase, type TestSeed } from './helpers';
 
@@ -133,6 +134,34 @@ describe('HTTP authentication, CSRF, and tenant authorization', () => {
       await app.close();
     }
     if (database) await database.close();
+  });
+
+  httpTest('authenticates currency routes, restricts shared rates, persists preferences and exports converted CSV', async () => {
+    const rates = app.get(RatesService);
+    const original = rates.get.bind(rates);
+    rates.get = async () => ({ fetched_at: new Date().toISOString(), unavailable: false, rates: {
+      USD: { rate: '1', date: '2026-11-06', source: 'identity', stale: false },
+      PKR: { rate: '277.12', date: '2026-11-06', source: 'Frankfurter', stale: false },
+    } });
+    try {
+      const path = `/organizations/${seed.orgId}/currencies`;
+      assert.equal((await request(path)).status,401);
+      assert.equal((await request(`/organizations/${seed.otherOrgId}/currencies`,{cookie:adminCookie})).status,404);
+      assert.equal((await request(`${path}/rates/PKR`,{cookie:customerCookie,method:'PATCH',body:{rate:'280'}})).status,403);
+      assert.equal((await request(`${path}/rates/PKR`,{cookie:adminCookie,method:'PATCH',csrf:false,body:{rate:'280'}})).status,403);
+      const saved = await request(`${path}/rates/PKR`,{cookie:adminCookie,method:'PATCH',body:{rate:'280'}});
+      assert.equal(saved.status,200);
+      const selected = await request(`${path}/preference`,{cookie:customerCookie,method:'PATCH',body:{currency:'PKR'}});
+      assert.equal(selected.status,200); assert.equal((await selected.json()).display_currency,'PKR');
+      const current = await request(path,{cookie:customerCookie});
+      const settings = await current.json();
+      assert.equal(settings.display_currency,'PKR');
+      assert.equal(settings.currencies.find((c:{code:string})=>c.code==='PKR').rate,'280');
+      const exported = await request(`/organizations/${seed.orgId}/customers/${seed.customerId}/statement.csv?currency=PKR`,{cookie:customerCookie});
+      assert.equal(exported.status,200); assert.match(await exported.text(),/Accounting amount/);
+      assert.equal((await request(`/organizations/${seed.orgId}/customers/${seed.secondCustomerId}/statement.csv?currency=PKR`,{cookie:customerCookie})).status,404);
+      assert.equal((await request(`${path}/rates/PKR`,{cookie:adminCookie,method:'PATCH',body:{rate:null}})).status,200);
+    } finally { rates.get=original; }
   });
 
   httpTest('requires a session and returns only the authenticated identity memberships', async () => {

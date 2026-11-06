@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { BookOpen, ChevronLeft, ChevronRight } from "lucide-react";
+import { ArrowDownLeft, ArrowUpRight, BookOpen, ChevronLeft, ChevronRight, RotateCcw } from "lucide-react";
 export function Brand({ light = false }: { light?: boolean }) {
   return (
     <span className={`brand ${light ? "brand-light" : ""}`}>
@@ -37,8 +37,10 @@ export function Empty({ title, detail }: { title: string; detail: string }) {
   );
 }
 export function Badge({ value }: { value: string }) {
+  const Icon = value === "payment" ? ArrowDownLeft : value === "charge" ? ArrowUpRight : value === "reversal" ? RotateCcw : null;
   return (
     <span className={`badge badge-${value.toLowerCase()}`}>
+      {Icon && <Icon size={12} aria-hidden="true" />}
       {value.replaceAll("_", " ")}
     </span>
   );
@@ -49,17 +51,17 @@ export function PageHeading({
   description,
   actions,
 }: {
-  eyebrow: string;
+  eyebrow?: string;
   title: string;
-  description: string;
+  description?: string;
   actions?: ReactNode;
 }) {
   return (
     <div className="page-heading">
       <div>
-        <span className="eyebrow">{eyebrow}</span>
+        {eyebrow && <span className="eyebrow">{eyebrow}</span>}
         <h1>{title}</h1>
-        <p>{description}</p>
+        {description && <p>{description}</p>}
       </div>
       {actions && <div className="page-actions">{actions}</div>}
     </div>
@@ -71,20 +73,24 @@ export function Stat({
   detail,
   icon,
   primary = false,
+  tone = "neutral",
+  valueClassName = "",
 }: {
   label: string;
   value: string;
   detail: string;
   icon: ReactNode;
   primary?: boolean;
+  tone?: "neutral" | "success" | "danger" | "warning" | "info" | "violet";
+  valueClassName?: string;
 }) {
   return (
-    <article className={`stat-card ${primary ? "primary-stat" : ""}`}>
+    <article className={`stat-card stat-${tone} ${primary ? "primary-stat" : ""}`}>
       <div className="stat-label">
         {label}
         <span className="stat-icon">{icon}</span>
       </div>
-      <strong className="stat-value">{value}</strong>
+      <strong className={`stat-value ${valueClassName}`}>{value}</strong>
       <p>{detail}</p>
     </article>
   );

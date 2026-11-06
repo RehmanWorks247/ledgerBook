@@ -1,17 +1,19 @@
 import { Inject, Injectable, Optional, type OnApplicationShutdown } from '@nestjs/common';
 import { Pool, type PoolClient, type QueryResult, type QueryResultRow } from 'pg';
 import { config } from '../config';
+import { databasePoolConfig } from './pool-config';
 
 @Injectable()
 export class DatabaseService implements OnApplicationShutdown {
   readonly pool: Pool;
   constructor(@Optional() @Inject('DATABASE_URL') connectionString?: string) {
-    this.pool = new Pool({
+    this.pool = new Pool(databasePoolConfig({
       connectionString: connectionString ?? config.databaseUrl,
-      max: config.poolSize, connectionTimeoutMillis: 5000, idleTimeoutMillis: 30000,
-      statement_timeout: 15000, idle_in_transaction_session_timeout: 15000,
-      ssl: config.databaseSsl ? { rejectUnauthorized: true } : undefined,
-    });
+      poolSize: config.poolSize,
+      ssl: config.databaseSsl,
+      production: config.production,
+      caFile: process.env.DATABASE_SSL_CA_FILE,
+    }));
     this.pool.on('error', () => console.error('An idle database connection failed.'));
   }
   query<T extends QueryResultRow = any>(sql: string, params: unknown[] = []): Promise<QueryResult<T>> {

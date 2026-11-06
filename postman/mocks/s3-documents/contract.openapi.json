@@ -1,0 +1,14 @@
+{
+  "openapi": "3.0.3",
+  "info": {"title": "S3 private document adapter contract subset", "version": "1.0.0", "description": "General-purpose unversioned bucket subset from official PutObject, GetObject and DeleteObject API documentation. The application uses unique object keys. This contract does not model IAM, versioning, multipart operations or eventual cleanup."},
+  "servers": [{"url": "https://s3.eu-west-2.amazonaws.com"}],
+  "paths": {
+    "/{bucket}/{key}": {
+      "parameters": [{"in":"path","name":"bucket","required":true,"schema":{"type":"string"}},{"in":"path","name":"key","required":true,"schema":{"type":"string"}}],
+      "put": {"parameters":[{"in":"header","name":"x-amz-checksum-sha256","required":true,"schema":{"type":"string"}},{"in":"header","name":"x-amz-server-side-encryption","required":true,"schema":{"type":"string","enum":["AES256"]}}],"requestBody":{"required":true,"content":{"application/pdf":{"schema":{"type":"string","format":"binary"}}}},"responses":{"200":{"description":"Entire object stored"},"400":{"description":"Invalid request or checksum"},"403":{"description":"Access denied"},"503":{"description":"SlowDown or temporary unavailability"}}},
+      "get": {"responses":{"200":{"description":"Stored bytes","content":{"application/pdf":{"schema":{"type":"string","format":"binary"}}}},"403":{"description":"Access denied; can also represent missing object without ListBucket permission"},"404":{"description":"NoSuchKey when caller can list bucket"}}},
+      "delete": {"responses":{"204":{"description":"Current object removed from unversioned bucket"},"403":{"description":"Access denied"},"503":{"description":"Temporary unavailability"}}}
+    }
+  },
+  "externalDocs": {"url":"https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutObject.html"}
+}

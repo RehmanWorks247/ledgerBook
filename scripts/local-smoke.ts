@@ -147,7 +147,8 @@ export async function verifyLocalApp(
     expect(html.includes('id="root"'), 'React application root');
     checks.push('Sign-in page serves the built React application');
 
-    const script = html.match(/<script\b[^>]*\bsrc="([^"]+)"/i)?.[1];
+    const script = [...html.matchAll(/<script\b[^>]*\bsrc="([^"]+)"/gi)]
+      .map(match => match[1]).find(source => source.startsWith('/assets/'));
     expect(script && script.startsWith('/assets/') && !script.includes('..'), 'built JavaScript asset reference');
     const asset = await probe(script!);
     expectStatus(asset, 200, 'built JavaScript asset');

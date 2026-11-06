@@ -1,0 +1,92 @@
+/* Accent palettes share the same neutral surfaces in both appearances.
+   Each option declares its own colors so settings previews remain independent. */
+
+/* Light appearance */
+:root,
+:root[data-accent="green"],
+.theme-option[data-accent="green"] {
+  --accent: #13795b;
+  --accent-hover: #0c6248;
+  --accent-soft: #e9f4ef;
+  --on-accent: #ffffff;
+}
+:root[data-accent="blue"],
+.theme-option[data-accent="blue"] {
+  --accent: #285bb1;
+  --accent-hover: #214b91;
+  --accent-soft: #ecf2fc;
+  --on-accent: #ffffff;
+}
+:root[data-accent="violet"],
+.theme-option[data-accent="violet"] {
+  --accent: #7050a2;
+  --accent-hover: #5b3f87;
+  --accent-soft: #f1ecf8;
+  --on-accent: #ffffff;
+}
+:root[data-accent="amber"],
+.theme-option[data-accent="amber"] {
+  --accent: #89601b;
+  --accent-hover: #6d4c14;
+  --accent-soft: #fbf3e4;
+  --on-accent: #ffffff;
+}
+:root[data-accent="rose"],
+.theme-option[data-accent="rose"] {
+  --accent: #ad4764;
+  --accent-hover: #92384f;
+  --accent-soft: #faedf1;
+  --on-accent: #ffffff;
+}
+:root[data-accent="neutral"],
+.theme-option[data-accent="neutral"] {
+  --accent: #171717;
+  --accent-hover: #404040;
+  --accent-soft: #eeeeee;
+  --on-accent: #ffffff;
+}
+
+/* Dark appearance */
+:root[data-theme="dark"],
+:root[data-theme="dark"][data-accent="green"],
+:root[data-theme="dark"] .theme-option[data-accent="green"] {
+  --accent: #70d2ad;
+  --accent-hover: #92e1c1;
+  --accent-soft: #183329;
+  --on-accent: #10261c;
+}
+:root[data-theme="dark"][data-accent="blue"],
+:root[data-theme="dark"] .theme-option[data-accent="blue"] {
+  --accent: #8cb8f3;
+  --accent-hover: #a9ccfa;
+  --accent-soft: #1b2d46;
+  --on-accent: #101d30;
+}
+:root[data-theme="dark"][data-accent="violet"],
+:root[data-theme="dark"] .theme-option[data-accent="violet"] {
+  --accent: #bca0e7;
+  --accent-hover: #cfb8f0;
+  --accent-soft: #30243f;
+  --on-accent: #22182f;
+}
+:root[data-theme="dark"][data-accent="amber"],
+:root[data-theme="dark"] .theme-option[data-accent="amber"] {
+  --accent: #dfba77;
+  --accent-hover: #edcc95;
+  --accent-soft: #362b1b;
+  --on-accent: #2a1f0f;
+}
+:root[data-theme="dark"][data-accent="rose"],
+:root[data-theme="dark"] .theme-option[data-accent="rose"] {
+  --accent: #e6a0b4;
+  --accent-hover: #f0bbca;
+  --accent-soft: #3c242c;
+  --on-accent: #301720;
+}
+:root[data-theme="dark"][data-accent="neutral"],
+:root[data-theme="dark"] .theme-option[data-accent="neutral"] {
+  --accent: #fafafa;
+  --accent-hover: #d4d4d4;
+  --accent-soft: #262626;
+  --on-accent: #121212;
+}

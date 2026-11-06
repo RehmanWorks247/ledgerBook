@@ -8,6 +8,7 @@ export type Membership = {
   organization_name: string;
   currency: string;
   currency_exponent: number;
+  time_zone?: string;
 };
 export type Session = {
   user: { id: string; email: string };
@@ -15,6 +16,7 @@ export type Session = {
 };
 export type Customer = {
   id: string;
+  customer_code?: string;
   name: string;
   email: string;
   phone: string | null;
@@ -25,6 +27,7 @@ export type Customer = {
   delivery_status?: string;
   access_status?: string;
   created_at?: string;
+  updated_at?: string;
 };
 export type Entry = {
   id: string;

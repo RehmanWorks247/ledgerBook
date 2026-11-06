@@ -1,5 +1,18 @@
 # Local development only. Production must supply its own private database and secrets.
 services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "127.0.0.1:6379:6379"
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - ledgerbook_dev_redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
   db:
     image: postgres:17-alpine
     environment:
@@ -18,4 +31,5 @@ services:
     restart: unless-stopped
 
 volumes:
+  ledgerbook_dev_redis:
   ledgerbook_dev_postgres:

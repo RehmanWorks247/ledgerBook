@@ -1,0 +1,195 @@
+.user-directory-cover {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  margin-bottom: 20px;
+  color: var(--text);
+}
+.user-directory-cover .eyebrow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.user-directory-cover h1 {
+  margin-bottom: 7px;
+}
+.user-directory-cover p {
+  margin-bottom: 0;
+  max-width: 64ch;
+  color: var(--text-secondary);
+  font-size: 14px;
+}
+.user-directory-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 20px 24px;
+}
+.user-directory-filters {
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-subtle);
+}
+.user-directory-filters button {
+  padding: 7px 12px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 600;
+}
+.user-directory-filters button:hover {
+  color: var(--text);
+}
+.user-directory-filters button[aria-pressed="true"] {
+  border-color: var(--line);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  color: var(--text);
+}
+.user-directory-search {
+  max-width: 290px;
+}
+.user-directory-search:focus-within {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.user-directory-search input:focus {
+  outline: none;
+}
+.user-directory-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(96px, 18%) minmax(96px, 17%) 16px;
+  align-items: center;
+  gap: 16px;
+  padding-inline: 24px;
+}
+.user-directory-columns {
+  padding-block: 11px;
+  border-block: 1px solid var(--line);
+  background: var(--surface-subtle);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.user-directory-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.user-directory-list li + li {
+  border-top: 1px solid var(--line);
+}
+.user-directory-row {
+  min-height: 60px;
+  padding-block: 10px;
+  color: var(--text);
+}
+.user-directory-row:focus-visible {
+  outline-offset: -3px;
+}
+.user-directory-row:hover,
+.user-directory-row:focus-visible {
+  background: var(--surface-hover);
+}
+.user-directory-row .user-directory-date {
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+.user-directory-person {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  min-width: 0;
+}
+.user-directory-avatar {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 34px;
+  height: 34px;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  color: var(--text-secondary);
+  background: var(--surface-subtle);
+  font-size: 12px;
+  font-weight: 700;
+}
+.user-directory-identity {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.user-directory-identity strong {
+  font-size: 14px;
+  font-weight: 650;
+}
+.user-directory-identity small {
+  color: var(--muted);
+}
+.user-directory-arrow {
+  color: var(--muted);
+}
+.user-directory-empty .text-link,
+.user-directory-empty .button {
+  margin-top: 18px;
+}
+.user-directory-error {
+  padding: 12px 24px 24px;
+}
+@media (max-width: 760px) {
+  .user-directory-tools,
+  .user-directory-grid {
+    padding-inline: 16px;
+  }
+  .user-directory-search {
+    flex: 1 1 200px;
+    min-width: 0;
+    max-width: none;
+  }
+}
+@media (max-width: 620px) {
+  .user-directory-cover {
+    margin-bottom: 24px;
+  }
+  .user-directory-cover p {
+    font-size: 13px;
+  }
+  .user-directory-tools {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .user-directory-filters {
+    align-self: flex-start;
+  }
+  .user-directory-search {
+    flex: auto;
+  }
+  .user-directory-grid {
+    grid-template-columns: minmax(0, 1fr) 76px 14px;
+    gap: 8px;
+  }
+  .user-directory-date {
+    display: none;
+  }
+  .user-directory-person {
+    gap: 8px;
+  }
+  .user-directory-avatar {
+    width: 32px;
+    height: 32px;
+  }
+}

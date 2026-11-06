@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { resolve, sep } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 import { openLocalDatabase } from '../scripts/local-database';
@@ -35,7 +35,8 @@ describe('persistent local development database', () => {
     local = await openLocalDatabase({ directory: path });
     try {
       assert.equal((await local.db.query('SELECT name FROM organizations WHERE id=$1', [id])).rows[0].name, 'Local business');
-      assert.equal((await local.db.query('SELECT count(*)::int AS total FROM schema_migrations')).rows[0].total, 1);
+      const migrations = (await readdir(resolve('apps/api/src/database/migrations'))).filter(name => /^\d+_[a-z0-9_]+\.sql$/.test(name));
+      assert.equal((await local.db.query('SELECT count(*)::int AS total FROM schema_migrations')).rows[0].total, migrations.length);
     } finally { await local.close(); }
   });
 
