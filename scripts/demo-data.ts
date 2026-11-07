@@ -1,14 +1,17 @@
 import { createHash } from 'node:crypto';
 
 /** Entirely synthetic fixtures. No identity, itinerary, document or payment is real. */
+export const DEMO_START_DATE = '2026-08-07';
 export const DEMO_AS_OF = '2026-11-06';
-export const DEMO_ORGANIZATION_NAME = 'LedgerBook Demo — Autumn 2026';
+export const DEMO_CUSTOMER_COUNT = 200;
+export const DEMO_FIXTURE_VERSION = 'rolling-2026-11-200-v1';
+export const DEMO_ORGANIZATION_NAME = 'LedgerBook Demo — 200 Customers, Aug–Nov 2026';
 export const DEMO_NOTICE = 'FICTIONAL DEMO DATA — not a real customer, reservation, travel document or payment.';
 
 /** RFC 4122 UUIDv5, using the URL namespace and a versioned fixture name. */
 export function seedUUID(key: string): string {
   const namespace = Buffer.from('6ba7b8119dad11d180b400c04fd430c8', 'hex');
-  const bytes = createHash('sha1').update(namespace).update(`ledgerbook/demo/autumn-2026/v1/${key}`).digest().subarray(0, 16);
+  const bytes = createHash('sha1').update(namespace).update(`ledgerbook/demo/${DEMO_FIXTURE_VERSION}/${key}`).digest().subarray(0, 16);
   bytes[6] = (bytes[6] & 0x0f) | 0x50;
   bytes[8] = (bytes[8] & 0x3f) | 0x80;
   const hex = bytes.toString('hex');
@@ -93,62 +96,91 @@ export type DemoCustomer = {
   booking: DemoBooking;
 };
 
-// Each party is written out deliberately: family groups, couples, friends and solo
-// travellers have different ages, room needs, lead times and payment histories.
-// The last column is the illustrative adult package price in whole GBP.
+// Fictional names assembled from curated name pools, never copied from customer
+// records. Two distinct lead names per surname give 200 distinct households.
+// Family, senior, friend and solo groups have age-appropriate room requirements.
 type PartySeed = readonly [createdOn: string, departureOn: string, makkahNights: number, madinahNights: number, passengers: string, adultPrice: number];
-const parties: readonly PartySeed[] = [
-  ['2026-09-01', '2026-09-20', 7, 5, 'Amina Farooq:42|Imran Farooq:45|Yusuf Farooq:13|Hana Farooq:9', 1095],
-  ['2026-09-03', '2026-09-24', 6, 4, 'Omar Siddiqui:34|Maryam Siddiqui:31', 1245],
-  ['2026-09-05', '2026-09-29', 8, 6, 'Safiya Hussain:63|Rashid Hussain:67', 1495],
-  ['2026-09-07', '2026-10-01', 7, 5, 'Bilal Qureshi:28', 1195],
-  ['2026-09-09', '2026-10-04', 8, 5, 'Nadia Rahman:39|Tariq Rahman:42|Zara Rahman:11|Adam Rahman:7', 1145],
-  ['2026-09-11', '2026-10-08', 6, 4, 'Faisal Malik:46|Samina Malik:43|Hamza Malik:18', 1295],
-  ['2026-09-14', '2026-10-11', 10, 6, 'Hafsa Ahmed:57|Javed Ahmed:61|Saira Ahmed:29|Usman Ahmed:32', 1545],
-  ['2026-09-17', '2026-10-14', 7, 5, 'Ibrahim Khan:35|Zain Ali:34|Haroon Abbas:36', 1095],
-  ['2026-09-20', '2026-10-18', 8, 6, 'Sumayya Patel:40|Ilyas Patel:44|Aisha Patel:16|Idris Patel:12|Lina Patel:8', 1195],
-  ['2026-09-23', '2026-10-22', 6, 4, 'Adil Mahmood:53|Nasreen Mahmood:50', 1395],
-  ['2026-09-26', '2026-10-26', 7, 5, 'Zainab Begum:66|Salma Begum:62|Rukhsana Begum:59', 1495],
-  ['2026-09-29', '2026-10-29', 8, 6, 'Yasir Mirza:38|Huda Mirza:35|Rehan Mirza:10', 1245],
-  ['2026-10-02', '2026-11-02', 8, 5, 'Mariam Iqbal:33|Saad Iqbal:36', 1595],
-  ['2026-10-05', '2026-11-06', 6, 4, 'Nabeel Akhtar:48|Lubna Akhtar:45|Daniyal Akhtar:20|Areeba Akhtar:17', 1345],
-  ['2026-10-08', '2026-11-10', 7, 5, 'Sana Yousaf:27', 1295],
-  ['2026-10-11', '2026-11-14', 8, 6, 'Khalid Bashir:70|Farida Bashir:64', 1695],
-  ['2026-10-15', '2026-11-18', 10, 6, 'Rubina Aslam:47|Sohail Aslam:51|Mehreen Aslam:22|Shahid Aslam:25|Amir Aslam:15|Noor Aslam:10', 1395],
-  ['2026-10-20', '2026-11-23', 6, 4, 'Rafiq Choudhury:44|Nusrat Choudhury:41', 1195],
-  ['2026-10-24', '2026-11-28', 7, 5, 'Aleena Saeed:30|Faizan Saeed:32|Musa Saeed:5', 1245],
-  ['2026-10-28', '2026-12-03', 8, 6, 'Adeel Ansari:55|Shazia Ansari:52|Hassan Ansari:24', 1445],
-  ['2026-09-08', '2026-11-11', 7, 5, 'Farhan Aziz:37|Iqra Aziz:34|Eesa Aziz:8|Inaya Aziz:5', 1095],
-  ['2026-09-15', '2026-11-13', 8, 6, 'Tasneem Shah:58|Waseem Shah:62', 1495],
-  ['2026-09-22', '2026-11-15', 6, 4, 'Kamran Sheikh:41|Bushra Sheikh:38|Ammar Sheikh:14', 1195],
-  ['2026-09-30', '2026-11-18', 7, 5, 'Naila Rauf:36|Sadia Rauf:33|Humaira Rauf:39', 1245],
-  ['2026-10-06', '2026-11-21', 8, 5, 'Dawood Munir:49|Fauzia Munir:46|Zainab Munir:21|Talha Munir:18', 1395],
-  ['2026-10-12', '2026-11-23', 7, 5, 'Rabia Latif:28|Ahsan Latif:31', 1295],
-  ['2026-10-17', '2026-11-25', 10, 6, 'Junaid Saleem:43|Saba Saleem:40|Owais Saleem:16|Alina Saleem:12|Ismail Saleem:9', 1345],
-  ['2026-10-21', '2026-11-28', 8, 6, 'Fariha Nadeem:61|Shahid Nadeem:65', 1595],
-  ['2026-10-25', '2026-12-01', 6, 4, 'Aqib Zaman:26', 1095],
-  ['2026-10-29', '2026-12-03', 7, 5, 'Hina Sadiq:32|Shahbaz Sadiq:35|Aya Sadiq:6', 1195],
-  ['2026-10-31', '2026-12-05', 8, 6, 'Salman Ashraf:45|Nazia Ashraf:42|Ali Ashraf:19|Maha Ashraf:15', 1445],
-  ['2026-11-01', '2026-12-08', 7, 5, 'Uzma Hafeez:54|Naeem Hafeez:57', 1395],
-  ['2026-11-02', '2026-12-10', 6, 4, 'Zubair Hanif:39|Shayan Hanif:36|Rehan Hanif:34', 1145],
-  ['2026-11-03', '2026-12-13', 8, 5, 'Asma Javed:37|Waqar Javed:41|Ayaan Javed:11|Amal Javed:7', 1245],
-  ['2026-11-04', '2026-12-15', 10, 6, 'Arif Younis:64|Tahira Younis:60', 1695],
-  ['2026-10-03', '2026-11-20', 7, 5, 'Hamid Kazmi:50|Shabana Kazmi:47|Abbas Kazmi:23', 1295],
-  ['2026-10-09', '2026-11-24', 8, 6, 'Noreen Chaudhry:44|Majid Chaudhry:48|Sara Chaudhry:17|Rayyan Chaudhry:13', 1345],
-  ['2026-10-16', '2026-11-29', 6, 4, 'Arsalan Naeem:29|Sidra Naeem:27', 1195],
-  ['2026-10-22', '2026-12-04', 7, 5, 'Rizwana Anwar:56|Iqbal Anwar:61', 1545],
-  ['2026-10-27', '2026-12-09', 8, 5, 'Shuaib Hassan:35|Saman Hassan:32|Yahya Hassan:8', 1245],
-  ['2026-10-30', '2026-12-12', 10, 6, 'Mehwish Zafar:40|Noman Zafar:43|Mariam Zafar:15|Rayan Zafar:11|Aiza Zafar:6', 1395],
-  ['2026-11-01', '2026-12-16', 8, 6, 'Wajid Tariq:33|Saqib Tariq:31', 1295],
-  ['2026-11-03', '2026-12-19', 7, 5, 'Sadia Majeed:48|Mansoor Majeed:52|Eman Majeed:22', 1445],
-  ['2026-11-04', '2026-12-22', 6, 4, 'Tahir Rasheed:59|Parveen Rasheed:55', 1495],
-  ['2026-11-05', '2026-12-25', 8, 6, 'Ayesha Khalil:31|Fahad Khalil:34|Ibrahim Khalil:7|Safiya Khalil:4', 1345],
-  ['2026-10-26', '2026-11-22', 7, 5, 'Imtiaz Saifi:46|Shireen Saifi:43', 1245],
-  ['2026-11-02', '2026-11-30', 8, 6, 'Saira Murtaza:34|Younus Murtaza:38|Hadi Murtaza:10', 1195],
-  ['2026-11-04', '2026-12-07', 6, 4, 'Naeema Akram:62|Abdul Akram:67', 1595],
-  ['2026-11-05', '2026-12-12', 7, 5, 'Kashif Jalal:30|Sameer Jalal:28|Adnan Jalal:32', 1095],
-  ['2026-11-06', '2026-12-18', 8, 5, 'Huma Shafiq:41|Wasim Shafiq:45|Nimra Shafiq:16|Zoya Shafiq:9', 1295],
-];
+const surnames = [
+  'Farooq', 'Siddiqui', 'Hussain', 'Qureshi', 'Rahman', 'Malik', 'Ahmed', 'Khan', 'Patel', 'Mahmood',
+  'Begum', 'Mirza', 'Iqbal', 'Akhtar', 'Yousaf', 'Bashir', 'Aslam', 'Choudhury', 'Saeed', 'Ansari',
+  'Aziz', 'Shah', 'Sheikh', 'Rauf', 'Munir', 'Latif', 'Saleem', 'Nadeem', 'Zaman', 'Sadiq',
+  'Ashraf', 'Hafeez', 'Hanif', 'Javed', 'Younis', 'Kazmi', 'Chaudhry', 'Naeem', 'Anwar', 'Hassan',
+  'Zafar', 'Tariq', 'Majeed', 'Rasheed', 'Khalil', 'Saifi', 'Murtaza', 'Akram', 'Jalal', 'Shafiq',
+  'Abbasi', 'Alvi', 'Baig', 'Butt', 'Dar', 'Ghauri', 'Hashmi', 'Jafri', 'Lodhi', 'Masood',
+  'Nizami', 'Osmani', 'Qadri', 'Rizvi', 'Sattar', 'Usmani', 'Warsi', 'Zaidi', 'Chishti', 'Durrani',
+  'Faruqi', 'Gilani', 'Haider', 'Ismail', 'Jilani', 'Khatri', 'Lakhani', 'Memon', 'Navid', 'Pandor',
+  'Rangrez', 'Surti', 'Vohra', 'Bham', 'Desai', 'Dudhia', 'Gani', 'Kolia', 'Mulla', 'Rawat',
+  'Aden', 'Elmi', 'Hersi', 'Warsame', 'Abdi', 'Alami', 'Mansouri', 'Nasser', 'Salim', 'Zaki',
+] as const;
+const femaleNames = [
+  'Amina', 'Maryam', 'Safiya', 'Nadia', 'Hafsa', 'Sumayya', 'Zainab', 'Mariam', 'Sana', 'Rubina',
+  'Aleena', 'Iqra', 'Tasneem', 'Naila', 'Rabia', 'Fariha', 'Hina', 'Uzma', 'Asma', 'Noreen',
+  'Rizwana', 'Mehwish', 'Sadia', 'Ayesha', 'Saira', 'Naeema', 'Huma', 'Farhana', 'Samira', 'Laila',
+  'Yasmin', 'Aaliyah', 'Amira', 'Safa', 'Rania', 'Suhana', 'Nabila', 'Farah', 'Nazia', 'Tahmina',
+  'Bushra', 'Shazia', 'Parveen', 'Tahira', 'Lubna', 'Nusrat', 'Shabana', 'Shireen', 'Fauzia', 'Nasreen',
+  'Nimra', 'Zoya', 'Inaya', 'Hana', 'Zara', 'Amal', 'Noor', 'Eman', 'Maha', 'Aiza',
+  'Ruqayya', 'Huda', 'Salma', 'Sakinah', 'Iman', 'Safaa', 'Hodan', 'Ifrah', 'Nawal', 'Khadija',
+] as const;
+const maleNames = [
+  'Imran', 'Omar', 'Rashid', 'Bilal', 'Tariq', 'Faisal', 'Javed', 'Ibrahim', 'Ilyas', 'Adil',
+  'Yasir', 'Saad', 'Nabeel', 'Khalid', 'Sohail', 'Rafiq', 'Faizan', 'Adeel', 'Farhan', 'Waseem',
+  'Kamran', 'Dawood', 'Ahsan', 'Junaid', 'Aqib', 'Salman', 'Zubair', 'Arif', 'Hamid', 'Arsalan',
+  'Shuaib', 'Wajid', 'Tahir', 'Imtiaz', 'Kashif', 'Fahad', 'Hamza', 'Usman', 'Haroon', 'Idris',
+  'Rehan', 'Talha', 'Ammar', 'Yusuf', 'Hassan', 'Musa', 'Zain', 'Ismail', 'Rayyan', 'Daniyal',
+  'Abbas', 'Hadi', 'Yahya', 'Owais', 'Naeem', 'Majid', 'Mansoor', 'Waqar', 'Shahid', 'Noman',
+  'Eesa', 'Ayaan', 'Mikail', 'Sufyan', 'Abdirahman', 'Hamdi', 'Yasin', 'Anas', 'Karim', 'Taha',
+] as const;
+
+function scenarioFor(index: number): DemoScenario {
+  // A coprime permutation distributes the payment states across the entire
+  // history instead of making one calendar month exclusively unpaid or settled.
+  const bucket = index * 37 % DEMO_CUSTOMER_COUNT;
+  return bucket < 90 ? 'fully_paid' : bucket < 150 ? 'partial' : bucket < 180 ? 'deposit_pending' : 'unpaid';
+}
+
+function makeParty(index: number): PartySeed {
+  const family = Math.floor(index / 2);
+  const surname = surnames[family];
+  const femaleLead = index % 2 === 0;
+  const firstName = femaleLead ? femaleNames[family % femaleNames.length] : maleNames[family % maleNames.length];
+  const partnerName = femaleLead ? maleNames[(family + 11) % maleNames.length] : femaleNames[(family + 17) % femaleNames.length];
+  const pattern = (index * 7 + Math.floor(index / 10)) % 10;
+  let leadAge = 29 + index * 13 % 25;
+  if (pattern === 4) leadAge = 61 + index % 13;
+  if (pattern === 2 || pattern === 3) leadAge = 33 + index % 12;
+  if (pattern === 6) leadAge = 40 + index % 11;
+  if (pattern === 7) leadAge = 47 + index % 10;
+  if (pattern === 8) leadAge = 39 + index % 9;
+  const group = [`${firstName} ${surname}:${leadAge}`];
+  const partner = () => group.push(`${partnerName} ${surname}:${leadAge + (femaleLead ? 3 : -2)}`);
+  const child = (ordinal: number, age: number) => {
+    const pool = (index + ordinal) % 2 === 0 ? femaleNames : maleNames;
+    group.push(`${pool[(family + 35 + ordinal * 9) % pool.length]} ${surname}:${age}`);
+  };
+  if ([1, 2, 3, 4, 6, 7, 8, 9].includes(pattern)) partner();
+  if (pattern === 2) child(1, 4 + index % 7);
+  if (pattern === 3) { child(1, 10 + index % 5); child(2, 5 + index % 4); }
+  if (pattern === 5) {
+    group.push(`${maleNames[(family + 23) % maleNames.length]} ${surnames[(family + 29) % surnames.length]}:${leadAge + 2}`);
+    group.push(`${maleNames[(family + 31) % maleNames.length]} ${surnames[(family + 43) % surnames.length]}:${leadAge - 1}`);
+  }
+  if (pattern === 6) { child(1, 17 + index % 3); child(2, 12 + index % 3); child(3, 6 + index % 4); }
+  if (pattern === 7) { child(1, 20 + index % 4); child(2, 14 + index % 4); }
+  if (pattern === 8) {
+    group.push(`${femaleNames[(family + 26) % femaleNames.length]} ${surname}:${leadAge + 27}`);
+    group.push(`${maleNames[(family + 30) % maleNames.length]} ${surname}:${leadAge - 6}`);
+    child(1, 9 + index % 4); child(2, 5 + index % 3);
+  }
+  // 92 days inclusive, with two or three new households on almost every day.
+  const createdOn = addDays(DEMO_START_DATE, Math.floor(index * 91 / (DEMO_CUSTOMER_COUNT - 1)));
+  const scenario = scenarioFor(index);
+  const departureOn = scenario === 'fully_paid' ? addDays(createdOn, 19 + index * 11 % 51)
+    : later(addDays(createdOn, 42 + index * 7 % 58), addDays(DEMO_AS_OF, 8 + index * 13 % 54));
+  const lengths = [[6, 4], [7, 5], [8, 6], [8, 5], [10, 6]] as const;
+  const [makkahNights, madinahNights] = lengths[(index * 3 + family) % lengths.length];
+  const adultPrice = [1095, 1145, 1195, 1245, 1295, 1345, 1395, 1445, 1495, 1595, 1695][(index * 7 + family) % 11];
+  return [createdOn, departureOn, makkahNights, madinahNights, group.join('|'), adultPrice];
+}
 
 function addDays(date: string, days: number): string {
   const result = new Date(`${date}T12:00:00.000Z`);
@@ -176,20 +208,21 @@ function paymentHistory(index: number, scenario: DemoScenario, total: bigint, bo
   const result: DemoPayment[] = [];
   function add(status: DemoPayment['status'], amount: bigint, paymentDate: string, note: string, rejectionReason: string | null = null) {
     const ordinal = result.length + 1;
-    // All times are UTC; a same-day review always follows its submission.
-    const minute = [10, 30, 45][ordinal - 1];
+    // Booking creation is at 09:00 UTC. Every same-day submission and review
+    // follows it, and sequential payments retain a valid order on a shared date.
+    const minute = 4 + ordinal * 9 + index % 4;
     result.push({
       id: seedUUID(`${key}/payment-${ordinal}`), idempotencyKey: seedUUID(`${key}/payment-${ordinal}/request`),
       status, amountMinor: amount.toString(), paymentDate,
-      submittedAt: `${paymentDate}T09:${minute}:00.000Z`,
-      reviewedAt: status === 'pending' ? null : `${paymentDate}T09:${minute + 8}:00.000Z`,
+      submittedAt: `${paymentDate}T09:${String(minute).padStart(2, '0')}:00.000Z`,
+      reviewedAt: status === 'pending' ? null : `${paymentDate}T09:${String(minute + 5).padStart(2, '0')}:00.000Z`,
       reference: `SAMPLE-TRANSFER-${serial}-${String(ordinal).padStart(2, '0')}`,
       note: `${note} Fictional demonstration transfer; no money was sent.`,
       rejectionReason, receiptCount: ordinal === 1 && index % 3 === 0 ? 2 : 1,
     });
   }
   const deposit = percentage(total, 25);
-  const nextPaymentOn = earlier(addDays(bookedOn, 9 + index % 8), DEMO_AS_OF);
+  const nextPaymentOn = earlier(addDays(bookedOn, 9 + index % 18), DEMO_AS_OF);
   if (scenario === 'fully_paid') {
     if (index % 4 === 0) {
       add('approved', total, earlier(addDays(bookedOn, 1), DEMO_AS_OF), 'Full package balance received in one transfer.');
@@ -206,17 +239,21 @@ function paymentHistory(index: number, scenario: DemoScenario, total: bigint, bo
     const credited = percentage(total, 40 + index % 4 * 10);
     add('approved', deposit, bookedOn, 'Initial booking deposit verified.');
     add('approved', credited - deposit, nextPaymentOn, 'Part payment toward the remaining package balance.');
-    if (index % 5 === 0) add('pending', percentage(total, 10), earlier(addDays(nextPaymentOn, 2), DEMO_AS_OF), 'Additional instalment submitted; administrator verification is pending.');
-    else if (index % 5 === 2) add('rejected', percentage(total, 10), earlier(addDays(nextPaymentOn, 1), DEMO_AS_OF), 'Customer uploaded an incomplete transfer image.', 'The screenshot does not show a completed transfer. Please upload the final bank confirmation.');
-  } else if (scenario === 'deposit_pending') {
-    if (index < 40) {
-      add('approved', deposit, bookedOn, 'Initial deposit confirmed; next instalment awaits review.');
-      add('pending', deposit, nextPaymentOn, 'Second instalment receipt uploaded for manual approval.');
-    } else {
-      add('pending', deposit, earlier(addDays(bookedOn, 1), DEMO_AS_OF), 'First deposit receipt awaiting manual verification.');
-      if (index === 42) add('rejected', percentage(total, 10), bookedOn, 'An earlier incomplete screenshot was not accepted.', 'Please provide the completed transaction screen with its amount and reference.');
+    if (index % 5 === 0) {
+      const pendingOn = later(nextPaymentOn, addDays(DEMO_AS_OF, -(index % 3)));
+      add('pending', percentage(total, 10), pendingOn, 'Additional instalment submitted; administrator verification is pending.');
+    } else if (index % 5 === 2) {
+      add('rejected', percentage(total, 10), earlier(addDays(nextPaymentOn, 1), DEMO_AS_OF), 'Customer uploaded an incomplete transfer image.', 'The screenshot does not show a completed transfer. Please upload the final bank confirmation.');
     }
-  } else if (index === 45 || index === 47) {
+  } else if (scenario === 'deposit_pending') {
+    if (bookedOn <= addDays(DEMO_AS_OF, -7)) {
+      add('approved', deposit, bookedOn, 'Initial deposit confirmed; next instalment awaits review.');
+      add('pending', deposit, later(bookedOn, addDays(DEMO_AS_OF, -(index % 4))), 'Second instalment receipt uploaded for manual approval.');
+    } else {
+      if (index % 3 === 0) add('rejected', deposit, bookedOn, 'An earlier incomplete screenshot was not accepted.', 'Please provide the completed transaction screen with its amount and reference.');
+      add('pending', deposit, earlier(addDays(bookedOn, 1), DEMO_AS_OF), 'First deposit receipt awaiting manual verification.');
+    }
+  } else if (index % 3 !== 1) {
     add('rejected', deposit, earlier(addDays(bookedOn, 1), DEMO_AS_OF), 'Transfer was prepared but the evidence did not confirm completion.', 'The image shows a transfer draft, not a successful payment. Please submit confirmation after payment.');
   }
   return result.sort((a, b) => a.submittedAt.localeCompare(b.submittedAt) || a.id.localeCompare(b.id));
@@ -226,7 +263,7 @@ function makeCustomer(party: PartySeed, index: number): DemoCustomer {
   const [createdOn, departureOn, makkahNights, madinahNights, partyText, adultPrice] = party;
   const serial = String(index + 1).padStart(3, '0');
   const key = `customer-${index + 1}`;
-  const scenario: DemoScenario = index < 20 ? 'fully_paid' : index < 35 ? 'partial' : index < 45 ? 'deposit_pending' : 'unpaid';
+  const scenario = scenarioFor(index);
   const passengers: DemoPassenger[] = partyText.split('|').map((entry, passengerIndex) => {
     const [name, ageText] = entry.split(':');
     const age = Number(ageText);
@@ -252,7 +289,7 @@ function makeCustomer(party: PartySeed, index: number): DemoCustomer {
   if (departureOn <= DEMO_AS_OF) issuedServices = [...requiredServices];
   else if (scenario === 'fully_paid') issuedServices = departureOn <= addDays(DEMO_AS_OF, 14) ? [...requiredServices] : ['flight', 'makkah', 'madinah'];
   else if (scenario === 'partial') issuedServices = departureOn <= addDays(DEMO_AS_OF, 14) ? ['flight', 'makkah', 'madinah', 'transfers'] : ['flight', ...(index % 2 === 0 ? ['makkah' as const, 'madinah' as const] : [])];
-  else if (scenario === 'deposit_pending' && index < 40) issuedServices = index % 2 === 0 ? ['flight'] : ['makkah', 'madinah'];
+  else if (scenario === 'deposit_pending' && bookedOn <= addDays(DEMO_AS_OF, -7)) issuedServices = index % 2 === 0 ? ['flight'] : ['makkah', 'madinah'];
   else issuedServices = [];
   const deposit = percentage(total, 25);
   const middle = percentage(total, 25);
@@ -265,10 +302,10 @@ function makeCustomer(party: PartySeed, index: number): DemoCustomer {
       : passengers.length === 1 ? 'Solo traveller; single-room supplement included.' : 'Travellers prefer rooms on the same floor where available.';
   return {
     id: seedUUID(key), userId: seedUUID(`${key}/user`), membershipId: seedUUID(`${key}/membership`), idempotencyKey: seedUUID(`${key}/request`),
-    name, email: `demo.${name.toLowerCase().replaceAll(' ', '.')}.${serial}@example.test`,
+    name, email: `demo200.${name.toLowerCase().replaceAll(' ', '.')}.${serial}@example.test`,
     // Ofcom's reserved UK drama mobile range 07700 900000–900999.
-    phone: `+44 7700 900${String(100 + index).padStart(3, '0')}`,
-    createdAt, notes: `${DEMO_NOTICE} ${familyNote}`, scenario,
+    phone: `+44 7700 900${String(300 + index).padStart(3, '0')}`,
+    createdAt, notes: `${DEMO_NOTICE} ${familyNote} ${['Airport pickup requested for the whole party.', 'Prefers afternoon contact after work.', 'Printed copies of the itinerary requested.', 'Travellers will check baggage allowance before packing.', 'Wheelchair assistance to be confirmed if needed.', 'Prefers a quieter room away from the lifts.', 'First Umrah trip; pre-departure briefing requested.', 'Returning travellers; flexible on airline timings.', 'Connecting rooms preferred where available.', 'Will collect final travel pack at the office.'][index % 10]} ${scenario === 'unpaid' ? 'Provisional itinerary only; deposit follow-up outstanding.' : scenario === 'partial' ? 'Balance reminder to follow the agreed instalment dates.' : scenario === 'deposit_pending' ? 'New receipt is in the review queue.' : 'Package balance settled.'}`, scenario,
     booking: {
       id: seedUUID(`${key}/booking`), idempotencyKey: seedUUID(`${key}/booking/request`),
       reference: `DEMO-UMR-26-${serial}`, currency: 'GBP', totalMinor: total.toString(), bookedOn, createdAt: bookingCreatedAt,
@@ -295,23 +332,30 @@ function makeCustomer(party: PartySeed, index: number): DemoCustomer {
   };
 }
 
-export const demoCustomers: DemoCustomer[] = parties.map(makeCustomer);
+export const demoCustomers: DemoCustomer[] = Array.from({ length: DEMO_CUSTOMER_COUNT }, (_, index) => makeCustomer(makeParty(index), index));
 
 /** Fail before seeding if an edited fixture stops being coherent. Pure; no I/O. */
 export function validateDemoData(customers: readonly DemoCustomer[] = demoCustomers): void {
   function ensure(condition: boolean, message: string): asserts condition { if (!condition) throw new Error(`Invalid demo data: ${message}`); }
-  ensure(customers.length === 50, 'expected exactly 50 customers');
+  ensure(customers.length === DEMO_CUSTOMER_COUNT, `expected exactly ${DEMO_CUSTOMER_COUNT} customers`);
   const ids = new Set<string>();
   const emails = new Set<string>();
+  const names = new Set<string>();
+  const phones = new Set<string>();
   const references = new Set<string>();
+  const months = new Set<string>();
   const counts: Record<DemoScenario, number> = { fully_paid: 0, partial: 0, deposit_pending: 0, unpaid: 0 };
   for (const customer of customers) {
     const booking = customer.booking;
     counts[customer.scenario]++;
-    ensure(!ids.has(customer.id) && !emails.has(customer.email) && !references.has(booking.reference), 'duplicate customer or booking identity');
-    ids.add(customer.id); emails.add(customer.email); references.add(booking.reference);
-    ensure(customer.email.endsWith('@example.test') && customer.notes.includes(DEMO_NOTICE), `non-demo identity ${customer.id}`);
-    ensure(customer.createdAt.slice(0, 10) >= '2026-09-01' && customer.createdAt.slice(0, 10) <= DEMO_AS_OF, 'account creation outside demo period');
+    ensure(!ids.has(customer.id) && !emails.has(customer.email) && !names.has(customer.name) && !phones.has(customer.phone) && !references.has(booking.reference), 'duplicate customer or booking identity');
+    ids.add(customer.id); emails.add(customer.email); names.add(customer.name); phones.add(customer.phone); references.add(booking.reference);
+    months.add(customer.createdAt.slice(0, 7));
+    ensure(customer.email.startsWith('demo200.') && customer.email.endsWith('@example.test') && customer.notes.includes(DEMO_NOTICE), `non-demo identity ${customer.id}`);
+    ensure(/^\+44 7700 900[3-4][0-9]{2}$/.test(customer.phone), 'phone outside the fixture reserved range');
+    ensure(booking.passengers.length >= 1 && booking.passengers.length <= 6 && new Set(booking.passengers.map(passenger => passenger.name)).size === booking.passengers.length, 'invalid or duplicate passenger party');
+    ensure(booking.passengers.every(passenger => passenger.age >= 4 && passenger.age <= 80 && (passenger.category === 'child') === (passenger.age < 12)), 'passenger age/category mismatch');
+    ensure(customer.createdAt.slice(0, 10) >= DEMO_START_DATE && customer.createdAt.slice(0, 10) <= DEMO_AS_OF, 'account creation outside demo period');
     ensure(customer.createdAt <= booking.createdAt && booking.createdAt.slice(0, 10) === booking.bookedOn && booking.bookedOn <= DEMO_AS_OF, 'booking predates account or is future dated');
     ensure(booking.bookedOn < booking.departureAt.slice(0, 10) && booking.departureAt < booking.arrivalAt && booking.arrivalAt < booking.returnAt && booking.returnAt < booking.returnArrivalAt, 'invalid flight chronology');
     const nights = booking.makkahNights + booking.madinahNights;
@@ -338,9 +382,11 @@ export function validateDemoData(customers: readonly DemoCustomer[] = demoCustom
     ensure(customer.scenario !== 'partial' || approved > 0n && approved < total, 'partial scenario is not partially paid');
     ensure(customer.scenario !== 'deposit_pending' || pending > 0n && approved < total, 'deposit scenario has no pending receipt');
     ensure(customer.scenario !== 'unpaid' || approved === 0n && pending === 0n, 'unpaid scenario contains credited or pending funds');
+    ensure(booking.departureAt.slice(0, 10) > DEMO_AS_OF || approved === total, 'departed booking has an unpaid balance');
     ensure(booking.departureAt.slice(0, 10) > DEMO_AS_OF || booking.requiredServices.every(service => booking.issuedServices.includes(service)), 'departed booking has missing required documents');
   }
-  ensure(counts.fully_paid === 20 && counts.partial === 15 && counts.deposit_pending === 10 && counts.unpaid === 5, 'scenario distribution differs from 20/15/10/5');
+  ensure([...months].sort().join(',') === '2026-08,2026-09,2026-10,2026-11', 'history does not cover the rolling three-month period');
+  ensure(counts.fully_paid === 90 && counts.partial === 60 && counts.deposit_pending === 30 && counts.unpaid === 20, 'scenario distribution differs from 90/60/30/20');
 }
 
 validateDemoData();

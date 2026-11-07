@@ -5,6 +5,9 @@ import { SessionGuard } from '../auth/session.guard';
 import { RateLimitService } from '../auth/rate-limit.service';
 import { InvitationService } from '../invitations/invitation.service';
 import { LedgerService } from '../ledger/ledger.service';
+import { UsersService } from '../users/users.service';
+import { permanentDeletionSchema } from '../users/users.controller';
+import { parseBody } from '../auth/auth.controller';
 import { CustomersService } from './customers.service';
 import { CurrencyService } from '../currency/currency.service';
 import { DashboardService } from '../dashboard/dashboard.service';
@@ -19,7 +22,8 @@ export class CustomersController {
     @Inject(InvitationService) private readonly invitations:InvitationService,
     @Inject(RateLimitService) private readonly rate:RateLimitService,
     @Inject(CurrencyService) private readonly currencies:CurrencyService,
-    @Inject(DashboardService) private readonly dashboardService:DashboardService) {}
+    @Inject(DashboardService) private readonly dashboardService:DashboardService,
+    @Inject(UsersService) private readonly users:UsersService) {}
 
   @Get('dashboard')
   async dashboard(@Req() req:AuthRequest,@Param('orgId',ParseUUIDPipe) orgId:string,@Query() query:unknown) {
@@ -45,6 +49,12 @@ export class CustomersController {
   @Patch('customers/:id')
   async update(@Req() req:AuthRequest,@Param('orgId',ParseUUIDPipe) orgId:string,@Param('id',ParseUUIDPipe) id:string,@Body() body:unknown) {
     return this.customers.update(await this.access.membership(req.user.id,orgId,true),id,body);
+  }
+  @Delete('customers/:id')
+  async remove(@Req() req:AuthRequest,@Param('orgId',ParseUUIDPipe) orgId:string,@Param('id',ParseUUIDPipe) id:string,@Body() input:unknown) {
+    await this.rate.consume('account-delete',req.user.id,30,3600);
+    const body=parseBody(permanentDeletionSchema,input);
+    return this.users.deleteCustomer(await this.access.membership(req.user.id,orgId,true),id,body.confirmation_email);
   }
   @Post('customers/:id/invitations')
   async invite(@Req() req:AuthRequest,@Param('orgId',ParseUUIDPipe) orgId:string,@Param('id',ParseUUIDPipe) id:string) {

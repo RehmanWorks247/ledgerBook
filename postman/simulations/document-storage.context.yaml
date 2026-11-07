@@ -13,7 +13,7 @@ assumptions:
     status: supported
     claim: The real DocumentStorage adapter preserves the tested ASCII-PDF bytes through PUT and GET, deletes the modeled object, retries two transient 503s, and returns a sanitized 503 after three failed attempts during a persistent outage.
     reason: The production AWS SDK adapter ran against the local Postman member, whose handler validates the checksum, encryption, content type and cache headers.
-    verification: On 2026-11-06 tests/document-storage.simulation.ts passed. Observed request log PUT200, GET200, DELETE204, GET404, PUT503/503/200, GET200, then PUT503/503/503. Final modeled state was seven PUTs, three GETs, one DELETE and one stored object.
+    verification: On 2026-11-06 tests/document-storage.simulation.ts passed. Observed request log PUT200, GET200, DELETE204, GET404, PUT503/503/200, GET200, then PUT503/503/503. Final modeled state was seven PUTs, three GETs, one DELETE and one stored object. Repeated successfully on 2026-11-06 after the Clerk/travel merge; observed the same request sequence and asserted modeled state (fingerprint clerk-travel-merge).
     source: tests/document-storage.simulation.ts; postman/mocks/s3-documents/default.js; apps/api/src/bookings/document-storage.ts
     updated_at: "2026-11-06"
   - id: postman-binary-body-preservation
@@ -34,4 +34,8 @@ fingerprints:
   - id: local-storage-implementation
     date: "2026-11-06"
     commit: 67288b9d3f14e66ed8f3bcf1172b92a669682068 (dirty working tree with document storage implementation)
+    cli: "1.75.0"
+  - id: clerk-travel-merge
+    date: "2026-11-06"
+    commit: 89c0e4af0774c129d7065f21ff14d57ff3941e18 (dirty working tree merging saved Clerk authentication with travel features)
     cli: "1.75.0"

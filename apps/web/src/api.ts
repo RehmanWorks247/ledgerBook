@@ -11,7 +11,7 @@ export type Membership = {
   time_zone?: string;
 };
 export type Session = {
-  user: { id: string; email: string };
+  user: { id: string; email: string; name?: string | null };
   memberships: Membership[];
 };
 export type Customer = {
@@ -64,18 +64,35 @@ export class ApiError extends Error {
     super(message);
   }
 }
+type TokenProvider = () => Promise<string | null>;
+let tokenProvider: TokenProvider = async () => null;
+export function setTokenProvider(provider: TokenProvider) {
+  tokenProvider = provider;
+}
+export async function authenticatedHeaders(initial?: HeadersInit) {
+  const token = await tokenProvider();
+  const headers = new Headers(initial);
+  if (token) headers.set("Authorization", `Bearer ${token}`);
+  headers.set("X-CSRF-Protection", "1");
+  return headers;
+}
+export async function authenticatedFetch(
+  path: string,
+  options: RequestInit = {},
+) {
+  const headers = await authenticatedHeaders(options.headers);
+  return fetch(`/api${path}`, { ...options, credentials: "include", headers });
+}
 export async function api<T>(
   path: string,
   options: RequestInit = {},
 ): Promise<T> {
-  const response = await fetch(`/api${path}`, {
+  const headers = new Headers(options.headers);
+  if (!headers.has("Content-Type"))
+    headers.set("Content-Type", "application/json");
+  const response = await authenticatedFetch(path, {
     ...options,
-    credentials: "include",
-    headers: {
-      "Content-Type": "application/json",
-      "X-CSRF-Protection": "1",
-      ...options.headers,
-    },
+    headers,
   });
   if (!response.ok) {
     const data = (await response.json().catch(() => ({}))) as {
@@ -97,10 +114,65 @@ export const mutate = <T>(path: string, body?: unknown, method = "POST") =>
     method,
     body: body === undefined ? undefined : JSON.stringify(body),
   });
-export const errorMessage = (error: unknown) =>
-  error instanceof Error
-    ? error.message
-    : "Something went wrong. Please try again.";
+
+export async function requestCustomerInvitation(customerPath: string) {
+  const invitation = await mutate<{
+    id: string;
+    expires_at: string;
+    delivery_status: "queued" | "sent" | "failed";
+  }>(`${customerPath}/invitations`);
+  // A saved invitation can return HTTP 201 even when Clerk could not send it.
+  if (invitation?.delivery_status === "failed")
+    throw new Error(
+      "The invitation request failed. The customer account is saved. Use Send / resend invitation to try again.",
+    );
+  if (invitation?.delivery_status !== "sent")
+    throw new Error(
+      "The invitation email request has not been confirmed. Refresh the invitation status before trying again.",
+    );
+  return invitation;
+}
+export async function permanentlyDeleteAccount(
+  accountPath: string,
+  accountEmail: string,
+  confirmation: string,
+) {
+  const confirmationEmail = confirmation.trim().toLowerCase();
+  if (!confirmationEmail || confirmationEmail !== accountEmail.toLowerCase())
+    throw new Error(
+      "Enter the account’s email address exactly to confirm permanent deletion.",
+    );
+  return mutate<{ message: string }>(
+    accountPath,
+    { confirmation_email: confirmationEmail },
+    "DELETE",
+  );
+}
+export function errorMessage(error: unknown): string {
+  if (error && typeof error === "object") {
+    const details = error as {
+      errors?: { longMessage?: string; message?: string }[];
+      longMessage?: string;
+      message?: string;
+    };
+    return (
+      details.errors?.[0]?.longMessage ||
+      details.errors?.[0]?.message ||
+      details.longMessage ||
+      details.message ||
+      "Something went wrong. Please try again."
+    );
+  }
+  return "Something went wrong. Please try again.";
+}
+export function hasErrorCode(error: unknown, code: string) {
+  if (!error || typeof error !== "object") return false;
+  const details = error as { code?: string; errors?: { code?: string }[] };
+  return (
+    details.code === code ||
+    Boolean(details.errors?.some((item) => item.code === code))
+  );
+}
 
 export function useResource<T>(path: string) {
   const [data, setData] = useState<T>();

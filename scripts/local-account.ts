@@ -20,6 +20,7 @@ export type LocalAccount={email?:string;organizationId?:string;password?:string;
 /** Privileged local provisioning, not an HTTP registration or authentication bypass. */
 export async function ensureLocalAccount(db:DatabaseService,options:{directory?:string;email?:string;name?:string;currency?:string}={}):Promise<LocalAccount> {
   if(process.env.NODE_ENV!=='development'&&process.env.NODE_ENV!=='test') throw new Error('Local provisioning is development-only.');
+  if(process.env.AUTH_PROVIDER==='clerk') throw new Error('Clerk administrators must be provisioned with admin:create; local passwords are disabled.');
   const directory=resolve(options.directory??'.local');
   await mkdir(directory,{recursive:true,mode:0o700});
   const jsonPath=resolve(directory,'admin-login.json');

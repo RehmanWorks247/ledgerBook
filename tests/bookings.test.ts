@@ -198,7 +198,7 @@ describe('booking folders, transactional PDF storage and document access', () =>
     await assert.rejects(insert(seed.secondCustomerId,'5000',seed.otherAdminId),/booking_creator_membership/);
     const payment = await ledger.post(seed.admin,seed.secondCustomerId,{kind:'payment',amount:'5.00',effective_date:'2026-11-06',description:'Integrity test payment',idempotency_key:randomUUID()});
     await assert.rejects(database.db.query('UPDATE bookings SET charge_entry_id=$1 WHERE id=$2',[payment.id,otherCustomerBooking]),/must match its customer GBP ledger charge/);
-    await assert.rejects(database.db.query('UPDATE booking_nodes SET created_by=$1 WHERE id=$2',[seed.otherAdminId,firstFolder]),/booking_node_creator_membership/);
+    await assert.rejects(database.db.query('UPDATE booking_nodes SET created_by=$1 WHERE id=$2',[seed.otherAdminId,firstFolder]),/Booking creator attribution is immutable/);
     assert.equal((await database.db.query('SELECT count(*)::int AS n FROM bookings WHERE charge_entry_id=$1',[charge.id])).rows[0].n,0);
   });
 

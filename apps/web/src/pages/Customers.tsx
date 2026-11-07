@@ -15,12 +15,15 @@ import {
   Mail,
   Plus,
   RefreshCw,
+  Trash2,
   X,
 } from "lucide-react";
 import {
+  authenticatedFetch,
   dateLabel,
   errorMessage,
   mutate,
+  requestCustomerInvitation,
   useResource,
   type Customer,
   type Entry,
@@ -39,6 +42,7 @@ import {
   PageHeading,
   Pagination,
 } from "../components";
+import { DeleteAccountDialog } from "../DeleteAccountDialog";
 type CustomerListData = {
   items: Customer[];
   page: number;
@@ -135,7 +139,7 @@ export function CustomerList() {
                             />
                             {customer.delivery_status === "failed" && (
                               <small className="text-error">
-                                Email delivery failed
+                                Invitation request failed
                               </small>
                             )}
                           </td>
@@ -303,7 +307,7 @@ function CustomerForm({ initial }: { initial?: Customer }) {
                 <small>
                   {initial
                     ? "Email is fixed to protect account identity. To use a different address, archive this account and create a new one."
-                    : "We’ll send their secure invitation to this address."}
+                    : "Use an address they can access. Ask them to check their inbox and Spam or Junk folder."}
                 </small>
               </label>
               <label>
@@ -367,6 +371,7 @@ function CustomerForm({ initial }: { initial?: Customer }) {
 export function CustomerDetail({ recordPayment = false }: { recordPayment?: boolean }) {
   const money = useMoney();
   const member = useOrganization();
+  const navigate = useNavigate();
   const { customerId: routeCustomerId } = useParams();
   const customerId = routeCustomerId || member.customer_id;
   const admin = member.role === "admin";
@@ -375,6 +380,7 @@ export function CustomerDetail({ recordPayment = false }: { recordPayment?: bool
   const [applied, setApplied] = useState(filters);
   const [page, setPage] = useState(1);
   const [modal, setModal] = useState<{ reversal?: Entry; kind?: string } | null>(recordPayment ? { kind: "payment" } : null);
+  const [deleting, setDeleting] = useState(false);
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState("");
   const [notice, setNotice] = useState("");
@@ -402,6 +408,7 @@ export function CustomerDetail({ recordPayment = false }: { recordPayment?: bool
     setApplied({ start: "", end: "", search: "" });
     setNotice("");
     setActionError("");
+    setDeleting(false);
   }, [customerId, recordPayment]);
   async function accessAction(
     action: "invite" | "revoke-invitation" | "revoke-access",
@@ -419,25 +426,24 @@ export function CustomerDetail({ recordPayment = false }: { recordPayment?: bool
     setActionError("");
     setNotice("");
     try {
-      const result = await mutate<{ delivery_status?: string }>(
-        `${base}/${action === "revoke-access" ? "revoke-access" : "invitations"}`,
-        undefined,
-        action === "revoke-invitation" ? "DELETE" : "POST",
-      );
-      if (action === "invite") {
-        if (result.delivery_status === "sent" && account.data)
-          setNotice(`Invitation sent to ${account.data.email}.`);
-      } else {
-        setNotice(
-          action === "revoke-access"
+      if (action === "invite") await requestCustomerInvitation(base);
+      else
+        await mutate(
+          `${base}/${action === "revoke-access" ? "revoke-access" : "invitations"}`,
+          undefined,
+          action === "revoke-invitation" ? "DELETE" : "POST",
+        );
+      setNotice(
+        action === "invite"
+          ? "Clerk accepted the invitation email request. Ask the recipient to check their inbox and Spam or Junk folder."
+          : action === "revoke-access"
             ? "Customer access revoked. Financial history is preserved."
             : "Invitation revoked.",
-        );
-      }
-      refresh();
+      );
     } catch (error) {
       setActionError(errorMessage(error));
     } finally {
+      refresh();
       setBusy(false);
     }
   }
@@ -446,10 +452,8 @@ export function CustomerDetail({ recordPayment = false }: { recordPayment?: bool
     setActionError("");
     try {
       const exportQuery = new URLSearchParams(query);
-      exportQuery.set('currency', 'GBP');
-      const response = await fetch(`/api${base}/statement.csv?${exportQuery}`, {
-        credentials: "include",
-      });
+      exportQuery.set("currency", "GBP");
+      const response = await authenticatedFetch(`${base}/statement.csv?${exportQuery}`);
       if (!response.ok) {
         const body = (await response.json().catch(() => ({}))) as {
           message?: string;
@@ -579,13 +583,26 @@ export function CustomerDetail({ recordPayment = false }: { recordPayment?: bool
                             }
                           >
                             {" "}
-                            · Email {data.customer.delivery_status}
+                            ·{" "}
+                            {data.customer.delivery_status === "sent"
+                              ? "Email request accepted"
+                              : data.customer.delivery_status === "failed"
+                                ? "Email request failed"
+                                : "Email request pending"}
                           </span>
                         )}
                       </dd>
                     </div>
                   )}
                 </dl>
+                {admin &&
+                  data.customer.invitation_status === "pending" &&
+                  data.customer.delivery_status === "sent" && (
+                    <p className="small muted">
+                      Ask the recipient to check their inbox and Spam or Junk
+                      folder for the invitation.
+                    </p>
+                  )}
                 {admin && data.customer.notes && (
                   <div className="internal-note">
                     <strong>Internal notes</strong>
@@ -630,9 +647,12 @@ export function CustomerDetail({ recordPayment = false }: { recordPayment?: bool
                 </div>
               </div>
             )}
-            {data.customer.delivery_status === "failed" && data.customer.invitation_status === "pending" && admin && (
-              <ErrorNotice message="The invitation email could not be delivered. Use Resend invitation to send a fresh link." />
-            )}
+            {data.customer.delivery_status === "failed" &&
+              data.customer.invitation_status === "pending" &&
+              admin &&
+              !actionError && (
+                <ErrorNotice message="The invitation request failed. The customer account is saved. Use Send / resend invitation to try again." />
+              )}
             <section className="panel statement-panel">
               <div className="panel-heading">
                 <div>
@@ -850,7 +870,39 @@ export function CustomerDetail({ recordPayment = false }: { recordPayment?: bool
                 onPage={setPage}
               />
             </section>
-
+            {admin && (
+              <section className="panel deletion-panel">
+                <div>
+                  <h2>Permanently delete this account</h2>
+                  <p>
+                    Delete this customer’s profile, all financial records, bookings,
+                    uploaded files, invitations, and access to this business. This cannot be undone.
+                  </p>
+                </div>
+                <button
+                  className="button danger-button"
+                  disabled={busy}
+                  onClick={() => setDeleting(true)}
+                >
+                  <Trash2 size={16} />
+                  Delete account
+                </button>
+              </section>
+            )}
+            {admin && deleting && (
+              <DeleteAccountDialog
+                name={data.customer.name}
+                email={data.customer.email}
+                kind="customer"
+                organizationName={member.organization_name}
+                path={base}
+                onClose={() => setDeleting(false)}
+                onDeleted={() => {
+                  setDeleting(false);
+                  navigate(`/o/${member.organization_id}/customers`);
+                }}
+              />
+            )}
             {modal && (
               <EntryDialog
                 customer={data.customer}
@@ -1063,7 +1115,7 @@ function EntryDialog({
           </button>
         </div>
         <p className="small muted">
-          Once recorded, entries cannot be edited or deleted.
+          Individual entries cannot be edited or deleted. Use a reversal to correct them.
         </p>
       </form>
     </dialog>

@@ -186,6 +186,12 @@ describe('HTTP authentication, CSRF, and tenant authorization', () => {
     }
   });
 
+  httpTest('publishes only the browser authentication configuration', async () => {
+    const response=await request('/auth/config');
+    assert.equal(response.status,200);
+    assert.deepEqual(await response.json(),{provider:'local',publishableKey:null});
+  });
+
   httpTest('isolates administrators by organization and customers by account', async () => {
     const ownDashboard = await request(`/organizations/${seed.orgId}/dashboard`, { cookie: adminCookie });
     assert.equal(ownDashboard.status, 200);
@@ -255,6 +261,69 @@ describe('HTTP authentication, CSRF, and tenant authorization', () => {
     }
     const repeatedDate = await request(`/organizations/${seed.orgId}/customers/${seed.customerId}/statement?start=2026-01-01&start=2026-01-02`, { cookie: adminCookie });
     assert.equal(repeatedDate.status, 400);
+  });
+
+  httpTest('requires administrator confirmation to permanently delete an account and permits a fresh same-email account', async () => {
+    const email = `delete-${randomUUID()}@example.test`;
+    const collection = `/organizations/${seed.orgId}/customers`;
+    const input = { name: 'Disposable deletion fixture', email, phone: '', notes: 'Private fixture note', idempotency_key: randomUUID() };
+    const created = await request(collection, { cookie: adminCookie, body: input });
+    assert.equal(created.status, 201);
+    const account = await created.json();
+    const originalToken = messages.find((message) => message.to === email)?.text.match(/#([A-Za-z0-9_-]{43})/)?.[1];
+    assert.ok(originalToken);
+    const path = `${collection}/${account.id}`;
+    const posted = await request(`${path}/entries`, {
+      cookie: adminCookie,
+      body: { kind: 'charge', amount: '12.50', effective_date: '2026-01-01', description: 'Deletion fixture charge', idempotency_key: randomUUID() },
+    });
+    assert.equal(posted.status, 201);
+    const deletion = { method: 'DELETE', cookie: adminCookie, body: { confirmation_email: email } };
+    assert.equal((await request(path, { ...deletion, cookie: undefined })).status, 401);
+    assert.equal((await request(path, { ...deletion, cookie: customerCookie })).status, 403);
+    assert.equal((await request(path, { ...deletion, csrf: false })).status, 403);
+    assert.equal((await request(path, { ...deletion, body: {} })).status, 400);
+    assert.equal((await request(path, { ...deletion, body: { confirmation_email: 'wrong@example.test' } })).status, 400);
+    assert.equal((await request(`/organizations/${seed.otherOrgId}/customers/${account.id}`, deletion)).status, 404);
+    const unchanged = await request(`${path}/statement`, { cookie: adminCookie });
+    assert.equal(unchanged.status, 200);
+    assert.equal((await unchanged.json()).current_balance_minor, '1250');
+
+    const deleted = await request(path, deletion);
+    assert.equal(deleted.status, 200);
+    assert.match((await deleted.json()).message, /permanently deleted/i);
+    assert.equal((await request(path, { cookie: adminCookie })).status, 404);
+    assert.equal((await request(`${path}/statement`, { cookie: adminCookie })).status, 404);
+    assert.equal((await database.db.query('SELECT id FROM ledger_entries WHERE customer_id=$1', [account.id])).rowCount, 0);
+    assert.equal((await database.db.query('SELECT id FROM invitations WHERE customer_id=$1', [account.id])).rowCount, 0);
+    const oldInvitation = await request('/auth/invitations/inspect', { body: { token: originalToken } });
+    assert.equal(oldInvitation.status, 200);
+    assert.equal((await oldInvitation.json()).status, 'invalid');
+
+    const replacement = await request(collection, { cookie: adminCookie, body: { ...input, idempotency_key: randomUUID() } });
+    assert.equal(replacement.status, 201);
+    const fresh = await replacement.json();
+    assert.notEqual(fresh.id, account.id);
+    assert.equal(fresh.email, email);
+    const statement = await request(`${collection}/${fresh.id}/statement`, { cookie: adminCookie });
+    assert.equal(statement.status, 200);
+    const empty = await statement.json();
+    assert.equal(empty.current_balance_minor, '0');
+    assert.equal(empty.entries.length, 0);
+    const freshToken = messages.filter((message) => message.to === email).at(-1)?.text.match(/#([A-Za-z0-9_-]{43})/)?.[1];
+    assert.ok(freshToken);
+    assert.notEqual(freshToken, originalToken);
+    const joined = await request('/auth/invitations/accept', { body: { token: freshToken, password: testPassword } });
+    assert.equal(joined.status, 200);
+    const membership = await joined.json();
+    const freshCookie = joined.headers.get('set-cookie')?.split(';', 1)[0];
+    assert.ok(freshCookie);
+    assert.equal((await request(`${collection}/${fresh.id}/statement`, { cookie: freshCookie })).status, 200);
+    const userPath = `/organizations/${seed.orgId}/users/${membership.membershipId}`;
+    assert.equal((await request(userPath, { ...deletion, body: {} })).status, 400);
+    assert.equal((await request(userPath, deletion)).status, 200);
+    assert.equal((await request(`${collection}/${fresh.id}`, { cookie: adminCookie })).status, 404);
+    assert.equal((await request('/auth/session', { cookie: freshCookie })).status, 401);
   });
 
   httpTest('returns the same recovery response for known and unknown identities', async () => {

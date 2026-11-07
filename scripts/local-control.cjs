@@ -57,7 +57,7 @@ async function main(){
   }
   const log=openSync(resolve(local,'local.log'),'a',0o600);
   let child;
-  try{child=spawn(process.execPath,['--import','tsx','scripts/local.ts',...process.argv.slice(3)],{
+  try{child=spawn(process.execPath,['--env-file-if-exists=.env','--import','tsx','scripts/local.ts',...process.argv.slice(3)],{
     cwd:root,detached:true,windowsHide:true,stdio:['ignore',log,log],
   });}finally{closeSync(log);}
   let spawnError;
@@ -68,7 +68,8 @@ async function main(){
     const current=await readStatus();
     if(current?.pid===child.pid&&current.state==='running'){
       console.log(`LedgerBook is running at ${current.url}`);
-      console.log('Administrator login details: .local/admin-login.txt');
+      console.log(current.authProvider==='clerk'?'Sign in with your provisioned Clerk administrator.':'Administrator login details: .local/admin-login.txt');
+      if(current.publicUrl&&current.publicUrl!==current.url) console.log(`Browser and invitation origin: ${current.publicUrl}`);
       return;
     }
     if(current?.pid===child.pid&&current.state==='failed') throw new Error('Startup failed. Check .local/local.log.');

@@ -2,8 +2,11 @@ import 'reflect-metadata';
 import { parseArgs } from 'node:util';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
+import { createClerkClient } from '@clerk/backend';
 import { DatabaseService } from '../apps/api/src/database/database.service';
 import { hashPassword, validatePassword } from '../apps/api/src/auth/crypto';
+import { config } from '../apps/api/src/config';
+import { provisionClerkAdministrator } from './clerk-account';
 
 const currencies:Record<string,number>={USD:2,EUR:2,GBP:2,PKR:2,AED:2,SAR:2,CAD:2,AUD:2,INR:2,JPY:0,KWD:3,BHD:3,OMR:3};
 async function readSecret(fromStdin:boolean):Promise<string> {
@@ -33,13 +36,31 @@ async function readSecret(fromStdin:boolean):Promise<string> {
   });
 }
 async function bootstrap() {
-  const {values}=parseArgs({options:{name:{type:'string'},email:{type:'string'},currency:{type:'string'},'password-stdin':{type:'boolean'}}});
+  const {values}=parseArgs({options:{name:{type:'string'},email:{type:'string'},currency:{type:'string'},'password-stdin':{type:'boolean'},local:{type:'boolean'},'clerk-user-id':{type:'string'},'organization-id':{type:'string'}}});
   const name=z.string().trim().min(1).max(160).parse(values.name);
   const email=z.string().trim().toLowerCase().email().max(254).parse(values.email);
   const currency=z.string().length(3).parse(values.currency?.toUpperCase());
   if(currencies[currency]===undefined) throw new Error('Unsupported currency. Choose USD, EUR, GBP, PKR, AED, SAR, CAD, AUD, INR, JPY, KWD, BHD or OMR.');
-  const db=new DatabaseService();
+  if(values.local&&process.env.NODE_ENV==='production') throw new Error('Local administrator provisioning cannot run in production.');
+  if(values.local) process.env.NODE_ENV='development';
+  const local=values.local?await (await import('./local-database')).openLocalDatabase():undefined;
+  const db=local?.db??new DatabaseService();
   try {
+    if(config.authProvider==='clerk') {
+      if(values['password-stdin']) throw new Error('Clerk manages passwords. Do not supply --password-stdin.');
+      const clerkUserId=z.string().regex(/^user_[A-Za-z0-9]+$/).parse(values['clerk-user-id']);
+      const clerk=createClerkClient({secretKey:config.clerkSecretKey});
+      const user=await clerk.users.getUser(clerkUserId).catch(()=>{throw new Error('Could not verify that Clerk user. Check the user ID and Clerk configuration.');});
+      const primary=user.emailAddresses.find(address=>address.id===user.primaryEmailAddressId);
+      if(primary?.verification?.status!=='verified'||primary.emailAddress.toLowerCase()!==email)
+        throw new Error('The Clerk user must have this exact verified primary email address. No administrator was changed.');
+      if(user.banned||user.locked) throw new Error('The Clerk user is banned or locked. No administrator was changed.');
+      const result=await provisionClerkAdministrator(db,{clerkUserId,email,displayName:[user.firstName,user.lastName].filter(Boolean).join(' '),
+        organizationId:values['organization-id'],name,currency});
+      console.log(`Clerk administrator provisioned for organization ${result.organizationId}. Sign in with the verified administrator email.`);
+      return;
+    }
+    if(values['clerk-user-id']||values['organization-id']) throw new Error('Clerk account options require AUTH_PROVIDER=clerk.');
     const existing=await db.query('SELECT id FROM users WHERE email=$1',[email]);
     let passwordHash:string|undefined;
     if(!existing.rows[0]) {

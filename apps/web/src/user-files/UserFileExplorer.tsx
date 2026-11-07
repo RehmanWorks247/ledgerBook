@@ -1,3 +1,5 @@
+import { usePrivateAsset } from "../private-assets";
+import { ErrorNotice } from "../components";
 import {
   Fragment,
   useEffect,
@@ -191,19 +193,15 @@ function FileDetails({
   path: string;
   close: () => void;
 }) {
-  const [url, setUrl] = useState(node.url || "");
-  useEffect(() => {
-    if (!node.file) return;
-    const link = URL.createObjectURL(node.file);
-    setUrl(link);
-    return () => URL.revokeObjectURL(link);
-  }, [node.file]);
+  const { url, error } = usePrivateAsset(node.url, node.file);
   return (
     <ExplorerDialog title="File details" close={close}>
       <div className="ufe-detail-name">
         <FileArt node={node} />
-        <strong>{node.url ? <a href={node.url} target="_blank" rel="noopener noreferrer" style={{ color: "inherit", textDecoration: "inherit" }} aria-label={`Open ${node.name}`}>{node.name}</a> : node.name}</strong>
+        <strong>{url ? <a href={url} target="_blank" rel="noopener noreferrer" style={{ color: "inherit", textDecoration: "inherit" }} aria-label={`Open ${node.name}`}>{node.name}</a> : node.name}</strong>
       </div>
+      <ErrorNotice message={error} />
+      {!url && !error && (node.url || node.file) && <p role="status">Loading attachment…</p>}
       <dl className="ufe-detail-list">
         <dt>Location</dt>
         <dd>{path}</dd>
@@ -219,7 +217,7 @@ function FileDetails({
           Close
         </button>
         {url && (
-          <a className="button" href={node.url ? `${node.url}?download=1` : url} download={node.name}>
+          <a className="button" href={url} download={node.name}>
             <Download size={16} />
             Download copy
           </a>

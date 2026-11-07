@@ -35,7 +35,7 @@ export interface LedgerEntry extends QueryResultRow {
   effective_date: string;
   description: string;
   reference: string;
-  created_by: string;
+  created_by: string | null;
   created_at: Date;
   reversal_of: string | null;
   reversed_by?: string | null;

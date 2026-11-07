@@ -1,3 +1,4 @@
+import { setTokenProvider } from "../src/api";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { BookingFileStore, bookingFilesPath, uploadDocument } from "../src/user-files/remote";
@@ -131,6 +132,7 @@ test("a slower previous file refresh cannot replace the newest booking contents"
     const store = new BookingFileStore(context);
     const previous = store.load();
     const current = store.load();
+    await new Promise(resolve => setImmediate(resolve));
     secondResolve(Response.json({ items: [{ ...folder, name: "Newest folder" }] }));
     await current;
     firstResolve(Response.json({ items: [folder] }));
@@ -217,19 +219,22 @@ test("browser upload progress waits for the committed response and preserves the
     abort() { this.onabort?.(); }
   }
   globalThis.XMLHttpRequest = FakeRequest as unknown as typeof XMLHttpRequest;
+  setTokenProvider(async () => "document-session");
   try {
     const progress: number[] = [];
     let settled = false;
     const promise = uploadDocument("/documents", new File(["%PDF-1.7\n%%EOF"], "Test.pdf"), "Test.pdf", "stable-key", new AbortController().signal, (loaded) => progress.push(loaded));
+    await new Promise(resolve => setImmediate(resolve));
     const request = FakeRequest.latest;
     void promise.then(() => { settled = true; });
     await Promise.resolve();
     assert.deepEqual(progress, [14]);
     assert.equal(settled, false, "Sending every byte is not confirmation of a successful save");
     assert.equal(request.withCredentials, true);
-    assert.equal(request.headers.get("X-CSRF-Protection"), "1");
-    assert.equal(request.headers.get("Idempotency-Key"), "stable-key");
+    assert.equal(request.headers.get("authorization"), "Bearer document-session");
+    assert.equal(request.headers.get("x-csrf-protection"), "1");
+    assert.equal(request.headers.get("idempotency-key"), "stable-key");
     request.onload?.();
     assert.equal((await promise).id, "saved");
-  } finally { globalThis.XMLHttpRequest = original; }
+  } finally { globalThis.XMLHttpRequest = original; setTokenProvider(async () => null); }
 });

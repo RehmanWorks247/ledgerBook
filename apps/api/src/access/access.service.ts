@@ -22,7 +22,7 @@ export interface Customer extends QueryResultRow {
   phone: string;
   notes: string;
   status: 'active' | 'archived';
-  created_by: string;
+  created_by: string | null;
 }
 
 @Injectable()
@@ -36,7 +36,7 @@ export class AccessService {
     const result = await source.query<Membership>(
       `SELECT m.*, o.name AS organization_name, o.currency, o.currency_exponent
        FROM memberships m JOIN organizations o ON o.id = m.organization_id
-       WHERE m.user_id = $1 AND m.organization_id = $2 AND m.is_active = true
+       WHERE m.user_id = $1 AND m.organization_id = $2 AND m.is_active = true AND m.deleted_at IS NULL
        ${client ? 'FOR SHARE OF m, o' : ''}`,
       [userId, orgId],
     );

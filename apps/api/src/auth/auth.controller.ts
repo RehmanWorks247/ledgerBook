@@ -1,6 +1,7 @@
 import { BadRequestException, Body, Controller, Get, HttpCode, Inject, Post, Req, Res, UseGuards } from '@nestjs/common';
 import type { Request, Response } from 'express';
 import { z } from 'zod';
+import { config } from '../config';
 import { AuthService } from './auth.service';
 import { RateLimitService } from './rate-limit.service';
 import { type AuthenticatedRequest, clearSessionCookie, SessionGuard, sessionToken, setSessionCookie } from './session.guard';
@@ -22,6 +23,9 @@ export function parseBody<T>(schema: z.ZodType<T>, input: unknown): T {
 @Controller('auth')
 export class AuthController {
   constructor(@Inject(AuthService) private readonly auth: AuthService, @Inject(RateLimitService) private readonly rates: RateLimitService) {}
+
+  @Get('config')
+  configuration() { return { provider: config.authProvider, publishableKey: config.clerkPublishableKey ?? null }; }
 
   @Get('session')
   @UseGuards(SessionGuard)

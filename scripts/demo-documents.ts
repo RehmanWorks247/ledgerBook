@@ -112,11 +112,13 @@ function introduction(customer:DemoCustomer,title:string,service:DemoServiceKey)
 
 function passengerTable(page:Page,customer:DemoCustomer,top:number) {
   const passengers=customer.booking.passengers;
+  // Keep even the largest party clear of the fixed disclaimer and footer.
+  const rowHeight=passengers.length>6?16:19;
+  top=Math.min(top,739-44-passengers.length*rowHeight);
   if(passengers.length>8) throw new Error('Sample documents support up to eight travellers per booking.');
   page.heading('Sample traveller manifest',top);
   page.rect(40,top+12,515,23).text('TRAVELLER',50,top+28,8,true,colors.muted)
     .text('CATEGORY',300,top+28,8,true,colors.muted).text('DEMO REFERENCE',400,top+28,8,true,colors.muted);
-  const rowHeight=passengers.length>6?16:19;
   passengers.forEach((passenger,index)=>{
     const y=top+51+index*rowHeight;
     page.text(passenger.name,50,y,9.5,false,colors.ink,236)
@@ -160,7 +162,7 @@ export function hotelDocument(customer:DemoCustomer,service:'makkah'|'madinah'):
   page.text('CHECK-IN',54,395,8,true,colors.muted).text(date(checkIn),54,418,17,true).text('From 15:00 local hotel time',54,434,8.5,false,colors.muted);
   page.text('CHECK-OUT',322,395,8,true,colors.muted).text(date(checkOut),322,418,17,true).text('Before 12:00 local hotel time',322,434,8.5,false,colors.muted);
   page.heading('Room and stay details',470);
-  const details=[['Accommodation',b.roomType],['Stay duration',`${nights} night${nights===1?'':'s'} / ${b.passengers.length} guest${b.passengers.length===1?'':'s'}`],['Meal plan','Breakfast included in sample package'],['Reservation code',`SAMPLE-${b.reference}-${service.toUpperCase()}`]];
+  const details=[['Accommodation',`${b.roomType} / ${b.roomCount} room${b.roomCount===1?'':'s'}`],['Stay duration',`${nights} night${nights===1?'':'s'} / ${b.passengers.length} guest${b.passengers.length===1?'':'s'}`],['Meal plan','Breakfast included in sample package'],['Reservation code',`SAMPLE-${b.reference}-${service.toUpperCase()}`]];
   details.forEach(([label,value],index)=>page.text(label,40,494+index*20,9,false,colors.muted,145).text(value,195,494+index*20,10,true,colors.ink,360));
   passengerTable(page,customer,583);
   page.block('This voucher demonstrates the booking document workflow. The hotel, room assignment and reservation are fictional; no stay has been purchased or confirmed. Special requests are illustrative only.',40,755,515,8.5,12);
@@ -216,33 +218,78 @@ export function buildDemoDocuments(customer:DemoCustomer):DemoDocument[] {
 }
 
 function xml(value:unknown) {return String(value).replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&apos;'}[char]!));}
+/** Render actual uploadable images of fictional banking screens, with stable visual variety.
+ * The evidence precedes administrator review: pending reviews can show completed
+ * transfers, while rejected submissions intentionally show an unconfirmed draft.
+ */
 export async function receiptImage(customer:DemoCustomer,payment:DemoPayment,receiptIndex=0):Promise<Buffer> {
   if(!Number.isInteger(receiptIndex) || receiptIndex<0 || receiptIndex>4) throw new Error('Use a receipt index between zero and four.');
-  const status={approved:'APPROVED DEMO RECORD',pending:'PENDING ADMIN REVIEW',rejected:'REJECTED DEMO RECORD'}[payment.status];
-  const statusColor={approved:'#24796a',pending:'#88650e',rejected:'#a13d3d'}[payment.status];
-  const fields=[['CUSTOMER',customer.name],['BOOKING',customer.booking.reference],['PAYMENT REFERENCE',payment.reference],
-    ['PAYMENT DATE',date(payment.paymentDate)],['SUBMITTED',dateTime(payment.submittedAt)],
-    ['METHOD','Simulated bank transfer'],['BENEFICIARY','Sample Horizon Journeys (fictional)']];
+  const serial=Number(customer.booking.reference.match(/(\d+)$/)?.[1]??0);
+  const themes=[
+    {name:'Willow',subtitle:'Everyday banking',accent:'#225f51',soft:'#e6f0ea',background:'#f3f5f1',mark:'W'},
+    {name:'Northlight',subtitle:'Your money, simply',accent:'#244d86',soft:'#e8eff8',background:'#f2f5fa',mark:'N'},
+    {name:'Cedar',subtitle:'Personal banking',accent:'#704957',soft:'#f5e9ee',background:'#faf5f7',mark:'C'},
+  ];
+  const theme=themes[serial%themes.length];
+  const isDraft=payment.status==='rejected';
+  const isDetail=receiptIndex>0;
+  const screenTime=new Date(payment.submittedAt).toISOString().slice(11,16);
+  const transactionTime=dateTime(payment.submittedAt);
+  const stateColor=isDraft?'#92620f':theme.accent;
+  const stateLabel=isDraft?'Transfer not sent':isDetail?'Transaction details':'Transfer complete';
+  const maskedAccount=`•••• ${String(4100+serial*13).slice(-4)}`;
+  const fields:[string,string][] = isDetail?[
+    ['Payment status',isDraft?'Awaiting final confirmation':'Completed'],
+    ['From',`${customer.name} / Current account ${maskedAccount}`],
+    ['Recipient','Sample Horizon Journeys'],
+    ['Payment reference',payment.reference],
+    ['Booking reference',customer.booking.reference],
+    ['Transfer date',date(payment.paymentDate)],
+    ['Receipt generated',transactionTime],
+    ['Transfer type','UK bank transfer / GBP'],
+  ]:[
+    ['To','Sample Horizon Journeys'],
+    ['From',customer.name],
+    ['Account',`Current account ${maskedAccount}`],
+    ['Reference',payment.reference],
+    ['Travel booking',customer.booking.reference],
+    ['Payment date',date(payment.paymentDate)],
+    ['Transfer type','UK bank transfer / GBP'],
+  ];
   const rows=fields.map(([label,value],index)=>{
-    const top=470+index*77;
-    return `<text x="82" y="${top}" font-size="14" fill="#63747b" letter-spacing="1">${xml(label)}</text><text x="82" y="${top+29}" font-size="23" font-weight="600" fill="#102f3c">${xml(value)}</text><path d="M82 ${top+46}H918" stroke="#dce5e7"/>`;
+    const top=590+index*74;
+    const valueSize=Math.min(25,620/Math.max(width(value,1),1));
+    return `<text x="80" y="${top}" font-size="17" fill="#69757b">${xml(label)}</text><text x="80" y="${top+30}" font-size="${valueSize.toFixed(2)}" font-weight="600" fill="#1a2e36">${xml(value)}</text>${index<fields.length-1?`<path d="M80 ${top+47}H700" stroke="#e5e9e8"/>`:''}`;
   }).join('');
-  const noteLines=wrap(payment.note||'Demonstration payment evidence for manual review.',20,820).slice(0,3);
-  const svg=`<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="1370" viewBox="0 0 1000 1370">
-    <rect width="1000" height="1370" fill="#edf3f4"/><rect x="40" y="36" width="920" height="1296" rx="24" fill="#fff"/>
-    <path d="M64 36H936Q960 36 960 60V212H40V60Q40 36 64 36" fill="#102f3c"/>
-    <g font-family="Arial, Helvetica, sans-serif"><text x="82" y="87" font-size="15" fill="#b8d8d1" letter-spacing="2">LEDGERBOOK / DEMONSTRATION EVIDENCE</text>
-    <text x="82" y="137" font-size="32" font-weight="700" fill="#fff">Sample Horizon Journeys</text>
-    <text x="82" y="176" font-size="19" fill="#dbe9e7">${receiptIndex===0?'Customer payment record':'Supporting payment detail'} / image ${receiptIndex+1}</text>
-    <rect x="40" y="212" width="920" height="58" fill="#fff0c2"/><text x="82" y="249" font-size="23" font-weight="700" fill="#654900">TEST PAYMENT / NO MONEY MOVED</text>
-    <text x="82" y="325" font-size="16" fill="#63747b" letter-spacing="1">ILLUSTRATIVE AMOUNT</text>
-    <text x="82" y="384" font-size="48" font-weight="700" fill="#102f3c">${xml(money(payment.amountMinor))}</text>
-    <text x="82" y="420" font-size="16" font-weight="700" fill="${statusColor}">${xml(status)}</text>
-    ${rows}<text x="82" y="1039" font-size="14" fill="#63747b" letter-spacing="1">CUSTOMER NOTE</text>
-    ${noteLines.map((line,index)=>`<text x="82" y="${1070+index*27}" font-size="20" fill="#102f3c">${xml(line)}</text>`).join('')}
-    <rect x="66" y="1180" width="868" height="116" rx="12" fill="#f2f6f7"/>
-    <text x="82" y="1213" font-size="19" font-weight="700" fill="#102f3c">SAMPLE ONLY - NOT PROOF OF A REAL PAYMENT</text>
-    <text x="82" y="1243" font-size="17" fill="#5c6b72">No bank, card processor or payment provider created this image.</text>
-    <text x="82" y="1270" font-size="17" fill="#5c6b72">Fictional data for testing uploads, reviews and ledger posting.</text></g></svg>`;
+  const icon=isDraft?
+    `<path d="M390 270L424 329H356Z" fill="none" stroke="${stateColor}" stroke-width="6" stroke-linejoin="round"/><path d="M390 291V309M390 318V319" stroke="${stateColor}" stroke-width="6" stroke-linecap="round"/>`:
+    `<path d="M365 303L382 320L417 283" stroke="${stateColor}" stroke-width="8" fill="none" stroke-linecap="round" stroke-linejoin="round"/>`;
+  const footerTop=isDetail?1210:1150;
+  const svg=`<svg xmlns="http://www.w3.org/2000/svg" width="780" height="1450" viewBox="0 0 780 1450">
+    <rect width="780" height="1450" fill="${theme.background}"/>
+    <g font-family="Arial, Helvetica, sans-serif">
+      <rect width="780" height="190" fill="#fff"/>
+      <text x="49" y="44" font-size="24" font-weight="700" fill="#1a2e36">${screenTime}</text>
+      <path d="M646 41V32M657 41V27M668 41V21" stroke="#1a2e36" stroke-width="6"/>
+      <rect x="693" y="20" width="45" height="23" rx="5" fill="none" stroke="#1a2e36" stroke-width="3"/><rect x="697" y="24" width="34" height="15" rx="2" fill="#1a2e36"/><path d="M741 27V36" stroke="#1a2e36" stroke-width="3"/>
+      <path d="M64 103L48 119L64 135" stroke="${theme.accent}" stroke-width="4" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+      <rect x="259" y="88" width="49" height="49" rx="13" fill="${theme.accent}"/><text x="283" y="123" text-anchor="middle" font-size="32" font-weight="700" fill="#fff">${theme.mark}</text>
+      <text x="324" y="124" font-size="34" font-weight="700" fill="${theme.accent}">${theme.name}</text>
+      <text x="390" y="166" text-anchor="middle" font-size="17" fill="#69757b">${theme.subtitle} · fictional demo</text>
+      <rect y="190" width="780" height="44" fill="#fff0c2"/><text x="390" y="219" text-anchor="middle" font-size="18" font-weight="700" fill="#775b1d">SAMPLE SCREEN · NO MONEY MOVED</text>
+      <circle cx="390" cy="303" r="54" fill="${isDraft?'#fff0d2':theme.soft}"/>${icon}
+      <text x="390" y="397" text-anchor="middle" font-size="33" font-weight="700" fill="#1a2e36">${stateLabel}</text>
+      <text x="390" y="457" text-anchor="middle" font-size="49" font-weight="700" fill="#1a2e36">${xml(money(payment.amountMinor))}</text>
+      <text x="390" y="497" text-anchor="middle" font-size="19" fill="#69757b">${isDraft?'Review the details before confirming':isDetail?'Your saved payment confirmation':xml(date(payment.paymentDate))+' · to Sample Horizon Journeys'}</text>
+      <rect x="48" y="544" width="684" height="${fields.length*74+22}" rx="22" fill="#fff"/>
+      ${rows}
+      <rect x="48" y="${footerTop}" width="684" height="74" rx="16" fill="${theme.accent}"/>
+      <text x="390" y="${footerTop+46}" text-anchor="middle" font-size="23" font-weight="600" fill="#fff">${isDraft?'Confirm transfer (demo only)':isDetail?'Close transaction details':'Share confirmation'}</text>
+      <text x="390" y="${footerTop+109}" text-anchor="middle" font-size="16" fill="#69757b">${isDraft?'This draft does not confirm a completed transfer.':'Saved image '+(receiptIndex+1)+' · '+xml(transactionTime)}</text>
+      <path d="M48 1353H732" stroke="#d8dfe0"/>
+      <text x="390" y="1380" text-anchor="middle" font-size="16" font-weight="700" fill="#69757b">FICTIONAL BANKING UI · NOT PROOF OF PAYMENT</text>
+      <text x="390" y="1405" text-anchor="middle" font-size="15" fill="#69757b">Synthetic customer, bank and transaction for LedgerBook testing.</text>
+      <rect x="282" y="1426" width="216" height="7" rx="4" fill="#1a2e36"/>
+    </g></svg>`;
   return sharp(Buffer.from(svg)).webp({lossless:true,effort:4}).toBuffer();
 }

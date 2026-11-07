@@ -89,5 +89,17 @@ export async function cleanupDocumentObjects(db:DatabaseService,storage:Document
       removed++;
     } catch { failed++; }
   }
+  // Account purges remove their relational data immediately and retain only
+  // the private object coordinates until cloud deletion succeeds. The same
+  // 24-hour grace period prevents racing an upload already in flight at purge.
+  const purged=await db.query<StoredDocument>(`SELECT id,bucket,object_key,checksum,size FROM document_purge_outbox
+    WHERE created_at < now()-interval '24 hours' ORDER BY created_at,id LIMIT $1`,[Math.max(0,limit-objects.length)]);
+  for(const object of purged.rows) {
+    try {
+      await storage.remove(object);
+      await db.query('DELETE FROM document_purge_outbox WHERE id=$1',[object.id]);
+      removed++;
+    } catch { failed++; }
+  }
   return {removed,failed};
 }

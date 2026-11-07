@@ -1,6 +1,10 @@
-import React from "react";
+import React, { useEffect, useState } from "react";
 import ReactDOM from "react-dom/client";
+import { ClerkProvider } from "@clerk/react";
 import { BrowserRouter } from "./router";
+import { navigateTo } from "./history";
+import { api, errorMessage } from "./api";
+import { Brand, ErrorNotice, Loading } from "./components";
 import { App } from "./App";
 import { ThemeProvider } from "./theme";
 import "./styles.css";
@@ -16,12 +20,66 @@ import "./CustomerPicker.css";
 import "./payments/PaymentReview.css";
 import "./semantic-colors.css";
 
-ReactDOM.createRoot(document.getElementById("root")!).render(
-  <React.StrictMode>
-    <ThemeProvider>
+type AuthConfig = { provider: string; publishableKey: string | null };
+function Bootstrap() {
+  const [config, setConfig] = useState<AuthConfig>();
+  const [error, setError] = useState("");
+  useEffect(() => {
+    const controller = new AbortController();
+    api<AuthConfig>("/auth/config", { signal: controller.signal })
+      .then((value) => {
+        if (value.provider !== "clerk" || !value.publishableKey)
+          throw new Error(
+            "Clerk authentication has not been configured. Ask your administrator to configure the Clerk keys and restart the server.",
+          );
+        setConfig(value);
+      })
+      .catch((cause) => {
+        if (!controller.signal.aborted) setError(errorMessage(cause));
+      });
+    return () => controller.abort();
+  }, []);
+  if (error)
+    return (
+      <main className="standalone">
+        <Brand />
+        <h1>Unable to load sign in</h1>
+        <ErrorNotice message={error} />
+        <button className="button" onClick={() => window.location.reload()}>
+          Try again
+        </button>
+      </main>
+    );
+  if (!config?.publishableKey) return <Loading full />;
+  return (
+    <ClerkProvider
+      publishableKey={config.publishableKey}
+      signInUrl="/login"
+      signUpUrl="/invite"
+      signInFallbackRedirectUrl="/"
+      signUpFallbackRedirectUrl="/invite"
+      afterSignOutUrl="/login"
+      routerPush={(to) => navigateTo(to)}
+      routerReplace={(to) => navigateTo(to, { replace: true })}
+      appearance={{
+        variables: {
+          colorPrimary: "#176c56",
+          fontFamily: "inherit",
+          borderRadius: "0.75rem",
+        },
+      }}
+    >
       <BrowserRouter>
         <App />
       </BrowserRouter>
+    </ClerkProvider>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")!).render(
+  <React.StrictMode>
+    <ThemeProvider>
+      <Bootstrap />
     </ThemeProvider>
   </React.StrictMode>,
 );

@@ -10,9 +10,10 @@
     "test": "tsx --tsconfig tsconfig.json --test tests/*.test.ts"
   },
   "dependencies": {
+    "@clerk/react": "^6.18.4",
+    "lucide-react": "^0.544.0",
     "react": "^19.2.0",
-    "react-dom": "^19.2.0",
-    "lucide-react": "^0.544.0"
+    "react-dom": "^19.2.0"
   },
   "devDependencies": {
     "@types/react": "^19.2.0",

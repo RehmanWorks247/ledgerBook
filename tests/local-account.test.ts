@@ -29,6 +29,10 @@ it('provisions one random local admin and preserves changed passwords and existi
     const afterChange=await ensureLocalAccount(database.db,{directory});
     assert.equal(afterChange.password,undefined,'A changed password is never reset to the original generated credential.');
     assert.equal(await readFile(resolve(directory,'admin-login.json'),'utf8'),saved);
+    const provider=process.env.AUTH_PROVIDER;
+    process.env.AUTH_PROVIDER='clerk';
+    try {await assert.rejects(ensureLocalAccount(database.db,{directory}),/Clerk administrators/);}
+    finally {if(provider===undefined)delete process.env.AUTH_PROVIDER;else process.env.AUTH_PROVIDER=provider;}
     process.env.NODE_ENV='production';
     await assert.rejects(ensureLocalAccount(database.db,{directory}),/development-only/);
   }finally {

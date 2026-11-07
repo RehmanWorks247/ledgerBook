@@ -1,16 +1,17 @@
 import { createHash } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import type { DatabaseService } from '../apps/api/src/database/database.service';
-import { DEMO_AS_OF, DEMO_ORGANIZATION_ID, DEMO_ORGANIZATION_NAME, demoCustomers, seedUUID } from './demo-data';
+import { DEMO_AS_OF, DEMO_START_DATE, DEMO_FIXTURE_VERSION, DEMO_ORGANIZATION_ID, DEMO_ORGANIZATION_NAME, demoCustomers, seedUUID } from './demo-data';
 import { buildDemoDocuments, receiptImage } from './demo-documents';
 
-const VERSION = 'autumn-2026-v1';
+const VERSION = DEMO_FIXTURE_VERSION;
 const digest = (value: string | Buffer) => createHash('sha256').update(value).digest('hex');
 const folderNames = { flight: 'Flight Tickets', makkah: 'Makkah Hotel', madinah: 'Madinah Hotel', transfers: 'Transfers', visas: 'Visas', extras: 'Extras' };
 
 export interface DemoSeedReport {
   organizationId: string;
   organizationName: string;
+  periodStart: string;
   asOf: string;
   alreadyPresent: boolean;
   customers: number;
@@ -53,8 +54,8 @@ export async function seedDemoWorkspace(db: DatabaseService, adminUserId: string
       if (!marker.rows.length || !access.rows.length) throw new Error('Demo workspace identity is already in use without the expected fixture marker/access. Nothing was changed.');
       return true;
     }
-    await client.query(`INSERT INTO organizations(id,name,currency,currency_exponent,created_at) VALUES($1,$2,'GBP',2,'2026-09-01T08:00:00Z')`, [DEMO_ORGANIZATION_ID, DEMO_ORGANIZATION_NAME]);
-    await client.query(`INSERT INTO memberships(id,organization_id,user_id,role,created_at) VALUES($1,$2,$3,'admin','2026-09-01T08:00:00Z')`, [seedUUID('admin-membership'), DEMO_ORGANIZATION_ID, adminUserId]);
+    await client.query(`INSERT INTO organizations(id,name,currency,currency_exponent,created_at) VALUES($1,$2,'GBP',2,$3)`, [DEMO_ORGANIZATION_ID, DEMO_ORGANIZATION_NAME, `${DEMO_START_DATE}T07:00:00Z`]);
+    await client.query(`INSERT INTO memberships(id,organization_id,user_id,role,created_at) VALUES($1,$2,$3,'admin',$4)`, [seedUUID('admin-membership'), DEMO_ORGANIZATION_ID, adminUserId, `${DEMO_START_DATE}T07:00:00Z`]);
 
     for (const customer of demoCustomers) {
       const booking = customer.booking;
@@ -128,7 +129,7 @@ export async function verifyDemoWorkspace(db: DatabaseService): Promise<DemoSeed
     (SELECT coalesce(sum(amount_minor),0)::text FROM ledger_entries WHERE organization_id=$1) balance`, [DEMO_ORGANIZATION_ID]);
   const months = await db.query<{ month: string; count: number }>(`SELECT to_char(created_at AT TIME ZONE 'UTC','YYYY-MM') AS month,count(*)::int AS count FROM customers WHERE organization_id=$1 GROUP BY 1 ORDER BY 1`, [DEMO_ORGANIZATION_ID]);
   const c = counts.rows[0];
-  return { organizationId: DEMO_ORGANIZATION_ID, organizationName: DEMO_ORGANIZATION_NAME, asOf: DEMO_AS_OF, alreadyPresent: true,
+  return { organizationId: DEMO_ORGANIZATION_ID, organizationName: DEMO_ORGANIZATION_NAME, periodStart: DEMO_START_DATE, asOf: DEMO_AS_OF, alreadyPresent: true,
     customers: c.customers, bookings: c.bookings, documents: c.documents, receipts: c.receipts,
     payments: { approved: c.approved, pending: c.pending, rejected: c.rejected }, totalMinor: c.total, paidMinor: c.paid, balanceMinor: c.balance, customerMonths: months.rows };
 }

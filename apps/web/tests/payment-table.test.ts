@@ -57,7 +57,8 @@ test("payment details preserve private receipt addresses and role-gated review c
     assert.match(admin,/Approve payment/);
     assert.match(admin,/Reject submission/);
     assert.match(admin,/has not changed the account balance/);
-    assert.match(admin,new RegExp(`/payments/${payment.id}/receipts/${payment.receipts[0].id}`));
+    assert.match(admin,/Loading receipt.png/);
+    assert.doesNotMatch(admin,/(?:src|href)="\/api\//);
     assert.doesNotMatch(admin,/untrusted\.test/);
     const customer=render(false);
     assert.match(customer,/>Payment details<\/h2>/);

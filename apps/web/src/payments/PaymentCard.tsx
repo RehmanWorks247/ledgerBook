@@ -1,3 +1,4 @@
+import { usePrivateAsset } from "../private-assets";
 import { useEffect, useId, useRef, useState } from "react";
 import { CheckCircle2, Clock3, ExternalLink, ImageIcon, XCircle } from "lucide-react";
 import { dateLabel, errorMessage, money, mutate } from "../api";
@@ -65,10 +66,7 @@ export function PaymentCard({ payment, organizationId, timeZone, canReview, show
     {current.status === "rejected" && <p className="payment-rejection"><strong>Review note</strong>{current.rejection_reason || "This submission was not approved."}{!canReview && <span>Check the details, then submit new receipts above if you need another review.</span>}</p>}
     <div className="payment-receipts" aria-label="Payment receipt images">{current.receipts.map((receipt, index) => {
       const url = receiptPath(organizationId, current, receipt.id);
-      return <a key={receipt.id} href={url} target="_blank" rel="noopener noreferrer" className="payment-receipt" aria-label={`Open receipt ${index + 1}: ${receipt.name} in a new tab`}>
-        <img src={url} alt={`Receipt ${index + 1} for ${current.booking_reference}`} loading="lazy" />
-        <span><ImageIcon size={13} /><span>{receipt.name}</span><ExternalLink size={13} /></span>
-      </a>;
+      return <ReceiptImage key={receipt.id} path={url} name={receipt.name} index={index} bookingReference={current.booking_reference} />;
     })}</div>
     {current.status === "pending" && <p className="payment-pending-note">Awaiting manual verification. This submission has not changed the account balance.</p>}
     {current.status === "approved" && <p className="payment-pending-note">Payment approved and recorded in the account ledger.</p>}
@@ -84,4 +82,14 @@ export function PaymentCard({ payment, organizationId, timeZone, canReview, show
       </fieldset>}
     </div>}
   </article>;
+}
+
+function ReceiptImage({ path, name, index, bookingReference }: { path: string; name: string; index: number; bookingReference: string }) {
+  const { url, error } = usePrivateAsset(path);
+  if (error) return <div className="payment-receipt"><ErrorNotice message={`${name}: ${error}`} /></div>;
+  if (!url) return <div className="payment-receipt" role="status">Loading {name}…</div>;
+  return <a href={url} target="_blank" rel="noopener noreferrer" className="payment-receipt" aria-label={`Open receipt ${index + 1}: ${name} in a new tab`}>
+    <img src={url} alt={`Receipt ${index + 1} for ${bookingReference}`} loading="lazy" />
+    <span><ImageIcon size={13} /><span>{name}</span><ExternalLink size={13} /></span>
+  </a>;
 }

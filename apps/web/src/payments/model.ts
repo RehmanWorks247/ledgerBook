@@ -1,4 +1,4 @@
-import { ApiError } from "../api";
+import { ApiError, authenticatedFetch } from "../api";
 import { bookingFilesPath, type BookingFileContext } from "../user-files/remote";
 
 export const MAX_RECEIPT_FILES = 5;
@@ -93,8 +93,8 @@ export class PaymentUploader {
     form.set("note", draft.note);
     form.set("idempotency_key", this.key);
     draft.files.forEach(file => form.append("receipts", file, file.name));
-    const response = await fetch(`/api${this.path}`, {
-      method: "POST", credentials: "include", headers: { "X-CSRF-Protection": "1" }, body: form,
+    const response = await authenticatedFetch(this.path, {
+      method: "POST", body: form,
     });
     if (!response.ok) {
       const payload = await response.json().catch(() => ({})) as { message?: string | string[] };

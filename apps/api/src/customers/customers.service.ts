@@ -38,7 +38,7 @@ const decoratedCustomer = (extraColumns = '') => `SELECT c.*${extraColumns}, COA
   FROM customers c
   LEFT JOIN LATERAL (SELECT SUM(amount_minor) AS balance_minor FROM ledger_entries e
     WHERE e.organization_id=c.organization_id AND e.customer_id=c.id) b ON true
-  LEFT JOIN memberships m ON m.organization_id=c.organization_id AND m.customer_id=c.id
+  LEFT JOIN memberships m ON m.organization_id=c.organization_id AND m.customer_id=c.id AND m.deleted_at IS NULL
   LEFT JOIN LATERAL (SELECT id,revoked_at,accepted_at,expires_at,delivery_status FROM invitations
     WHERE organization_id=c.organization_id AND customer_id=c.id ORDER BY created_at DESC,id DESC LIMIT 1) i ON true`;
 
@@ -119,6 +119,7 @@ export class CustomersService {
       await client.query(`UPDATE customers SET name=$1,phone=$2,notes=$3,status=$4,updated_at=now()
         WHERE id=$5 AND organization_id=$6`,[data.name,data.phone,data.notes,data.status,customerId,active.organization_id]);
       if(data.status==='archived') {
+        await this.invitations.revokeProviderInvitations(customerId,client);
         await client.query(`UPDATE invitations SET revoked_at=now() WHERE customer_id=$1
           AND organization_id=$2 AND revoked_at IS NULL AND accepted_at IS NULL`,[customerId,active.organization_id]);
       }

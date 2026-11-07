@@ -7,6 +7,7 @@ import { after, before, describe, it } from 'node:test';
 import { AccessService } from '../apps/api/src/access/access.service';
 import { BookingsService } from '../apps/api/src/bookings/bookings.service';
 import { cleanupDocumentObjects, DocumentStorage, type StoredDocument } from '../apps/api/src/bookings/document-storage';
+import { AccountDeletionService } from '../apps/api/src/users/account-deletion.service';
 import { setupTestDatabase, type TestDatabase, type TestSeed } from './helpers';
 
 const pdf = (label:string) => Buffer.concat([
@@ -286,4 +287,27 @@ describe('private S3 documents and durable upload reconciliation',() => {
     await database.db.query('DELETE FROM document_objects WHERE id=$1',[id]);
     assert.deepEqual((await bookings.document(seed.admin,seed.customerId,bookingId,savedId)).content,pdf('cloud-voucher.pdf'));
   });
+
+  it('purges accounts during an in-flight upload and retries cloud removal from an independent journal',async () => {
+    const deletion=new AccountDeletionService(database.db,new AccessService(database.db));
+    provider.afterPut=async () => { await deletion.removeCustomer(seed.admin,seed.customerId,'customer@example.test'); };
+    try { await assert.rejects(upload('purged-during-upload.pdf'),/not found/); }
+    finally { provider.afterPut=undefined; }
+    assert.equal((await database.db.query('SELECT id FROM bookings WHERE customer_id=$1',[seed.customerId])).rowCount,0);
+    assert.equal((await database.db.query('SELECT id FROM document_objects WHERE customer_id=$1',[seed.customerId])).rowCount,0);
+    const queued=(await database.db.query<StoredDocument>('SELECT * FROM document_purge_outbox')).rows;
+    assert.ok(queued.length>0);
+    assert.ok(queued.some(object=>object.id===readyObject.id));
+    assert.deepEqual(await cleanupDocumentObjects(database.db,storage),{removed:0,failed:0},'Grace period protects uploads already in flight.');
+    await database.db.query("UPDATE document_purge_outbox SET created_at=now()-interval '25 hours'");
+    provider.failDeletes.add(objectPath(readyObject));
+    try { assert.deepEqual(await cleanupDocumentObjects(database.db,storage),{removed:queued.length-1,failed:1}); }
+    finally { provider.failDeletes.clear(); }
+    assert.equal((await database.db.query('SELECT id FROM document_purge_outbox')).rowCount,1);
+    assert.ok(provider.objects.has(objectPath(readyObject)));
+    assert.deepEqual(await cleanupDocumentObjects(database.db,storage),{removed:1,failed:0});
+    assert.equal((await database.db.query('SELECT id FROM document_purge_outbox')).rowCount,0);
+    assert.equal(provider.objects.size,0);
+  });
+
 });

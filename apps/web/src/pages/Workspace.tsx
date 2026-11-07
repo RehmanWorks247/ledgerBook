@@ -1,4 +1,5 @@
 import { useContext, useState } from "react";
+import { useClerk } from "@clerk/react";
 import { Link, NavLink, Navigate, Outlet, useParams } from "../router";
 import {
   ArrowRight,
@@ -12,11 +13,12 @@ import {
   Menu,
   Settings2,
   Users,
+  UserRound,
+  Settings,
   X,
 } from "lucide-react";
 import {
   errorMessage,
-  mutate,
 } from "../api";
 import { AuthContext, OrganizationContext, useOrganization } from "../state";
 import {
@@ -29,7 +31,8 @@ import { CustomerDetail } from "./Customers";
 import { ThemeToggle } from "../theme";
 import { CurrencyProvider, LedgerCurrencyNotice } from '../currency';
 export function OrganizationPicker() {
-  const { session, refresh } = useContext(AuthContext);
+  const { session } = useContext(AuthContext);
+  const clerk = useClerk();
   const [error, setError] = useState("");
   if (session!.memberships.length === 1)
     return (
@@ -76,11 +79,14 @@ export function OrganizationPicker() {
           detail="Accept an invitation to get started, or contact your business if your access has been revoked."
         />
       )}
+      <Link to="/account" className="button secondary">
+        Account settings
+      </Link>
       <button
         className="button secondary"
         onClick={() => {
-          void mutate("/auth/logout")
-            .then(refresh)
+          void clerk
+            .signOut({ redirectUrl: "/login" })
             .catch((error) => setError(errorMessage(error)));
         }}
       >
@@ -91,7 +97,8 @@ export function OrganizationPicker() {
 }
 export function Shell() {
   const { orgId } = useParams();
-  const { session, refresh } = useContext(AuthContext);
+  const { session } = useContext(AuthContext);
+  const clerk = useClerk();
   const [menuOpen, setMenuOpen] = useState(false);
   const [error, setError] = useState("");
   const member = session!.memberships.find(
@@ -165,6 +172,16 @@ export function Shell() {
                 My files
               </NavLink>
             )}
+            {member.role === "admin" && (
+              <NavLink to={`${root}/access`}>
+                <UserRound size={19} />
+                Users & access
+              </NavLink>
+            )}
+            <NavLink to={`${root}/account`}>
+              <Settings size={19} />
+              Account settings
+            </NavLink>
             <NavLink to={`${root}/settings`}>
               <Settings2 size={19} />
               Settings
@@ -179,8 +196,8 @@ export function Shell() {
             )}
             <button
               onClick={() => {
-                void mutate("/auth/logout")
-                  .then(refresh)
+                void clerk
+                  .signOut({ redirectUrl: "/login" })
                   .catch((error) => setError(errorMessage(error)));
               }}
             >
@@ -215,10 +232,10 @@ export function Shell() {
               <ThemeToggle />
               <div className="topbar-user">
                 <span className="user-avatar">
-                  {session!.user.email.slice(0, 1).toUpperCase()}
+                  {(session!.user.name || session!.user.email).slice(0, 1).toUpperCase()}
                 </span>
                 <span>
-                  <strong>{session!.user.email}</strong>
+                  <strong>{session!.user.name || session!.user.email}</strong>
                   <small>
                     {member.role === "admin" ? "Administrator" : "Customer"}
                   </small>

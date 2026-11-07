@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { resolve, sep } from 'node:path';
@@ -35,8 +35,10 @@ describe('persistent local development database', () => {
     local = await openLocalDatabase({ directory: path });
     try {
       assert.equal((await local.db.query('SELECT name FROM organizations WHERE id=$1', [id])).rows[0].name, 'Local business');
-      const migrations = (await readdir(resolve('apps/api/src/database/migrations'))).filter(name => /^\d+_[a-z0-9_]+\.sql$/.test(name));
-      assert.equal((await local.db.query('SELECT count(*)::int AS total FROM schema_migrations')).rows[0].total, migrations.length);
+      const migrationDirectory=resolve('apps/api/src/database/migrations');
+      const names=(await readdir(migrationDirectory)).filter(name=>/^\d+_[a-z0-9_]+\.sql$/.test(name)).sort();
+      const expected=await Promise.all(names.map(async name=>({name,checksum:createHash('sha256').update(await readFile(resolve(migrationDirectory,name))).digest('hex')})));
+      assert.deepEqual((await local.db.query('SELECT name,checksum FROM schema_migrations ORDER BY name')).rows,expected);
     } finally { await local.close(); }
   });
 

@@ -24,7 +24,7 @@
     "start:api": "node --env-file-if-exists=.env dist/api/main.js",
     "typecheck": "tsc --noEmit -p tsconfig.json && npm run typecheck --workspace @ledgerbook/web",
     "lint": "eslint apps tests scripts",
-    "test": "node --env-file-if-exists=.env --import tsx --test --test-concurrency=1 tests/*.test.ts && npm run test --workspace @ledgerbook/web",
+    "test": "node --env-file-if-exists=.env --require ./tests/test-environment.cjs --import tsx --test --test-concurrency=1 tests/*.test.ts && npm run test --workspace @ledgerbook/web",
     "db:migrate": "node --env-file-if-exists=.env --import tsx scripts/migrate.ts",
     "admin:create": "node --env-file-if-exists=.env --import tsx scripts/bootstrap.ts",
     "seed": "node --env-file-if-exists=.env --import tsx scripts/seed.ts",
@@ -35,6 +35,7 @@
   },
   "dependencies": {
     "@aws-sdk/client-s3": "3.1163.0",
+    "@clerk/backend": "^3.26.5",
     "@nestjs/common": "11.2.8",
     "@nestjs/core": "11.2.8",
     "@nestjs/platform-express": "11.2.8",

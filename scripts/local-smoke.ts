@@ -200,3 +200,35 @@ export async function verifyLocalApp(
     if (cookie) await probe('/api/auth/logout', { method: 'POST', cookie }).catch(() => undefined);
   }
 }
+
+/** Startup checks do not create provider users, passwords, or sessions. */
+export async function verifyClerkLocalApp(app:NestExpressApplication,origin:string):Promise<LocalAppVerification> {
+  const base=await app.getUrl();
+  let transport:LocalAppVerification['transport']='tcp';
+  const checks:string[]=[];
+  const probe=async(path:string):Promise<Response>=>{
+    if(transport==='in-process') return inProcessRequest(app,path,'GET',{Origin:origin});
+    try{return await fetch(`${base}${path}`,{headers:{Origin:origin},signal:AbortSignal.timeout(10_000)});}
+    catch(error){
+      if(!networkDenied(error)) throw new Error('Clerk local startup verification could not reach the server.',{cause:error});
+      transport='in-process';
+      return inProcessRequest(app,path,'GET',{Origin:origin});
+    }
+  };
+  const page=await probe('/login');
+  if(page.status!==200||!page.headers.get('content-type')?.includes('text/html')||!(await page.text()).includes('id="root"'))
+    throw new Error('Clerk local startup verification failed: built sign-in page.');
+  checks.push('Sign-in page serves the built React application');
+  const ready=await probe('/api/ready');
+  if(ready.status!==200||(await ready.json()).status!=='ready') throw new Error('Clerk local startup verification failed: database readiness.');
+  checks.push('Database is ready');
+  const configuration=await probe('/api/auth/config');
+  if(configuration.status!==200) throw new Error('Clerk local startup verification failed: authentication configuration.');
+  const auth=await configuration.json();
+  if(auth.provider!=='clerk'||typeof auth.publishableKey!=='string'||!auth.publishableKey.startsWith('pk_'))
+    throw new Error('Clerk local startup verification failed: Clerk publishable key.');
+  checks.push('Clerk authentication is configured');
+  if((await probe('/api/auth/session')).status!==401) throw new Error('Clerk local startup verification failed: anonymous session restriction.');
+  checks.push('Unauthenticated requests are protected');
+  return {checks,transport};
+}

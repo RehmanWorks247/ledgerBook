@@ -5,6 +5,7 @@ import {
   type FormEvent,
   type ReactNode,
 } from "react";
+import { useClerk, useSignIn, useSignUp, useUser } from "@clerk/react";
 import { Link, Navigate, useNavigate } from "../router";
 import {
   ArrowDownLeft,
@@ -16,39 +17,70 @@ import {
   Mail,
   ShieldCheck,
 } from "lucide-react";
-import { errorMessage, mutate } from "../api";
-import { AuthContext, emailLink, pendingInvitation } from "../state";
+import { errorMessage, hasErrorCode, mutate } from "../api";
+import { AuthContext } from "../state";
+import { invitationLink, invitationUrl, clearInvitation } from "../invitation";
 import { Brand, ErrorNotice, Loading } from "../components";
+
 import { ThemeToggle } from "../theme";
+
 function PasswordField({
   value,
   onChange,
   newPassword = false,
+  confirm = false,
 }: {
   value: string;
   onChange: (value: string) => void;
   newPassword?: boolean;
+  confirm?: boolean;
 }) {
   return (
     <label>
-      Password
+      {confirm ? "Confirm password" : newPassword ? "New password" : "Password"}
       <input
         type="password"
-        name="password"
+        name={confirm ? "confirmPassword" : "password"}
         autoComplete={newPassword ? "new-password" : "current-password"}
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        minLength={newPassword ? 12 : undefined}
+        minLength={newPassword ? 15 : undefined}
         maxLength={128}
         required
       />
-      {newPassword && (
+      {newPassword && !confirm && (
         <small>
-          Use at least 12 characters. A long, unique passphrase works well.
+          Use at least 15 characters. A long, unique passphrase works well.
         </small>
       )}
     </label>
   );
+}
+function CodeField({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <label>
+      Verification code
+      <input
+        name="code"
+        inputMode="numeric"
+        autoComplete="one-time-code"
+        value={value}
+        onChange={(event) => onChange(event.target.value.trim())}
+        required
+        autoFocus
+      />
+    </label>
+  );
+}
+async function checked(result: Promise<{ error: unknown }>) {
+  const { error } = await result;
+  if (error) throw error;
 }
 function AuthFrame({ children }: { children: ReactNode }) {
   return (
@@ -94,9 +126,7 @@ function AuthFrame({ children }: { children: ReactNode }) {
         </span>
       </aside>
       <section className="auth-main">
-        <div className="auth-theme">
-          <ThemeToggle />
-        </div>
+        <div className="auth-theme"><ThemeToggle /></div>
         <div className="mobile-brand">
           <Brand />
         </div>
@@ -107,142 +137,296 @@ function AuthFrame({ children }: { children: ReactNode }) {
   );
 }
 export function AuthPage({ mode }: { mode: "login" | "forgot" | "reset" }) {
-  const { session, refresh } = useContext(AuthContext);
+  const { refresh } = useContext(AuthContext);
+  const clerk = useClerk();
+  const { isSignedIn } = useUser();
+  const { signIn } = useSignIn();
   const navigate = useNavigate();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [confirmation, setConfirmation] = useState("");
+  const [code, setCode] = useState("");
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
-  const [done, setDone] = useState(false);
+  const [recoveryUnavailable, setRecoveryUnavailable] = useState(false);
+  const [step, setStep] = useState<"email" | "code" | "password" | "mfa">(
+    "email",
+  );
+  const [factor, setFactor] = useState<
+    "email_code" | "phone_code" | "totp" | "backup_code"
+  >("email_code");
+  const destination = invitationLink.token ? invitationUrl() : "/";
+  const reset = mode !== "login";
   useEffect(() => {
     setError("");
-    setDone(false);
+    setNotice("");
     setPassword("");
+    setConfirmation("");
+    setCode("");
+    setStep("email");
+    setRecoveryUnavailable(false);
   }, [mode]);
-  if (mode === "login" && session)
-    return <Navigate to={pendingInvitation() ? "/invite" : "/"} replace />;
+  if (isSignedIn) return <Navigate to={destination} replace />;
+
+  async function finish() {
+    let pendingTask = false;
+    let redirect = destination;
+    await checked(
+      signIn.finalize({
+        navigate: ({ session, decorateUrl }) => {
+          pendingTask = Boolean(session?.currentTask);
+          redirect = decorateUrl(destination);
+        },
+      }),
+    );
+    if (pendingTask) {
+      await clerk.redirectToTasks({ redirectUrl: destination });
+      return;
+    }
+    await refresh();
+    if (
+      redirect.startsWith("http") &&
+      new URL(redirect).origin !== window.location.origin
+    )
+      window.location.assign(redirect);
+    else navigate(redirect, { replace: true });
+  }
+  async function advance() {
+    if (signIn.status === "complete") {
+      await finish();
+      return;
+    }
+    if (
+      signIn.status === "needs_second_factor" ||
+      signIn.status === "needs_client_trust"
+    ) {
+      const supported = signIn.supportedSecondFactors;
+      const next =
+        supported.find((item) => item.strategy === "email_code")?.strategy ||
+        supported.find((item) => item.strategy === "totp")?.strategy ||
+        supported.find((item) => item.strategy === "phone_code")?.strategy ||
+        supported.find((item) => item.strategy === "backup_code")?.strategy;
+      if (!next)
+        throw new Error(
+          "This account needs an additional verification method. Contact your administrator for help signing in.",
+        );
+      setFactor(next);
+      setCode("");
+      setStep("mfa");
+      if (next === "email_code") await checked(signIn.mfa.sendEmailCode());
+      if (next === "phone_code") await checked(signIn.mfa.sendPhoneCode());
+      return;
+    }
+    if (signIn.status === "needs_new_password") {
+      setStep("password");
+      return;
+    }
+    throw new Error(
+      "Sign in needs another verification step. Please start again or contact your administrator.",
+    );
+  }
   async function submit(event: FormEvent) {
     event.preventDefault();
     setError("");
+    setNotice("");
     setBusy(true);
     try {
-      if (mode === "login") {
-        await mutate("/auth/login", { email, password });
-        await refresh();
-        navigate(pendingInvitation() ? "/invite" : "/");
-      }
-      if (mode === "forgot") {
-        await mutate("/auth/forgot-password", { email });
-        setDone(true);
-      }
-      if (mode === "reset") {
-        const token = emailLink.token;
-        await mutate("/auth/reset-password", {
-          token,
-          password,
-        });
-        if (emailLink.token === token) emailLink.token = "";
+      if (step === "mfa") {
+        if (factor === "email_code")
+          await checked(signIn.mfa.verifyEmailCode({ code }));
+        else if (factor === "phone_code")
+          await checked(signIn.mfa.verifyPhoneCode({ code }));
+        else if (factor === "totp")
+          await checked(signIn.mfa.verifyTOTP({ code }));
+        else await checked(signIn.mfa.verifyBackupCode({ code }));
+        await advance();
+      } else if (!reset && step === "email") {
+        await checked(
+          signIn.password({ emailAddress: email.trim(), password }),
+        );
+        await advance();
+      } else if (step === "email") {
+        setRecoveryUnavailable(false);
+        await checked(signIn.create({ identifier: email.trim() }));
+        await checked(signIn.resetPasswordEmailCode.sendCode());
+        setStep("code");
+      } else if (step === "code") {
+        if (recoveryUnavailable)
+          throw new Error(
+            "This code is invalid or expired. Check your email address and request a new code.",
+          );
+        await checked(signIn.resetPasswordEmailCode.verifyCode({ code }));
         setPassword("");
-        await refresh();
-        setDone(true);
+        setConfirmation("");
+        setStep("password");
+      } else if (step === "password") {
+        if (password !== confirmation)
+          throw new Error("Your passwords do not match.");
+        await checked(
+          signIn.resetPasswordEmailCode.submitPassword({
+            password,
+            signOutOfOtherSessions: true,
+          }),
+        );
+        setPassword("");
+        setConfirmation("");
+        await advance();
       }
-    } catch (error) {
-      setError(errorMessage(error));
+    } catch (cause) {
+      if (
+        reset &&
+        step === "email" &&
+        hasErrorCode(cause, "form_identifier_not_found")
+      ) {
+        setRecoveryUnavailable(true);
+        setStep("code");
+      } else setError(errorMessage(cause));
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function resend() {
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      if (step === "code") {
+        if (!recoveryUnavailable)
+          await checked(signIn.resetPasswordEmailCode.sendCode());
+      } else if (factor === "phone_code")
+        await checked(signIn.mfa.sendPhoneCode());
+      else await checked(signIn.mfa.sendEmailCode());
+      setNotice(
+        "If an account exists for that email, a new verification code has been sent. Check your inbox and spam folder.",
+      );
+    } catch (cause) {
+      setError(errorMessage(cause));
     } finally {
       setBusy(false);
     }
   }
   const title =
-    mode === "login"
-      ? "Welcome back"
-      : mode === "forgot"
-        ? "Reset your password"
-        : "Choose a new password";
+    step === "mfa"
+      ? "Verify it’s you"
+      : step === "code"
+        ? "Check your inbox"
+        : step === "password"
+          ? "Choose a new password"
+          : reset
+            ? "Reset your password"
+            : "Welcome back";
+  const description =
+    step === "mfa"
+      ? factor === "totp"
+        ? "Enter the code from your authenticator app."
+        : factor === "backup_code"
+          ? "Enter one of your unused backup codes."
+          : `Enter the verification code sent to your ${factor === "phone_code" ? "phone" : "email"}.`
+      : step === "code"
+        ? `If an account exists for ${email}, a password reset code has been sent. Enter it below, and check your spam folder too.`
+        : step === "password"
+          ? "Choose a secure password. Your other sessions will be signed out."
+          : reset
+            ? "Enter your account email. We’ll send you a secure verification code to reset your password."
+            : "Sign in to pick up where you left off.";
   return (
     <AuthFrame>
       <span className="eyebrow">YOUR LEDGERBOOK ACCOUNT</span>
       <h1>{title}</h1>
-      <p className="muted">
-        {mode === "login"
-          ? "Sign in to pick up where you left off."
-          : mode === "forgot"
-            ? "Enter your email and we’ll send you a secure reset link if an account exists."
-            : "A fresh password keeps your account secure."}
-      </p>
+      <p className="muted">{description}</p>
       <ErrorNotice message={error} />
-      {done ? (
-        <div className="auth-success">
-          <span className="success-icon">
-            <Check />
-          </span>
-          <h2>{mode === "forgot" ? "Check your inbox" : "Password updated"}</h2>
-          <p>
-            {mode === "forgot"
-              ? "If an account exists for that email, a password reset link will be sent. Check your spam folder too."
-              : "Your previous sessions have been signed out. Sign in with your new password."}
-          </p>
-          <Link className="button" to="/login">
+      {notice && (
+        <div className="notice success" role="status">
+          {notice}
+        </div>
+      )}
+      <form onSubmit={submit} className="stack-form" aria-busy={busy}>
+        {step === "email" && (
+          <label>
+            Email address
+            <input
+              type="email"
+              autoComplete="email"
+              name="email"
+              placeholder="you@business.com"
+              value={email}
+              maxLength={254}
+              onChange={(e) => setEmail(e.target.value)}
+              required
+            />
+          </label>
+        )}
+        {((!reset && step === "email") || step === "password") && (
+          <PasswordField
+            value={password}
+            onChange={setPassword}
+            newPassword={step === "password"}
+          />
+        )}
+        {step === "password" && (
+          <PasswordField
+            value={confirmation}
+            onChange={setConfirmation}
+            newPassword
+            confirm
+          />
+        )}
+        {(step === "code" || step === "mfa") && (
+          <CodeField value={code} onChange={setCode} />
+        )}
+        {!reset && step === "email" && (
+          <Link className="form-link" to={invitationUrl("/forgot-password")}>
+            Forgot password?
+          </Link>
+        )}
+        <button className="button wide" disabled={busy}>
+          {busy
+            ? "Please wait…"
+            : step === "password"
+              ? "Save password & sign in"
+              : step === "code" || step === "mfa"
+                ? "Verify code"
+                : reset
+                  ? "Send reset code"
+                  : "Sign in"}
+          {!busy && <ArrowRight size={17} />}
+        </button>
+        {(step === "code" ||
+          (step === "mfa" &&
+            (factor === "email_code" || factor === "phone_code"))) && (
+          <button
+            type="button"
+            className="text-link"
+            onClick={() => void resend()}
+            disabled={busy}
+          >
+            Resend code
+          </button>
+        )}
+        {step !== "email" && (
+          <button
+            type="button"
+            className="text-link"
+            disabled={busy}
+            onClick={() => {
+              void signIn.reset();
+              setStep("email");
+              setCode("");
+              setError("");
+              setNotice("");
+            }}
+          >
+            Start again
+          </button>
+        )}
+        {reset && (
+          <Link className="center-link" to={invitationUrl("/login")}>
             Back to sign in
           </Link>
-        </div>
-      ) : mode === "reset" &&
-        (!emailLink.token || emailLink.purpose !== "reset") ? (
-        <>
-          <ErrorNotice message="This reset link is missing or invalid. Request a new password reset email." />
-          <Link to="/forgot-password">Request a new link</Link>
-        </>
-      ) : (
-        <form onSubmit={submit} className="stack-form" aria-busy={busy}>
-          {mode !== "reset" && (
-            <label>
-              Email address
-              <input
-                type="email"
-                autoComplete="email"
-                name="email"
-                placeholder="you@business.com"
-                value={email}
-                maxLength={254}
-                onChange={(e) => setEmail(e.target.value)}
-                required
-              />
-            </label>
-          )}
-          {mode !== "forgot" && (
-            <PasswordField
-              value={password}
-              onChange={setPassword}
-              newPassword={mode === "reset"}
-            />
-          )}
-          {mode === "login" && (
-            <Link className="form-link" to="/forgot-password">
-              Forgot password?
-            </Link>
-          )}
-          <button className="button wide" disabled={busy}>
-            {busy
-              ? "Please wait…"
-              : mode === "login"
-                ? "Sign in"
-                : mode === "forgot"
-                  ? "Send reset link"
-                  : "Save new password"}
-            {!busy && <ArrowRight size={17} />}
-          </button>
-          {mode === "forgot" && (
-            <Link className="center-link" to="/login">
-              Back to sign in
-            </Link>
-          )}
-          {mode === "reset" && error && (
-            <Link className="center-link" to="/forgot-password">
-              Request a new reset link
-            </Link>
-          )}
-        </form>
-      )}
-      {mode === "login" && (
+        )}
+      </form>
+      {!reset && step === "email" && (
         <p className="auth-help">
           New here? Open the invitation email from your business to set up your
           account.
@@ -251,82 +435,153 @@ export function AuthPage({ mode }: { mode: "login" | "forgot" | "reset" }) {
     </AuthFrame>
   );
 }
+
 type InviteInfo = {
   status: string;
   email?: string;
+  name?: string;
   organizationName?: string;
   existingUser?: boolean;
+  provider?: string;
 };
 export function InvitationPage() {
-  const { session, loading, refresh } = useContext(AuthContext);
+  const { refresh } = useContext(AuthContext);
+  const { isLoaded, user } = useUser();
+  const clerk = useClerk();
+  const { signUp } = useSignUp();
   const navigate = useNavigate();
   const [info, setInfo] = useState<InviteInfo>();
   const [error, setError] = useState("");
   const [password, setPassword] = useState("");
+  const [confirmation, setConfirmation] = useState("");
   const [busy, setBusy] = useState(false);
+  const [revision, setRevision] = useState(0);
   useEffect(() => {
-    if (!emailLink.token || emailLink.purpose !== "invite") {
+    if (!invitationLink.token) {
       setInfo({ status: "invalid" });
       return;
     }
     let active = true;
-    const token = emailLink.token;
-    mutate<InviteInfo>("/auth/invitations/inspect", { token })
+    const token = invitationLink.token;
+    setError("");
+    mutate<InviteInfo>("/auth/invitations/inspect", {
+      token,
+    })
       .then((value) => {
-        if (!active || emailLink.token !== token) return;
-        if (value.status !== "valid") emailLink.token = "";
-        setInfo(value);
+        if (active && invitationLink.token === token) setInfo(value);
       })
-      .catch((error) => {
-        if (active) setError(errorMessage(error));
+      .catch((cause) => {
+        if (active && invitationLink.token === token) setError(errorMessage(cause));
       });
     return () => {
       active = false;
     };
-  }, []);
+  }, [revision]);
+  const email = user?.primaryEmailAddress?.emailAddress;
+  const mismatch = Boolean(
+    user &&
+    (user.primaryEmailAddress?.verification.status !== "verified" ||
+      email?.toLowerCase() !== info?.email?.toLowerCase()),
+  );
   async function accept(event: FormEvent) {
     event.preventDefault();
-    const token = emailLink.token;
+    const { token, ticket } = invitationLink;
+    const stillCurrent = () => invitationLink.token === token && invitationLink.ticket === ticket;
     setBusy(true);
     setError("");
     try {
-      await mutate("/auth/invitations/accept", {
-        token,
-        ...(info?.existingUser ? {} : { password }),
-      });
-      if (emailLink.token !== token) return;
-      emailLink.token = "";
+      if (!user) {
+        if (!ticket)
+          throw new Error(
+            "This link is missing its secure invitation ticket. Open the original email, or ask the administrator to resend your invitation.",
+          );
+        if (password !== confirmation)
+          throw new Error("Your passwords do not match.");
+        // Send the password and Clerk ticket together. The invitation verifies the email.
+        const [firstName, ...lastNames] = (info?.name || "")
+          .trim()
+          .split(/\s+/);
+        await checked(
+          signUp.create({
+            strategy: "ticket",
+            ticket,
+            password,
+            ...(firstName ? { firstName, lastName: lastNames.join(" ") } : {}),
+          }),
+        );
+        if (!stillCurrent()) return;
+        if (signUp.status !== "complete")
+          throw new Error(
+            "Your account needs additional information. Contact the administrator to check the account sign-up settings.",
+          );
+        let pendingTask = false;
+        let redirect = invitationUrl();
+        await checked(
+          signUp.finalize({
+            navigate: ({ session, decorateUrl }) => {
+              pendingTask = Boolean(session?.currentTask);
+              redirect = decorateUrl(invitationUrl());
+            },
+          }),
+        );
+        if (!stillCurrent()) return;
+        setPassword("");
+        setConfirmation("");
+        if (pendingTask) {
+          await clerk.redirectToTasks({ redirectUrl: invitationUrl() });
+          return;
+        }
+        if (
+          redirect.startsWith("http") &&
+          new URL(redirect).origin !== window.location.origin
+        ) {
+          window.location.assign(redirect);
+          return;
+        }
+      }
+      if (!stillCurrent()) return;
+      await mutate("/auth/invitations/accept", { token });
+      if (!stillCurrent()) return;
+      clearInvitation();
       await refresh();
-      navigate("/");
-    } catch (error) {
-      setError(errorMessage(error));
+      navigate("/", { replace: true });
+    } catch (cause) {
+      setError(errorMessage(cause));
     } finally {
       setBusy(false);
     }
   }
-  async function signOut() {
+  async function switchAccount() {
     setBusy(true);
     setError("");
-    const token = emailLink.token;
     try {
-      await mutate("/auth/logout");
-      await refresh();
-      if (info?.existingUser && emailLink.token === token) navigate("/login");
-    } catch (error) {
-      setError(errorMessage(error));
-    } finally {
+      await clerk.signOut({ redirectUrl: invitationUrl() });
+    } catch (cause) {
+      setError(errorMessage(cause));
       setBusy(false);
     }
   }
   const invalid = info && info.status !== "valid";
-  const mismatch =
-    session && info?.email?.toLowerCase() !== session.user.email.toLowerCase();
   return (
     <AuthFrame>
       <span className="eyebrow">YOU’RE INVITED</span>
-      <h1>{invalid ? "Invitation unavailable" : "Your account starts here"}</h1>
+      <h1>
+        {invalid
+          ? "Invitation unavailable"
+          : info?.name
+            ? `Welcome, ${info.name}`
+            : "Your account starts here"}
+      </h1>
       <ErrorNotice message={error} />
-      {(!info || loading) && !error && <Loading />}
+      {(!info || !isLoaded) && !error && <Loading />}
+      {!info && error && (
+        <button
+          className="button secondary"
+          onClick={() => setRevision((value) => value + 1)}
+        >
+          Try again
+        </button>
+      )}
       {invalid && (
         <>
           <p className="muted">
@@ -338,16 +593,22 @@ export function InvitationPage() {
                   ? "This invitation has been revoked. Contact the business for access."
                   : "This invitation link is invalid or missing. Open the latest invitation email, or ask the business to resend it."}
           </p>
-          <Link to={session ? "/" : "/login"} className="button">
-            {session ? "Back to LedgerBook" : "Go to sign in"}
+          <Link
+            to="/login"
+            className="button"
+            onClick={() => clearInvitation()}
+          >
+            Go to sign in
           </Link>
         </>
       )}
-      {info?.status === "valid" && !loading && (
+      {info?.status === "valid" && isLoaded && (
         <>
           <p className="muted">
-            Join <strong>{info.organizationName}</strong> to view your balance
-            and statements.
+            You’ve been invited to <strong>{info.organizationName}</strong>.{" "}
+            {user || info.existingUser
+              ? "Accept to open your customer account."
+              : "Set your password to join and view your balance and statements."}
           </p>
           <div className="invited-email">
             <Mail size={20} />
@@ -356,45 +617,63 @@ export function InvitationPage() {
           {mismatch ? (
             <>
               <ErrorNotice
-                message={`You’re signed in as ${session.user.email}. Switch accounts to continue as ${info.email}.`}
+                message={`You’re signed in as ${email}. Sign in with the invited email as your primary email address to continue.`}
               />
               <button
                 className="button"
-                onClick={() => void signOut()}
+                onClick={() => void switchAccount()}
                 disabled={busy}
               >
                 Switch account
               </button>
             </>
-          ) : info.existingUser && !session ? (
+          ) : info.existingUser && !user ? (
             <>
               <p>
                 Your email already has a LedgerBook account. Sign in with your
                 existing password to accept this invitation.
               </p>
-              <Link to="/login" className="button">
+              <Link to={invitationUrl("/login")} className="button">
                 Sign in to accept <ArrowRight size={17} />
               </Link>
-              <Link to="/forgot-password" className="form-link">
+              <Link
+                to={invitationUrl("/forgot-password")}
+                className="center-link"
+              >
                 Forgot password?
               </Link>
             </>
+          ) : !user && !invitationLink.ticket ? (
+            <ErrorNotice message="This link is missing its secure invitation ticket. Open the original invitation email or ask the business to resend it." />
           ) : (
             <form className="stack-form" onSubmit={accept} aria-busy={busy}>
-              {!info.existingUser && (
-                <PasswordField
-                  value={password}
-                  onChange={setPassword}
-                  newPassword
-                />
+              {!user && (
+                <>
+                  <PasswordField
+                    value={password}
+                    onChange={setPassword}
+                    newPassword
+                  />
+                  <PasswordField
+                    value={confirmation}
+                    onChange={setConfirmation}
+                    newPassword
+                    confirm
+                  />
+                </>
               )}
               <p className="small muted">
-                {info.existingUser
-                  ? "Your existing password will stay the same."
+                {user
+                  ? "You’ll join with your current account."
                   : "Choose your own password. The business cannot see it."}
               </p>
+              <div id="clerk-captcha" />
               <button className="button wide" disabled={busy}>
-                {busy ? "Activating account…" : "Accept invitation"}
+                {busy
+                  ? "Activating account…"
+                  : user
+                    ? "Accept invitation"
+                    : "Set password & join"}
                 <ArrowRight size={17} />
               </button>
             </form>

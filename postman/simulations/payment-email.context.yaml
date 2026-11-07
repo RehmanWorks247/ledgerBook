@@ -13,7 +13,7 @@ assumptions:
     status: supported
     claim: LedgerBook retains a notification after a simulated HTTP 500, retries with the same request key, and records acceptance without another modeled email on replay.
     reason: The real NotificationsService fetch adapter and PaymentEmailOutbox ran against the local Postman simulation using an isolated SQL database.
-    verification: On 2026-11-06 tests/payment-provider.simulation.ts passed. Simulation log showed POST /emails 500, 200, 200; state showed three calls and one accepted message. This tests caller behavior against the stand-in, not actual inbox delivery.
+    verification: On 2026-11-06 tests/payment-provider.simulation.ts passed. Simulation log showed POST /emails 500, 200, 200; state showed three calls and one accepted message. This tests caller behavior against the stand-in, not actual inbox delivery. Repeated successfully on 2026-11-06 after the Clerk/travel merge; observed the same request sequence and asserted modeled state (fingerprint clerk-travel-merge).
     source: tests/payment-provider.simulation.ts; postman/mocks/resend-email/default.js; apps/api/src/payments/email-outbox.service.ts
     updated_at: "2026-11-06"
   - id: actual-inbox-delivery
@@ -27,4 +27,8 @@ fingerprints:
   - id: local-payment-implementation
     date: "2026-11-06"
     commit: 67288b9d3f14e66ed8f3bcf1172b92a669682068 (dirty working tree with payment implementation)
+    cli: "1.75.0"
+  - id: clerk-travel-merge
+    date: "2026-11-06"
+    commit: 89c0e4af0774c129d7065f21ff14d57ff3941e18 (dirty working tree merging saved Clerk authentication with travel features)
     cli: "1.75.0"

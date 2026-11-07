@@ -7,6 +7,10 @@ export type AuthenticatedRequest = Request & { user: AuthUser };
 export const SESSION_COOKIE = config.sessionCookie;
 
 export function sessionToken(request: Request): string | undefined {
+  if (config.authProvider === 'clerk') {
+    const authorization = request.headers.authorization;
+    return authorization?.startsWith('Bearer ') ? authorization.slice(7) : undefined;
+  }
   const raw = request.headers.cookie;
   if (!raw) return undefined;
   return raw.split(';').map((part) => part.trim()).find((part) => part.startsWith(`${SESSION_COOKIE}=`))?.slice(SESSION_COOKIE.length + 1);

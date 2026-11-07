@@ -1,3 +1,4 @@
+import { setTokenProvider } from "../src/api";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createElement } from "react";
@@ -24,6 +25,7 @@ const draft = () => ({ amount: "125.50", paymentDate: "2026-11-06", note: "Bank 
 test("multiple receipt uploads use authenticated multipart and reuse a lost response's submission key", async () => {
   const originalFetch = globalThis.fetch;
   const keys: string[] = [];
+  setTokenProvider(async () => "payment-session");
   const submission = { ...draft(), files: [file("first.png"), file("second.png")] };
   let loseResponse = true;
   globalThis.fetch = async (input, options = {}) => {
@@ -32,6 +34,7 @@ test("multiple receipt uploads use authenticated multipart and reuse a lost resp
     assert.equal(options.credentials, "include");
     const headers = new Headers(options.headers);
     assert.equal(headers.get("X-CSRF-Protection"), "1");
+    assert.equal(headers.get("Authorization"), "Bearer payment-session");
     assert.equal(headers.has("Content-Type"), false, "browser must supply the multipart boundary");
     assert.ok(options.body instanceof FormData);
     assert.equal(options.body.get("amount"), "125.50");
@@ -51,7 +54,7 @@ test("multiple receipt uploads use authenticated multipart and reuse a lost resp
     assert.match(keys[0], /^[0-9a-f-]{36}$/);
     await uploader.submit(submission, "2026-11-06");
     assert.notEqual(keys[2], keys[1], "a new submission after success has a new key");
-  } finally { globalThis.fetch = originalFetch; }
+  } finally { globalThis.fetch = originalFetch; setTokenProvider(async () => null); }
 });
 
 test("edited amounts, dates, notes and receipt selections cannot reuse a previous draft's key", async () => {
@@ -136,7 +139,9 @@ test("payment cards expose review actions only to admins and distinguish pending
   assert.match(admin, /GBP 125.50/);
   assert.match(admin, /6 Nov 2026/);
   assert.doesNotMatch(admin, /untrusted\.test/);
-  assert.ok(admin.includes(receiptPath(context.organizationId, payment, payment.receipts[0].id)));
+  assert.match(admin, /Loading receipt.png/);
+  assert.doesNotMatch(admin, /(?:src|href)="\/api\//);
+  assert.equal(receiptPath(context.organizationId, payment, payment.receipts[0].id), `/api${paymentsPath(context)}/${payment.id}/receipts/${payment.receipts[0].id}`);
   const approved = render(true, { ...payment, status: "approved", reviewed_at: "2026-11-06T13:00:00Z", ledger_entry_id: "91" });
   assert.match(approved, /Payment approved and recorded/);
   assert.match(approved, /#91/);

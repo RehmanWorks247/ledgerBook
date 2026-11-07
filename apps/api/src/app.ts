@@ -15,6 +15,9 @@ import { CustomersService } from './customers/customers.service';
 import { CustomersController } from './customers/customers.controller';
 import { DatabaseModule } from './database/database.module';
 import { DatabaseService } from './database/database.service';
+import { UsersController } from './users/users.controller';
+import { AccountDeletionService } from './users/account-deletion.service';
+import { UsersService } from './users/users.service';
 import { config } from './config';
 import { CurrencyController } from './currency/currency.controller';
 import { CurrencyService } from './currency/currency.service';
@@ -61,8 +64,8 @@ class SafeExceptionFilter implements ExceptionFilter {
 
 export async function createApp(options:{database?:DatabaseService;logger?:false;paymentEmails?:boolean}={}) {
   @Module({imports:[DatabaseModule.forRoot(options.database),AuthModule,InvitationsModule],
-    controllers:[HealthController,CustomersController,CurrencyController,BookingsController,PaymentsController,PaymentReviewController,PaymentEmailStatusController],
-    providers:[AccessService,LedgerService,CustomersService,CurrencyService,RatesService,BookingsService,DocumentStorage,DocumentUploadInterceptor,DocumentDownloadInterceptor,DashboardService,
+    controllers:[HealthController,CustomersController,UsersController,CurrencyController,BookingsController,PaymentsController,PaymentReviewController,PaymentEmailStatusController],
+    providers:[AccessService,LedgerService,CustomersService,UsersService,AccountDeletionService,CurrencyService,RatesService,BookingsService,DocumentStorage,DocumentUploadInterceptor,DocumentDownloadInterceptor,DashboardService,
       PaymentsService,PaymentUploadGuard,PaymentEmailOutbox,{provide:'PAYMENT_EMAIL_WORKER_ENABLED',useValue:options.paymentEmails ?? true}]})
   class ApplicationModule {}
   const app=await NestFactory.create<NestExpressApplication>(ApplicationModule,{
@@ -71,10 +74,25 @@ export async function createApp(options:{database?:DatabaseService;logger?:false
   app.setGlobalPrefix('api');
   app.set('trust proxy',config.trustProxyHops || false);
   app.disable('x-powered-by');
+  const clerkOrigins = config.authProvider === 'clerk'
+    ? [...(config.clerkFrontendOrigin ? [config.clerkFrontendOrigin] : []), 'https://*.clerk.accounts.dev', 'https://*.clerk.com']
+    : [];
+  const challengeOrigins = config.authProvider === 'clerk' ? ['https://challenges.cloudflare.com'] : [];
   app.use(helmet({
-    referrerPolicy:{policy:'no-referrer'},
-    strictTransportSecurity:config.production?{maxAge:31536000,includeSubDomains:true}:false,
-    contentSecurityPolicy:{directives:{defaultSrc:["'self'"],scriptSrc:["'self'"],imgSrc:["'self'",'data:','blob:'],objectSrc:["'none'"],frameAncestors:["'none'"],formAction:["'self'"],baseUri:["'self'"],upgradeInsecureRequests:config.production?[]:null}},
+    referrerPolicy: { policy: 'no-referrer' },
+    strictTransportSecurity: config.production ? { maxAge: 31536000, includeSubDomains: true } : false,
+    contentSecurityPolicy: { directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'", ...clerkOrigins, ...challengeOrigins],
+      connectSrc: ["'self'", ...clerkOrigins, ...challengeOrigins,
+        ...(config.authProvider === 'clerk' ? ['https://clerk-telemetry.com','https://*.clerk-telemetry.com'] : [])],
+      imgSrc: ["'self'", 'data:', 'blob:', 'https://img.clerk.com'],
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      frameSrc: config.authProvider === 'clerk' ? [...clerkOrigins, ...challengeOrigins] : ["'none'"],
+      workerSrc: ["'self'", 'blob:'],
+      objectSrc: ["'none'"], frameAncestors: ["'none'"], formAction: ["'self'"], baseUri: ["'self'"],
+      upgradeInsecureRequests: config.production ? [] : null,
+    } },
   }));
   app.use((req:Request,res:Response,next:NextFunction)=>{
     if(req.path.startsWith('/api')) {

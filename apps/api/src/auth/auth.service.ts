@@ -1,12 +1,14 @@
-import { BadRequestException, Inject, Injectable, Logger, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Inject, Injectable, Logger, Optional, UnauthorizedException } from '@nestjs/common';
 import type { PoolClient } from 'pg';
 import { randomUUID } from 'node:crypto';
 import { config } from '../config';
+import { ClerkService } from './clerk.service';
 import { DatabaseService } from '../database/database.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { DUMMY_PASSWORD_HASH, hashPassword, opaqueToken, tokenHash, validatePassword, verifyPassword } from './crypto';
 
-export type AuthUser = { id: string; email: string };
+export type AuthUser = { id: string; email: string; name?: string; clerk_user_id?: string | null };
+const EMAIL_LINK_CONFLICT = 'This email is still linked to another LedgerBook identity. The former account holder must sign in with their updated email, or an administrator must reconcile the accounts. Access has not been transferred.';
 const GENERIC_RECOVERY_MESSAGE = 'If an account exists, a password reset link will be sent.';
 
 @Injectable()
@@ -18,9 +20,40 @@ export class AuthService {
   constructor(
     @Inject(DatabaseService) private readonly db: DatabaseService,
     @Inject(NotificationsService) private readonly notifications: NotificationsService,
+    @Optional() @Inject(ClerkService) private readonly clerk: ClerkService = new ClerkService(),
   ) {}
 
+  private requireLocal(): void {
+    if (this.clerk.enabled) throw new BadRequestException('Use Clerk to sign in and manage your password.');
+  }
+
+  async authenticateClerk(token?: string): Promise<AuthUser | null> {
+    const identity = await this.clerk.verify(token);
+    if (!identity) return null;
+    return this.db.transaction(async (client) => {
+      await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [identity.email]);
+      const linked = await client.query<AuthUser>('SELECT id,email,name,clerk_user_id FROM users WHERE clerk_user_id=$1 FOR UPDATE', [identity.id]);
+      if (linked.rows[0]) {
+        const collision = await client.query('SELECT id FROM users WHERE email=$1 AND id<>$2', [identity.email,linked.rows[0].id]);
+        if (collision.rowCount) throw new ConflictException(EMAIL_LINK_CONFLICT);
+        // Clerk is the source of truth for the verified account email and display name.
+        const updated = await client.query<AuthUser>('UPDATE users SET email=$2,name=$3 WHERE id=$1 RETURNING id,email,name,clerk_user_id', [linked.rows[0].id,identity.email,identity.name]);
+        return updated.rows[0];
+      }
+      const existing = await client.query<AuthUser>('SELECT id,email,clerk_user_id FROM users WHERE email=$1 FOR UPDATE', [identity.email]);
+      if (existing.rows[0]?.clerk_user_id) throw new ConflictException(EMAIL_LINK_CONFLICT);
+      if (existing.rows[0]) {
+        const updated = await client.query<AuthUser>('UPDATE users SET clerk_user_id=$2,name=$3,password_hash=NULL WHERE id=$1 RETURNING id,email,name,clerk_user_id', [existing.rows[0].id,identity.id,identity.name]);
+        await client.query('DELETE FROM sessions WHERE user_id=$1', [existing.rows[0].id]);
+        return updated.rows[0];
+      }
+      const inserted = await client.query<AuthUser>('INSERT INTO users (id,email,name,clerk_user_id) VALUES ($1,$2,$3,$4) RETURNING id,email,name,clerk_user_id', [randomUUID(),identity.email,identity.name,identity.id]);
+      return inserted.rows[0];
+    });
+  }
+
   async createSession(userId: string, client?: PoolClient): Promise<string> {
+    this.requireLocal();
     const token = opaqueToken();
     const duration = config.sessionTtlSeconds;
     const source: Pick<DatabaseService, 'query'> = client ?? this.db;
@@ -32,6 +65,7 @@ export class AuthService {
   }
 
   async authenticate(token?: string): Promise<AuthUser | null> {
+    if (this.clerk.enabled) return this.authenticateClerk(token);
     if (!token || !/^[A-Za-z0-9_-]{43}$/.test(token)) return null;
     const result = await this.db.query<AuthUser>(
       `SELECT u.id, u.email FROM sessions s JOIN users u ON u.id=s.user_id
@@ -41,6 +75,7 @@ export class AuthService {
   }
 
   async login(email: string, password: string): Promise<{ user: AuthUser; token: string }> {
+    this.requireLocal();
     const result = await this.db.query<AuthUser & { password_hash: string }>(
       `SELECT id,email,password_hash FROM users WHERE email=$1`, [email.trim().toLowerCase()],
     );
@@ -56,6 +91,7 @@ export class AuthService {
   }
 
   async logout(token?: string): Promise<void> {
+    if (this.clerk.enabled) return;
     if (token) await this.db.query('DELETE FROM sessions WHERE token_hash=$1', [tokenHash(token)]);
   }
 
@@ -63,13 +99,14 @@ export class AuthService {
     const memberships = await this.db.query(
       `SELECT m.id,m.organization_id,m.role,m.is_active,m.customer_id,o.name AS organization_name,o.currency,o.currency_exponent
        FROM memberships m JOIN organizations o ON o.id=m.organization_id
-       WHERE m.user_id=$1 AND m.is_active=true ORDER BY o.name,m.id`, [user.id],
+       WHERE m.user_id=$1 AND m.is_active=true AND m.deleted_at IS NULL ORDER BY o.name,m.id`, [user.id],
     );
     return { user, memberships: memberships.rows.map(member => ({ ...member, time_zone: config.businessTimeZone })) };
   }
 
   /** All requests return before identity lookup or email, including unknown addresses. */
   forgotPassword(email: string): { message: string } {
+    this.requireLocal();
     if (!this.acceptingRecovery) return { message: GENERIC_RECOVERY_MESSAGE };
     const job = Promise.resolve().then(() => this.deliverRecovery(email.trim().toLowerCase()));
     this.pendingRecovery.add(job);
@@ -109,6 +146,7 @@ export class AuthService {
   }
 
   async resetPassword(token: string, password: string): Promise<void> {
+    this.requireLocal();
     validatePassword(password);
     const digest = tokenHash(token);
     const candidate = await this.db.query<{ user_id: string }>(

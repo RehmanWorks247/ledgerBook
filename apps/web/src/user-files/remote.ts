@@ -1,4 +1,4 @@
-import { api, ApiError, errorMessage, mutate } from "../api";
+import { api, ApiError, authenticatedHeaders, errorMessage, mutate } from "../api";
 import type { FileNode, FileStore, ImportEntry, UploadItem, UploadResult } from "./model";
 
 export type BookingFileContext = {
@@ -38,11 +38,13 @@ function abortError() { return new DOMException("Upload stopped. Retry to confir
 
 // XHR provides actual transmitted-byte progress. Completion is reported only
 // after the API confirms storage and metadata have both committed.
-export function uploadDocument(path: string, file: File, name: string, key: string, signal: AbortSignal,
+export async function uploadDocument(path: string, file: File, name: string, key: string, signal: AbortSignal,
   onProgress: (loaded: number) => void): Promise<FileNode> {
   const headers = { "Content-Type": "application/pdf", "X-File-Name": encodeURIComponent(name), "Idempotency-Key": key };
   if (signal.aborted) return Promise.reject(abortError());
   if (typeof XMLHttpRequest === "undefined") return api<FileNode>(path, { method: "POST", headers, body: file, signal });
+  const authorizedHeaders = await authenticatedHeaders(headers);
+  if (signal.aborted) throw abortError();
   return new Promise((resolve, reject) => {
     const request = new XMLHttpRequest();
     const abort = () => request.abort();
@@ -53,8 +55,7 @@ export function uploadDocument(path: string, file: File, name: string, key: stri
     request.open("POST", `/api${path}`);
     request.withCredentials = true;
     request.timeout = 180_000;
-    request.setRequestHeader("X-CSRF-Protection", "1");
-    for (const [header, value] of Object.entries(headers)) request.setRequestHeader(header, value);
+    for (const [header, value] of authorizedHeaders) request.setRequestHeader(header, value);
     request.upload.onprogress = (event) => onProgress(Math.min(event.loaded, file.size));
     request.onload = () => {
       let data: FileNode & { message?: string | string[] };

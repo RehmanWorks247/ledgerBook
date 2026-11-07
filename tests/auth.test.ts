@@ -86,7 +86,7 @@ describe('Authentication, invitations, recovery and abuse controls', () => {
     const invitation = await invitations.invite(seed.admin, customerId);
     assert.equal(invitation.delivery_status, 'sent');
     const token = notifications.token();
-    assert.deepEqual(await invitations.inspect(token), { status: 'valid', email, organizationName: 'North Trading', existingUser: false });
+    assert.deepEqual(await invitations.inspect(token), { status: 'valid', email, name: 'Invitation test', organizationName: 'North Trading', existingUser: false, provider: 'local' });
     const stored = await context.db.query('SELECT token_hash FROM invitations WHERE id=$1', [invitation.id]);
     assert.equal(stored.rows[0].token_hash, tokenHash(token));
     const accepted = await invitations.accept(token, undefined, testPassword);
