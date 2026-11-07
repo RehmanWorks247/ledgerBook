@@ -5,8 +5,8 @@
   "paths": {
     "/{bucket}/{key}": {
       "parameters": [{"in":"path","name":"bucket","required":true,"schema":{"type":"string"}},{"in":"path","name":"key","required":true,"schema":{"type":"string"}}],
-      "put": {"parameters":[{"in":"header","name":"x-amz-checksum-sha256","required":true,"schema":{"type":"string"}},{"in":"header","name":"x-amz-server-side-encryption","required":true,"schema":{"type":"string","enum":["AES256"]}}],"requestBody":{"required":true,"content":{"application/pdf":{"schema":{"type":"string","format":"binary"}}}},"responses":{"200":{"description":"Entire object stored"},"400":{"description":"Invalid request or checksum"},"403":{"description":"Access denied"},"503":{"description":"SlowDown or temporary unavailability"}}},
-      "get": {"responses":{"200":{"description":"Stored bytes","content":{"application/pdf":{"schema":{"type":"string","format":"binary"}}}},"403":{"description":"Access denied; can also represent missing object without ListBucket permission"},"404":{"description":"NoSuchKey when caller can list bucket"}}},
+      "put": {"parameters":[{"in":"header","name":"x-amz-checksum-sha256","required":true,"schema":{"type":"string"}},{"in":"header","name":"x-amz-server-side-encryption","required":true,"schema":{"type":"string","enum":["AES256"]}}],"requestBody":{"required":true,"content":{"*/*":{"schema":{"type":"string","format":"binary"}}}},"responses":{"200":{"description":"Entire object stored"},"400":{"description":"Invalid request or checksum"},"403":{"description":"Access denied"},"503":{"description":"SlowDown or temporary unavailability"}}},
+      "get": {"responses":{"200":{"description":"Stored bytes","content":{"*/*":{"schema":{"type":"string","format":"binary"}}}},"403":{"description":"Access denied; can also represent missing object without ListBucket permission"},"404":{"description":"NoSuchKey when caller can list bucket"}}},
       "delete": {"responses":{"204":{"description":"Current object removed from unversioned bucket"},"403":{"description":"Access denied"},"503":{"description":"Temporary unavailability"}}}
     }
   },

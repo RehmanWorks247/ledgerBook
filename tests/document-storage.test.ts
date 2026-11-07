@@ -134,6 +134,27 @@ describe('private S3 documents and durable upload reconciliation',() => {
     assert.equal(JSON.stringify(saved).includes('object_key'),false);
   });
 
+  it('stores non-PDF binary files and one-byte files in S3 with accurate MIME metadata',async () => {
+    for (const [name,mimeType,bytes] of [
+      ['letter.docx','application/vnd.openxmlformats-officedocument.wordprocessingml.document',Buffer.from([0x50,0x4b,3,4,0xff,0,0x80])],
+      ['picture.png','image/png',Buffer.from([0x89,0x50,0x4e,0x47,13,10,26,10,0,0xff])],
+      ['tiny.custom','application/octet-stream',Buffer.from([0xff])],
+    ] as const) {
+      const key=randomUUID();
+      const saved=await upload(name,key,bytes);
+      assert.equal(saved.mimeType,mimeType);
+      assert.equal((await upload(name,key,bytes)).id,saved.id);
+      const row=(await database.db.query('SELECT content,storage_object_id FROM booking_nodes WHERE id=$1',[saved.id])).rows[0];
+      assert.equal(row.content,null);
+      const object=await journal(row.storage_object_id);
+      const put=provider.requests.find(request=>request.method==='PUT'&&request.path===objectPath(object))!;
+      assert.equal(put.headers['content-type'],mimeType);
+      const downloaded=await bookings.document(seed.customerMember,seed.customerId,bookingId,saved.id);
+      assert.equal(downloaded.mimeType,mimeType);
+      assert.deepEqual(downloaded.content,bytes);
+    }
+  });
+
   it('continues reading bytea documents after switching the configured writer to S3',async () => {
     const local = new BookingsService(database.db,new AccessService(database.db),new DocumentStorage({mode:'database'}));
     const bytes = pdf('legacy');

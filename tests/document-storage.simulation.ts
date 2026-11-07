@@ -36,6 +36,16 @@ async function main() {
     });
     state = await (await fetch(`${base}/_control/state`)).json() as typeof state;
     assert.deepEqual(state,{puts:7,gets:3,deletes:1,objects:1});
+    await control('reset');
+    const textBytes=Buffer.from('a');
+    const textObject={...object,id:randomUUID(),object_key:`documents/${randomUUID()}`,size:textBytes.length,checksum:createHash('sha256').update(textBytes).digest('hex')};
+    await storage.put(textObject,textBytes,'text/plain');
+    assert.deepEqual(await storage.get(textObject),textBytes);
+    const response=await fetch(`${base}/${textObject.bucket}/${textObject.object_key}`,{headers:{Authorization:'AWS4-HMAC-SHA256 simulation-only'}});
+    assert.equal(response.headers.get('content-type'),'text/plain');
+    assert.equal(await response.text(),'a');
+    await storage.remove(textObject);
+    console.log('PASS: one-byte text file with an extensionless object key preserves bytes and Content-Type.');
     console.log('PASS: real AWS SDK PUT/GET/DELETE with exact ASCII-PDF bytes; checksum/SSE headers; two transient 503s retried; persistent outage sanitized after three attempts. Binary coverage uses document-storage.test.ts because Postman 1.75 decodes bodies as UTF-8.');
   } finally {
     storage.onApplicationShutdown();

@@ -1,7 +1,8 @@
 # Customer document storage
 
-Administrators can drop PDFs or folders into a booking's service folder, or use
-the file picker. The explorer accepts up to 100 PDFs / 100 MiB per batch, with
+Administrators can drop files or folders into a booking's service folder, or use
+the file picker. All file types are supported, including PDF, Word documents,
+images, spreadsheets and archives. The explorer accepts up to 100 files / 100 MiB per batch, with
 10 MiB per file, and transfers three files concurrently. Each file has progress,
 an explicit saving state, and retry/cancel controls. A small accessible toast
 reports confirmed saves; failures remain individually visible. Cancelling after
@@ -14,9 +15,7 @@ existing separate workflow.
 
 Use **Neon PostgreSQL plus private AWS S3** for this application: PostgreSQL keeps
 customer records, folders, ownership, audit history and file metadata; S3 keeps
-new document bytes. Clerk can remain the identity provider in deployments that
-use it. This checkout currently uses session authentication, which this change
-does not replace. Supabase PostgreSQL and Storage are also a reasonable combined
+new document bytes. Clerk manages browser sign-in. Supabase PostgreSQL and Storage are also a reasonable combined
 service; the S3 adapter delivered here targets AWS S3, not Supabase's API.
 
 - [Neon connection pooling](https://neon.com/docs/connect/connection-pooling)
@@ -57,7 +56,8 @@ defaults to S3 and fails startup without bucket/region settings; an explicit
 
 ## Request and failure behavior
 
-The existing raw-PDF API remains compatible; see [bookings.md](bookings.md).
+The raw-file API uses `application/octet-stream` and also accepts existing
+`application/pdf` requests. See [bookings.md](bookings.md).
 Session and destination authorization run before body buffering. Uploads are
 rate limited, have a 60-second receive deadline, reject compressed bodies, and
 allow at most eight active uploads per API process. Downloads also have eight
@@ -73,7 +73,7 @@ triggers immediate object deletion.
 
 Downloads pass through the authenticated API so access revocation takes effect
 on the next request. They are private and non-cacheable. Transfers currently
-pass through the API to preserve server-side PDF validation; this implementation
+pass through the API to preserve upload validation; this implementation
 does not claim direct browser-to-S3 or resumable multipart transfers. File lists
 select metadata only and normally avoid booking write locks.
 

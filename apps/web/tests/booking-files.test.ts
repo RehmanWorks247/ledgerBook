@@ -27,7 +27,7 @@ test("selected files and dropped PDFs use the booking destination and retry a lo
     if (options.method === "POST") {
       assert.equal(url, `/api${bookingFilesPath(context)}/folders/${folder.id}/documents`);
       const headers = new Headers(options.headers);
-      assert.equal(headers.get("Content-Type"), "application/pdf");
+      assert.equal(headers.get("Content-Type"), "application/octet-stream");
       assert.equal(headers.get("X-CSRF-Protection"), "1");
       assert.equal(options.credentials, "include");
       const key = headers.get("Idempotency-Key")!;
@@ -85,6 +85,35 @@ test("bad PDFs are rejected before writing a selection and a revoked list clears
     allowed = false;
     await assert.rejects(store.load(), /Document access is unavailable/);
     assert.deepEqual(store.getSnapshot(), []);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test("mixed file selections and folder drops accept all types up to 10 MiB and reject larger or empty files before posting", async () => {
+  const originalFetch = globalThis.fetch;
+  const uploaded: string[] = [];
+  globalThis.fetch = async (_input, options = {}) => {
+    if (!options.method) return Response.json({ items: [folder] });
+    const headers = new Headers(options.headers);
+    assert.equal(headers.get("Content-Type"), "application/octet-stream");
+    const name = decodeURIComponent(headers.get("X-File-Name")!);
+    uploaded.push(name);
+    return Response.json({ id: crypto.randomUUID(), parentId: folder.id, kind: "file", name, size: (options.body as File).size, modifiedAt: 0 });
+  };
+  try {
+    const store = new BookingFileStore(context);
+    await store.load();
+    const files = ["letter.doc", "letter.docx", "photo.jpg", "photo.png", "data.csv", "archive.zip", "custom.anything", "README"]
+      .map(name => new File([new Uint8Array([0, 255, 128])], name));
+    files.push(new File([new Uint8Array(10 * 1024 * 1024)], "limit.bin"));
+    assert.equal((await store.importEntries(folder.id, entriesFromFiles(files))).succeeded, files.length);
+    assert.deepEqual(uploaded.sort(), files.map(file => file.name).sort());
+    const before = uploaded.length;
+    for (const size of [0, 10 * 1024 * 1024 + 1]) {
+      await assert.rejects(store.importEntries(folder.id, [{ kind: "folder", name: "Dropped folder", children: entriesFromFiles([
+        new File(["valid"], "valid.txt"), new File([new Uint8Array(size)], "invalid.bin"),
+      ]) }]), /non-empty file up to 10 MB/);
+    }
+    assert.equal(uploaded.length, before);
   } finally { globalThis.fetch = originalFetch; }
 });
 

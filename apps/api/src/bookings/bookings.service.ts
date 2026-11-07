@@ -7,6 +7,7 @@ import { DatabaseService } from '../database/database.service';
 import { parseMoney, UUID_PATTERN, validDate } from '../ledger/money';
 import { config } from '../config';
 import { DocumentStorage, type StoredDocument } from './document-storage';
+import { documentExtension, documentMimeType } from './document-files';
 
 export const SERVICE_KEYS = ['flight','makkah','madinah','transfers','visas','extras'] as const;
 export const MAX_DOCUMENT_BYTES = 10 * 1024 * 1024;
@@ -36,9 +37,9 @@ function uuid(value:string, label:string) {
 type Node = QueryResultRow & {
   id:string; organization_id:string; customer_id:string; booking_id:string; parent_id:string|null;
   name:string; kind:'file'|'folder'; size:number; updated_at:Date|string; service_key:string|null;
-  default_folder:boolean; issued_at:Date|null; request_hash:string; content?:Buffer;
+  default_folder:boolean; issued_at:Date|null; request_hash:string; content?:Buffer; mime_type:string;
 };
-const nodeColumns = 'id,organization_id,customer_id,booking_id,parent_id,name,kind,size,updated_at,service_key,default_folder,issued_at,request_hash';
+const nodeColumns = 'id,organization_id,customer_id,booking_id,parent_id,name,kind,size,updated_at,service_key,default_folder,issued_at,request_hash,mime_type';
 const bookingColumns = 'b.*,b.total_minor::text AS total_minor,(SELECT c.customer_code FROM customers c WHERE c.id=b.customer_id AND c.organization_id=b.organization_id) AS customer_code';
 
 @Injectable()
@@ -52,7 +53,7 @@ export class BookingsService {
     return {id:node.id,parentId:node.parent_id,name:node.name,kind:node.kind,size:node.size,
       modifiedAt:new Date(node.updated_at).getTime(),serviceKey:node.service_key,
       defaultFolder:node.default_folder,issuedAt:node.issued_at,
-      ...(node.kind === 'file' ? {mimeType:'application/pdf',url:base,openUrl:base,downloadUrl:`${base}?download=1`} : {})};
+      ...(node.kind === 'file' ? {mimeType:node.mime_type,url:base,openUrl:base,downloadUrl:`${base}?download=1`} : {})};
   }
   private async context(client:PoolClient, member:Membership, customerId:string, bookingId:string, write=false) {
     uuid(bookingId,'booking');
@@ -186,8 +187,12 @@ export class BookingsService {
   async upload(member:Membership, customerId:string, bookingId:string, folderId:string, name:unknown, key:unknown, content:unknown) {
     const filename = parse(nameSchema,name);
     const idempotencyKey = parse(z.uuid(),key);
-    if (!/\.pdf$/i.test(filename) || !Buffer.isBuffer(content) || content.length > MAX_DOCUMENT_BYTES || content.length < 12 ||
-      !content.subarray(0,8).toString('ascii').startsWith('%PDF-') || !content.subarray(-1024).includes(Buffer.from('%%EOF'))) {
+    if (!Buffer.isBuffer(content) || content.length === 0 || content.length > MAX_DOCUMENT_BYTES) {
+      throw new BadRequestException('Choose a non-empty file of at most 10 MB.');
+    }
+    const mimeType = documentMimeType(filename);
+    if (mimeType === 'application/pdf' && (content.length < 12 ||
+      !content.subarray(0,8).toString('ascii').startsWith('%PDF-') || !content.subarray(-1024).includes(Buffer.from('%%EOF')))) {
       throw new BadRequestException('Choose a valid PDF of at most 10 MB.');
     }
     const checksum = createHash('sha256').update(content).digest('hex');
@@ -213,11 +218,17 @@ export class BookingsService {
       }
       const siblings = await client.query<{name:string}>('SELECT name FROM booking_nodes WHERE booking_id=$1 AND parent_id=$2',[bookingId,folderId]);
       const taken = new Set(siblings.rows.map(row => row.name.toLowerCase()));
+      const candidateExtension = documentExtension(filename);
+      const extension = candidateExtension.length <= 32 ? candidateExtension : '';
+      const stem = filename.slice(0,filename.length-extension.length);
       let uniqueName = filename;
-      for (let copy=2;taken.has(uniqueName.toLowerCase());copy++) uniqueName = `${filename.slice(0,-4).slice(0,220)} (${copy})${filename.slice(-4)}`;
-      const result = await client.query<Node>(`INSERT INTO booking_nodes(id,organization_id,customer_id,booking_id,parent_id,kind,name,service_key,content,size,created_by,idempotency_key,request_hash,storage_object_id)
-        VALUES($1,$2,$3,$4,$5,'file',$6,$7,$8,$9,$10,$11,$12,$13) RETURNING ${nodeColumns}`,
-        [randomUUID(),active.organization_id,customerId,bookingId,folderId,uniqueName,folder.service_key,object ? null : content,content.length,active.user_id,idempotencyKey,fingerprint,object?.id ?? null]);
+      for (let copy=2;taken.has(uniqueName.toLowerCase());copy++) {
+        const suffix = ` (${copy})`;
+        uniqueName = `${stem.slice(0,240-extension.length-suffix.length)}${suffix}${extension}`;
+      }
+      const result = await client.query<Node>(`INSERT INTO booking_nodes(id,organization_id,customer_id,booking_id,parent_id,kind,name,service_key,content,size,created_by,idempotency_key,request_hash,storage_object_id,mime_type)
+        VALUES($1,$2,$3,$4,$5,'file',$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING ${nodeColumns}`,
+        [randomUUID(),active.organization_id,customerId,bookingId,folderId,uniqueName,folder.service_key,object ? null : content,content.length,active.user_id,idempotencyKey,fingerprint,object?.id ?? null,mimeType]);
       await this.audit(client,active,'document.uploaded',result.rows[0].id,{customer_id:customerId,booking_id:bookingId,service_key:folder.service_key,name:uniqueName});
       return this.serialize(result.rows[0]);
     };
@@ -227,7 +238,7 @@ export class BookingsService {
       if(prior) return {node:this.serialize(prior),object:undefined};
       const id=randomUUID();
       const object:StoredDocument={id,bucket:this.storage.options.bucket!,
-        object_key:`documents/${active.organization_id}/${customerId}/${bookingId}/${id}.pdf`,checksum,size:content.length};
+        object_key:`documents/${active.organization_id}/${customerId}/${bookingId}/${id}`,checksum,size:content.length};
       await client.query(`INSERT INTO document_objects(id,organization_id,customer_id,booking_id,bucket,object_key,checksum,size)
         VALUES($1,$2,$3,$4,$5,$6,$7,$8)`,[id,active.organization_id,customerId,bookingId,object.bucket,object.object_key,checksum,content.length]);
       return {node:undefined,object};
@@ -235,7 +246,7 @@ export class BookingsService {
     if(prepared.node) return prepared.node;
     // Never hold a database connection/booking lock during a provider call. The
     // journal remains recoverable if upload, final commit, or process fails.
-    await this.storage.put(prepared.object,content);
+    await this.storage.put(prepared.object,content,mimeType);
     return this.db.transaction(client=>persist(client,prepared.object));
   }
 
@@ -276,13 +287,13 @@ export class BookingsService {
     const result=await this.db.transaction(async client => {
       const {active} = await this.context(client,member,customerId,bookingId);
       const node = await this.node(client,active.organization_id,customerId,bookingId,documentId);
-      if (node.kind !== 'file') throw new NotFoundException('PDF was not found in this booking.');
+      if (node.kind !== 'file') throw new NotFoundException('File was not found in this booking.');
       const bytes = await client.query<{content:Buffer|null;storage_object_id:string|null}>('SELECT content,storage_object_id FROM booking_nodes WHERE id=$1',[documentId]);
-      if(bytes.rows[0].content!==null) return {name:node.name,content:Buffer.from(bytes.rows[0].content),object:undefined};
+      if(bytes.rows[0].content!==null) return {name:node.name,mimeType:node.mime_type,content:Buffer.from(bytes.rows[0].content),object:undefined};
       const stored=await client.query<StoredDocument>("SELECT id,bucket,object_key,checksum,size FROM document_objects WHERE id=$1 AND state='ready'",[bytes.rows[0].storage_object_id]);
       if(!stored.rows[0]) throw new NotFoundException('Document storage was not found.');
-      return {name:node.name,content:undefined,object:stored.rows[0]};
+      return {name:node.name,mimeType:node.mime_type,content:undefined,object:stored.rows[0]};
     });
-    return {name:result.name,content:result.content ?? await this.storage.get(result.object!)};
+    return {name:result.name,mimeType:result.mimeType,content:result.content ?? await this.storage.get(result.object!)};
   }
 }

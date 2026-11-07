@@ -71,10 +71,10 @@ describe('document uploads reject unsafe requests before body buffering',() => {
   it('rejects unsupported media, encoding, filename, retry keys and declared oversized bodies immediately',async () => {
     const declared = {...headers,'Content-Length':'1000'};
     for (const [override,status] of [
-      [{'Content-Type':'application/octet-stream'},415],
+      [{'Content-Type':'multipart/form-data'},415],
       [{'Content-Encoding':'gzip'},415],
       [{'X-File-Name':'../unsafe.pdf'},400],
-      [{'X-File-Name':'image.png'},400],
+      [{'X-File-Name':'..'},400],
       [{'Idempotency-Key':'not-a-uuid'},400],
       [{'Content-Length':String(MAX_DOCUMENT_BYTES+1)},413],
     ] as const) {
@@ -89,5 +89,63 @@ describe('document uploads reject unsafe requests before body buffering',() => {
     assert.match(response.body,/10 MB/);
     assert.equal(response.headers.connection,'close');
     assert.equal((await database.db.query("SELECT count(*)::int AS n FROM booking_nodes WHERE kind='file'")).rows[0].n,0);
+  });
+
+  it('round-trips file types with their names, MIME metadata, private access and safe download behavior',async () => {
+    const cases = [
+      {name:'voucher.pdf',type:'application/pdf',bytes:Buffer.from('%PDF-1.4\n%%EOF'),inline:true},
+      {name:'.pdf',type:'application/pdf',bytes:Buffer.from('%PDF-1.4\n%%EOF'),inline:true},
+      {name:'letter.doc',type:'application/msword',bytes:Buffer.from([0xd0,0xcf,0x11,0xe0,0xff,0,0x80]),inline:false},
+      {name:'letter.docx',type:'application/vnd.openxmlformats-officedocument.wordprocessingml.document',bytes:Buffer.from([0x50,0x4b,3,4,0xff,0,0x80]),inline:false},
+      {name:'photo.png',type:'image/png',bytes:Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a4l8AAAAASUVORK5CYII=','base64'),inline:true},
+      {name:'photo.jpg',type:'image/jpeg',bytes:Buffer.from([0xff,0xd8,0xff,0xe0,0,0xff,0xd9]),inline:true},
+      {name:'list.csv',type:'text/csv',bytes:Buffer.from('name,amount\nExample,10\n'),inline:false},
+      {name:'archive.zip',type:'application/zip',bytes:Buffer.from([0x50,0x4b,5,6,0,0xff,0x80]),inline:false},
+      {name:'settings.json',type:'application/json',bytes:Buffer.from('{"ok":true}'),inline:false},
+      {name:'custom.unknown',type:'application/octet-stream',bytes:Buffer.from([0xff]),inline:false},
+      {name:'README',type:'application/octet-stream',bytes:Buffer.from('a'),inline:false},
+      {name:'page.html',type:'application/octet-stream',bytes:Buffer.from('<script>alert(1)</script>'),inline:false},
+      {name:'drawing.svg',type:'application/octet-stream',bytes:Buffer.from('<svg onload="alert(1)"></svg>'),inline:false},
+    ];
+    for (const item of cases) {
+      const uploadHeaders={...headers,'Content-Type':'application/octet-stream','X-File-Name':encodeURIComponent(item.name),'Idempotency-Key':randomUUID()};
+      const response=await fetch(url,{method:'POST',headers:uploadHeaders,body:item.bytes});
+      assert.equal(response.status,201,await response.clone().text());
+      const saved=await response.json();
+      assert.equal(saved.name,item.name);
+      assert.equal(saved.mimeType,item.type);
+      const downloadUrl=new URL(saved.url,url);
+      const downloaded=await fetch(downloadUrl,{headers:{Cookie:customerCookie}});
+      assert.equal(downloaded.status,200);
+      assert.equal(downloaded.headers.get('content-type')?.split(';')[0],item.type);
+      assert.match(downloaded.headers.get('content-disposition')!,item.inline ? /^inline;/ : /^attachment;/);
+      assert.equal(downloaded.headers.get('x-content-type-options'),'nosniff');
+      assert.equal(downloaded.headers.get('cache-control'),'private, no-store');
+      assert.deepEqual(Buffer.from(await downloaded.arrayBuffer()),item.bytes);
+      assert.equal((await fetch(downloadUrl)).status,401);
+      const retry=await fetch(url,{method:'POST',headers:uploadHeaders,body:item.bytes});
+      assert.equal((await retry.json()).id,saved.id);
+      const copy=await fetch(url,{method:'POST',headers:{...uploadHeaders,'Idempotency-Key':randomUUID()},body:item.bytes});
+      const expected=item.name.includes('.') ? item.name.replace(/(\.[^.]+)$/, ' (2)$1') : `${item.name} (2)`;
+      assert.equal((await copy.json()).name,expected);
+    }
+    const invalidPdf=await fetch(url,{method:'POST',headers:{...headers,'X-File-Name':'.pdf'},body:'not a PDF'});
+    assert.equal(invalidPdf.status,400);
+  });
+
+  it('accepts exactly 10 MiB and rejects empty or larger files without saving them',async () => {
+    const uploadHeaders={...headers,'Content-Type':'application/octet-stream','X-File-Name':'boundary.bin','Idempotency-Key':randomUUID()};
+    const bytes=Buffer.alloc(MAX_DOCUMENT_BYTES,0xa5);
+    const response=await fetch(url,{method:'POST',headers:uploadHeaders,body:bytes});
+    assert.equal(response.status,201,await response.clone().text());
+    const saved=await response.json();
+    assert.equal(saved.size,MAX_DOCUMENT_BYTES);
+    const downloaded=await fetch(new URL(saved.url,url),{headers:{Cookie:customerCookie}});
+    assert.deepEqual(Buffer.from(await downloaded.arrayBuffer()),bytes);
+    const count=(await database.db.query("SELECT count(*)::int AS n FROM booking_nodes WHERE kind='file'")).rows[0].n;
+    for (const [body,status] of [[Buffer.alloc(0),400],[Buffer.alloc(MAX_DOCUMENT_BYTES+1),413]] as const) {
+      assert.equal((await fetch(url,{method:'POST',headers:{...uploadHeaders,'Idempotency-Key':randomUUID()},body})).status,status);
+    }
+    assert.equal((await database.db.query("SELECT count(*)::int AS n FROM booking_nodes WHERE kind='file'")).rows[0].n,count);
   });
 });

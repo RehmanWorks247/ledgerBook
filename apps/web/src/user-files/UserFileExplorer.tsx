@@ -1,4 +1,4 @@
-import { usePrivateAsset } from "../private-assets";
+import { canPreviewAsset, usePrivateAsset } from "../private-assets";
 import { ErrorNotice } from "../components";
 import {
   Fragment,
@@ -194,11 +194,12 @@ function FileDetails({
   close: () => void;
 }) {
   const { url, error } = usePrivateAsset(node.url, node.file);
+  const preview = canPreviewAsset(node.mimeType || node.file?.type || "");
   return (
     <ExplorerDialog title="File details" close={close}>
       <div className="ufe-detail-name">
         <FileArt node={node} />
-        <strong>{url ? <a href={url} target="_blank" rel="noopener noreferrer" style={{ color: "inherit", textDecoration: "inherit" }} aria-label={`Open ${node.name}`}>{node.name}</a> : node.name}</strong>
+        <strong>{url ? <a href={url} target={preview ? "_blank" : undefined} download={preview ? undefined : node.name} rel="noopener noreferrer" style={{ color: "inherit", textDecoration: "inherit" }} aria-label={`${preview ? "Open" : "Download"} ${node.name}`}>{node.name}</a> : node.name}</strong>
       </div>
       <ErrorNotice message={error} />
       {!url && !error && (node.url || node.file) && <p role="status">Loading attachment…</p>}
@@ -552,7 +553,7 @@ function Explorer({
               className="button"
               disabled={busy || !uploadDestination}
               onClick={() => fileInput.current?.click()}
-              title={uploadDestination ? "Add PDF documents" : "Open a service folder or drop files onto one below"}
+              title={uploadDestination ? "Add files" : "Open a service folder or drop files onto one below"}
             >
               <Upload size={16} />
               Add files
@@ -561,7 +562,6 @@ function Explorer({
               hidden
               type="file"
               multiple
-              accept={store.load ? "application/pdf,.pdf" : undefined}
               ref={fileInput}
               aria-label="Choose files"
               onChange={addFromPicker}
@@ -691,7 +691,7 @@ function Explorer({
                 </button>{" "}
                 from your device.
               </p>
-              {store.load && <p>PDF documents · Up to 10 MB each · 100 MB per selection</p>}
+              {store.load && <p>All file types · Up to 10 MB each · 100 MB per selection</p>}
             </div>
           </div>
         ) : (

@@ -40,7 +40,7 @@ function abortError() { return new DOMException("Upload stopped. Retry to confir
 // after the API confirms storage and metadata have both committed.
 export async function uploadDocument(path: string, file: File, name: string, key: string, signal: AbortSignal,
   onProgress: (loaded: number) => void): Promise<FileNode> {
-  const headers = { "Content-Type": "application/pdf", "X-File-Name": encodeURIComponent(name), "Idempotency-Key": key };
+  const headers = { "Content-Type": "application/octet-stream", "X-File-Name": encodeURIComponent(name), "Idempotency-Key": key };
   if (signal.aborted) return Promise.reject(abortError());
   if (typeof XMLHttpRequest === "undefined") return api<FileNode>(path, { method: "POST", headers, body: file, signal });
   const authorizedHeaders = await authenticatedHeaders(headers);
@@ -177,9 +177,9 @@ export class BookingFileStore implements FileStore {
         } else {
           if (++files > MAX_UPLOAD_FILES || (bytes += entry.file.size) > MAX_BATCH_BYTES)
             throw new Error("Choose at most 100 files totalling 100 MB at a time.");
-          if (!entry.name.toLowerCase().endsWith(".pdf") || entry.file.size > MAX_DOCUMENT_BYTES)
-            throw new Error(`${entry.name}: choose a PDF document up to 10 MB.`);
-          if (entry.file.size < 12 || !(await entry.file.slice(0, 5).text()).startsWith("%PDF-") || !(await entry.file.slice(-1024).text()).includes("%%EOF"))
+          if (entry.file.size === 0 || entry.file.size > MAX_DOCUMENT_BYTES)
+            throw new Error(`${entry.name}: choose a non-empty file up to 10 MB.`);
+          if (entry.name.trim().toLowerCase().endsWith(".pdf") && (entry.file.size < 12 || !(await entry.file.slice(0, 5).text()).startsWith("%PDF-") || !(await entry.file.slice(-1024).text()).includes("%%EOF")))
             throw new Error(`${entry.name} is not a valid PDF document.`);
         }
       }

@@ -30,11 +30,11 @@ export class DocumentStorage implements OnApplicationShutdown {
     }
   }
   get cloud() { return this.options.mode==='s3'; }
-  async put(object:StoredDocument,bytes:Buffer) {
+  async put(object:StoredDocument,bytes:Buffer,mimeType='application/pdf') {
     try {
       if(!this.client) throw new Error('Storage not configured');
       await this.client.send(new PutObjectCommand({Bucket:object.bucket,Key:object.object_key,Body:bytes,
-        ContentType:'application/pdf',ContentLength:bytes.length,CacheControl:'private, no-store',
+        ContentType:mimeType,ContentLength:bytes.length,CacheControl:'private, no-store',
         ServerSideEncryption:'AES256',ChecksumSHA256:Buffer.from(object.checksum,'hex').toString('base64')}),
       {abortSignal:AbortSignal.timeout(45000)});
     } catch { throw new ServiceUnavailableException('Document storage is temporarily unavailable. Retry this upload.'); }
@@ -50,7 +50,7 @@ export class DocumentStorage implements OnApplicationShutdown {
       const timer=setTimeout(()=>body.destroy(new Error('Document transfer timed out')),45000);
       timer.unref();
       try {
-        if(response.ContentLength!==object.size || object.size>10485760 || object.size<12) throw new Error('Invalid object size');
+        if(response.ContentLength!==object.size || object.size>10485760 || object.size<1) throw new Error('Invalid object size');
         const bytes=Buffer.allocUnsafe(object.size),checksum=createHash('sha256');
         let offset=0;
         for await(const value of body) {

@@ -14,9 +14,9 @@ customers can read only bookings belonging to their own customer account.
 | `GET /{bookingId}/files` | Returns `{items}` containing flat file/folder nodes. |
 | `POST /{bookingId}/folders` | Creates a folder with `{parent_id, name, idempotency_key}`. |
 | `PATCH /{bookingId}/files/{nodeId}` | Moves an item with `{parent_id}`. Cycles, cross-booking moves and moving documents outside a service folder are rejected. |
-| `POST /{bookingId}/folders/{folderId}/documents` | Saves one PDF, then commits its association and audit atomically. |
-| `GET /{bookingId}/documents/{documentId}` | Opens an authenticated PDF inline. |
-| `GET /{bookingId}/documents/{documentId}?download=1` | Downloads the authenticated PDF with its filename. |
+| `POST /{bookingId}/folders/{folderId}/documents` | Saves one file, then commits its association and audit atomically. |
+| `GET /{bookingId}/documents/{documentId}` | Opens PDFs and supported raster images inline, and downloads other files. |
+| `GET /{bookingId}/documents/{documentId}?download=1` | Downloads the authenticated file with its filename. |
 | `PATCH /{bookingId}/services/{serviceKey}` | Sets the independent issuance flag using `{issued: boolean}`. Uploading never implicitly marks a service issued. |
 
 Booking creation accepts:
@@ -49,10 +49,13 @@ and Extras. Optional folders are still created. Only `required_services` drives
 missing-document indicators. Train tickets belong in Extras. Folder roots are
 fixed; subfolders can be created and moved using the existing explorer controls.
 
-PDF uploads use `Content-Type: application/pdf`, a raw binary request body,
+File uploads use `Content-Type: application/octet-stream`, a raw binary request body,
 `X-File-Name: <encodeURIComponent(filename)>`, and `Idempotency-Key: <UUID>`.
-Each PDF is limited to 10 MB. The server validates the filename, PDF signature
-and end marker, and resolves the complete customer/booking/service-folder
+All file extensions are accepted, including PDF, DOC/DOCX, images, spreadsheets,
+archives and extensionless files. Each file must contain 1–10,485,760 bytes
+(10 MiB, displayed as 10 MB). Existing `application/pdf` requests remain supported.
+The server derives MIME metadata from the filename, screens PDF signatures
+and end markers, and resolves the complete customer/booking/service-folder
 context before storing anything. An absent or mismatched destination is rejected.
 Local database mode stores file metadata and bytes together in a PostgreSQL
 `bytea` row, with the audit event in the same transaction. Production S3 mode
@@ -67,8 +70,11 @@ File nodes retain the existing explorer shape (`id`, `parentId`, `name`, `kind`,
 `size`, numeric `modifiedAt`) and add `serviceKey`, `defaultFolder`, `issuedAt`.
 Files also include `mimeType`, `url`, `openUrl`, `downloadUrl`; both URLs enforce
 current authorization and return private, non-cacheable responses. The built-in
-browser PDF viewer handles inline opening, and `Content-Disposition: attachment`
-handles downloads, including browsers that do not support an HTML download attribute.
+browser viewer handles PDFs and supported raster images. Other file types,
+including HTML and SVG, download as attachments. Unknown types use
+`application/octet-stream`. Authenticated blob links apply the same preview
+restriction. Migration `010_document_file_types.sql` retains PDF metadata for
+existing documents and allows small non-empty files in both storage modes.
 
 Migration `003_bookings.sql` introduces durable booking storage because the
 previous explorer stored files only in the current browser tab. Such old tab-only

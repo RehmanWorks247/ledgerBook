@@ -242,7 +242,7 @@ See [currency API and cache behavior](docs/currencies.md) for endpoints, configu
 
 The overview connects Customer Data, the combined Customer Ledger, booking creation,
 payment entry, instalment attention, departures and dated activity. Each booking has
-its own six service folders and authenticated PDF storage. Existing explorer styling
+its own six service folders and authenticated file storage for all file types up to 10 MB each. Existing explorer styling
 and controls are retained. Local file bytes, associations and upload audit events
 commit together in PostgreSQL. Production can keep new document bytes in private
 AWS S3 with metadata and audit in PostgreSQL. Drag-and-drop uploads show per-file

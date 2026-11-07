@@ -18,7 +18,7 @@ const UPLOAD_TIMEOUT_MS = 60_000;
 @Injectable()
 export class DocumentUploadInterceptor implements NestInterceptor {
   private activeUploads = 0;
-  private readonly parseBody = express.raw({ type:'application/pdf', limit:MAX_DOCUMENT_BYTES, inflate:false });
+  private readonly parseBody = express.raw({ type:['application/octet-stream','application/pdf'], limit:MAX_DOCUMENT_BYTES, inflate:false });
 
   constructor(@Inject(AccessService) private readonly access:AccessService,
     @Inject(BookingsService) private readonly bookings:BookingsService,
@@ -29,7 +29,7 @@ export class DocumentUploadInterceptor implements NestInterceptor {
     const response = context.switchToHttp().getResponse<Response>();
     const ids = ['orgId','customerId','bookingId','folderId'].map(key => String(request.params[key] ?? ''));
     if (ids.some(id => !UUID_PATTERN.test(id))) throw new BadRequestException('Select a valid booking and destination folder.');
-    if (!request.is('application/pdf')) throw new UnsupportedMediaTypeException('Upload a PDF using application/pdf.');
+    if (!request.is(['application/octet-stream','application/pdf'])) throw new UnsupportedMediaTypeException('Upload file bytes using application/octet-stream.');
     if ((request.get('content-encoding') ?? 'identity').toLowerCase() !== 'identity') {
       throw new UnsupportedMediaTypeException('Compressed upload requests are not supported.');
     }
@@ -37,14 +37,14 @@ export class DocumentUploadInterceptor implements NestInterceptor {
     let name:string;
     try { name = decodeURIComponent(request.get('x-file-name') ?? '').trim(); }
     catch { throw new BadRequestException('The document name is invalid.'); }
-    if (!name || name.length > 240 || /[/\\]/.test(name) || !/\.pdf$/i.test(name) ||
+    if (!name || name.length > 240 || /[/\\]/.test(name) || name === '.' || name === '..' ||
       Array.from(name).some(char => char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127)) {
-      throw new BadRequestException('Choose a PDF filename of at most 240 characters without a slash or control character.');
+      throw new BadRequestException('Choose a filename of at most 240 characters without a slash or control character.');
     }
     const length = request.get('content-length');
     if (length !== undefined) {
       if (!/^\d+$/.test(length) || !Number.isSafeInteger(Number(length))) throw new BadRequestException('The upload size is invalid.');
-      if (Number(length) > MAX_DOCUMENT_BYTES) throw new PayloadTooLargeException('PDF uploads must be at most 10 MB.');
+      if (Number(length) > MAX_DOCUMENT_BYTES) throw new PayloadTooLargeException('File uploads must be at most 10 MB.');
     }
     if (this.activeUploads >= MAX_ACTIVE_UPLOADS) {
       response.setHeader('Retry-After','5');
@@ -109,7 +109,7 @@ export class DocumentUploadInterceptor implements NestInterceptor {
       const aborted = () => finish(new BadRequestException('The upload was interrupted. Please retry.'));
       const countBytes = (chunk:Buffer) => {
         received += chunk.length;
-        if (received > MAX_DOCUMENT_BYTES) stopReading(new PayloadTooLargeException('PDF uploads must be at most 10 MB.'));
+        if (received > MAX_DOCUMENT_BYTES) stopReading(new PayloadTooLargeException('File uploads must be at most 10 MB.'));
       };
       const timer = setTimeout(() => stopReading(new RequestTimeoutException('The upload timed out. Please retry.')),UPLOAD_TIMEOUT_MS);
       timer.unref();
@@ -120,11 +120,11 @@ export class DocumentUploadInterceptor implements NestInterceptor {
         this.parseBody(request,response,(error?:unknown) => {
           if (!error) { finish(); return; }
           const type = (error as {type?:string}).type;
-          if (type === 'entity.too.large') finish(new PayloadTooLargeException('PDF uploads must be at most 10 MB.'));
+          if (type === 'entity.too.large') finish(new PayloadTooLargeException('File uploads must be at most 10 MB.'));
           else if (type === 'encoding.unsupported') finish(new UnsupportedMediaTypeException('Compressed upload requests are not supported.'));
-          else finish(new BadRequestException('The PDF upload could not be read. Please retry.'));
+          else finish(new BadRequestException('The file upload could not be read. Please retry.'));
         });
-      } catch { finish(new BadRequestException('The PDF upload could not be read. Please retry.')); }
+      } catch { finish(new BadRequestException('The file upload could not be read. Please retry.')); }
     });
   }
 }

@@ -102,7 +102,8 @@ it('upgrades either previously deployed migration history without changing its e
   const directory=resolve('apps/api/src/database/migrations');
   const names=(await readdir(directory)).filter(name=>/^\d+.*\.sql$/.test(name)).sort();
   const clerk=new Set(['001_initial.sql','002_clerk_accounts.sql','003_stable_clerk_identity.sql','004_permanent_account_deletion.sql']);
-  for(const prior of [names.filter(name=>clerk.has(name)),names.filter(name=>!clerk.has(name)&&!name.startsWith('009_')||name==='001_initial.sql')]) {
+  const travel=names.filter(name=>name<'009_'&&(!clerk.has(name)||name==='001_initial.sql'));
+  for(const prior of [names.filter(name=>clerk.has(name)),travel]) {
     const engine=new PGlite();
     try {
       for(const name of [...prior,...names.filter(name=>!prior.includes(name))]) await engine.exec(await readFile(resolve(directory,name),'utf8'));

@@ -1,9 +1,16 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { loadPrivateAsset } from "../src/private-assets";
+import { canPreviewAsset, loadPrivateAsset } from "../src/private-assets";
 import { ApiError, setTokenProvider } from "../src/api";
 
 const path = "/api/organizations/business/customers/customer/bookings/booking/documents/document";
+
+test("only PDF and supported raster images open as browser previews", () => {
+  for (const type of ["application/pdf", "image/png", "image/jpeg", "image/gif", "image/webp", "image/avif", "image/bmp"])
+    assert.equal(canPreviewAsset(type), true);
+  for (const type of ["text/html", "image/svg+xml", "application/xhtml+xml", "application/javascript", "application/msword", "application/zip", "application/octet-stream", ""])
+    assert.equal(canPreviewAsset(type), false);
+});
 
 test("private PDF and receipt reads authenticate every download and preserve content type and cancellation", async () => {
   const originalFetch = globalThis.fetch;

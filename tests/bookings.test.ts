@@ -111,7 +111,7 @@ describe('booking folders, transactional PDF storage and document access', () =>
     await assert.rejects(bookings.upload(seed.customerMember,seed.customerId,first,firstFolder,'voucher.pdf',randomUUID(),pdf('customer write')),/administrator/);
     await assert.rejects(bookings.upload(seed.otherAdmin,seed.customerId,first,firstFolder,'voucher.pdf',randomUUID(),pdf('other tenant')),/not found/);
     await assert.rejects(bookings.upload(seed.admin,seed.customerId,first,firstFolder,'voucher.pdf',randomUUID(),Buffer.from('not a PDF')),/valid PDF/);
-    await assert.rejects(bookings.upload(seed.admin,seed.customerId,first,firstFolder,'voucher.html',randomUUID(),pdf('wrong name')),/valid PDF/);
+    await assert.rejects(bookings.upload(seed.admin,seed.customerId,first,firstFolder,'empty.txt',randomUUID(),Buffer.alloc(0)),/non-empty file/);
     assert.equal((await database.db.query('SELECT count(*)::int AS n FROM booking_nodes WHERE kind=\'file\'')).rows[0].n,count);
   });
 

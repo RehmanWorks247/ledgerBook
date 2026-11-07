@@ -6,6 +6,7 @@ import { RateLimitService } from '../auth/rate-limit.service';
 import { BookingsService } from './bookings.service';
 import { DocumentUploadInterceptor } from './document-upload.interceptor';
 import { DocumentDownloadInterceptor } from './document-download.interceptor';
+import { canPreviewDocument } from './document-files';
 
 type AuthRequest = Request & {user:{id:string;email:string}};
 @Controller('organizations/:orgId/customers/:customerId/bookings')
@@ -48,7 +49,6 @@ export class BookingsController {
   @UseInterceptors(DocumentUploadInterceptor)
   async upload(@Req() req:AuthRequest,@Param('orgId',ParseUUIDPipe) orgId:string,@Param('customerId',ParseUUIDPipe) customerId:string,@Param('bookingId',ParseUUIDPipe) bookingId:string,@Param('folderId',ParseUUIDPipe) folderId:string,@Headers('x-file-name') encodedName:string,@Headers('idempotency-key') key:string,@Body() body:unknown) {
     const member = await this.access.membership(req.user.id,orgId,true);
-    if (!req.is('application/pdf')) throw new BadRequestException('Upload a PDF using application/pdf.');
     let filename:string;
     try { filename = decodeURIComponent(encodedName ?? ''); }
     catch { throw new BadRequestException('The document name is invalid.'); }
@@ -61,9 +61,10 @@ export class BookingsController {
     const document = await this.bookings.document(await this.access.membership(req.user.id,orgId),customerId,bookingId,documentId);
     const fallback = document.name.replace(/[^A-Za-z0-9 ._()-]/g,'_');
     const encoded = encodeURIComponent(document.name).replace(/[!'()*]/g,char => `%${char.charCodeAt(0).toString(16).toUpperCase()}`);
-    res.setHeader('Content-Type','application/pdf');
-    res.setHeader('Content-Disposition',`${download === '1' ? 'attachment' : 'inline'}; filename="${fallback}"; filename*=UTF-8''${encoded}`);
-    if (download !== '1') {
+    const inline = download !== '1' && canPreviewDocument(document.mimeType);
+    res.setHeader('Content-Type',document.mimeType);
+    res.setHeader('Content-Disposition',`${inline ? 'inline' : 'attachment'}; filename="${fallback}"; filename*=UTF-8''${encoded}`);
+    if (inline && document.mimeType === 'application/pdf') {
       // Chromium's native PDF viewer can load the PDF through a synthetic
       // embed. Permit only that same-origin object on this authenticated PDF
       // response; preserve the application's script and framing restrictions.

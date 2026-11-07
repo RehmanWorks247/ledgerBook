@@ -1,6 +1,10 @@
 import { useEffect, useState } from "react";
 import { ApiError, authenticatedFetch, errorMessage } from "./api";
 
+export function canPreviewAsset(type: string) {
+  return /^(application\/pdf|image\/(png|jpeg|gif|webp|avif|bmp))$/.test(type);
+}
+
 // Private document URLs are API paths. Fetch with the current Clerk session;
 // normal image and anchor requests cannot attach an Authorization header.
 export async function loadPrivateAsset(path: string, signal?: AbortSignal) {

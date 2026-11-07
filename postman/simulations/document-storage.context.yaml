@@ -1,5 +1,5 @@
 purpose:
-  stands_in_for: General-purpose unversioned S3 PUT, GET and DELETE for private PDF documents, with checksum enforcement and transient or persistent 503 responses.
+  stands_in_for: General-purpose unversioned S3 PUT, GET and DELETE for private files, with checksum enforcement and transient or persistent 503 responses.
   unblocks: Real AWS SDK serialization, encryption/checksum headers, retries and sanitized outage handling without accessing AWS or customer files.
 assumptions:
   - id: documented-object-operations
@@ -23,6 +23,13 @@ assumptions:
     verification: Reproduced locally on 2026-11-06, then limited this Postman smoke to an ASCII PDF. tests/document-storage.test.ts independently uses a raw node:http S3 stand-in and binary fixtures containing 0x00, 0xFF and 0x80 to verify exact binary transport through the same production SDK.
     source: tests/document-storage.test.ts; tests/document-storage.simulation.ts; postman/mocks/s3-documents/config.yaml
     updated_at: "2026-11-06"
+  - id: file-types-and-small-objects
+    status: supported
+    claim: The adapter preserves MIME metadata and accepts extensionless object keys and files as small as one byte. Binary Word, image and unknown files round-trip through the raw HTTP S3 stand-in.
+    reason: The production AWS SDK executed the updated storage paths. The Postman run checked one-byte text and PDF transfers, while the raw HTTP suite checked non-UTF-8 file bytes and upload reconciliation.
+    verification: On 2026-11-07 tests/document-storage.simulation.ts passed with observed PUT200, GET200, GET200 and DELETE204 for a one-byte text object, alongside the existing retry and outage checks. All 13 document-storage.test.ts cases passed, including DOCX, PNG and one-byte unknown files, byte equality, Content-Type, idempotency and account-purge cleanup. Repeated both checks during push verification with the same results (fingerprint booking-file-types).
+    source: tests/document-storage.simulation.ts; tests/document-storage.test.ts; apps/api/src/bookings/document-storage.ts; apps/api/src/database/migrations/010_document_file_types.sql
+    updated_at: "2026-11-07"
   - id: deployed-storage-permissions
     status: unknown
     claim: The deployment has a private bucket, correct IAM permissions and matching regional configuration.
@@ -38,4 +45,8 @@ fingerprints:
   - id: clerk-travel-merge
     date: "2026-11-06"
     commit: 89c0e4af0774c129d7065f21ff14d57ff3941e18 (dirty working tree merging saved Clerk authentication with travel features)
+    cli: "1.75.0"
+  - id: booking-file-types
+    date: "2026-11-07"
+    commit: ca4565ca2f8887bc62dbfa1076b47c7750b96479 (dirty working tree with booking file type support)
     cli: "1.75.0"
