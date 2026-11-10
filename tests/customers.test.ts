@@ -154,12 +154,12 @@ describe('customer account lifecycle', () => {
     assert.ok(audit.rows.some((row) => row.action === 'customer.updated'));
     assert.ok(audit.rows.some((row) => row.action === 'customer.access_revoked'));
   });
-  it('assigns unique eight-character customer IDs and searches them within the tenant', async () => {
+  it('assigns unique UK44 customer IDs and searches them within the tenant', async () => {
     const records = await Promise.all(Array.from({ length: 8 }, (_, index) => customers.create(seed.admin, {
       name: `Short ID ${index}`, email: `short-id-${index}@example.test`, idempotency_key: randomUUID(),
     })));
     assert.equal(new Set(records.map(row => row.customer_code)).size, records.length);
-    for (const row of records) assert.match(row.customer_code, /^UK[0-9]{6}$/);
+    for (const row of records) assert.match(row.customer_code, /^UK44[0-9]{3,19}$/);
     const found = await customers.list(seed.admin, { search: records[0].customer_code.toLowerCase() });
     assert.deepEqual(found.items.map(row => row.id), [records[0].id]);
     assert.equal((await customers.list(seed.otherAdmin, { search: records[0].customer_code })).total, 0);

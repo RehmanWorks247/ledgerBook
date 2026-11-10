@@ -49,6 +49,15 @@ charges require a GBP accounting workspace; existing foreign-currency history
 is never relabelled. Repeating a submission key with the same booking returns
 the existing booking; conflicting input returns a conflict.
 
+New-booking forms save a draft automatically in this browser, scoped to the
+workspace, signed-in membership and selected customer. Refreshing or returning
+to that customer restores the entered fields and instalments. Selecting a
+customer from the general booking page moves to that customer's booking URL,
+so refresh also retains the selection. The retry key is saved before submission;
+a lost successful response can be retried after refresh without a duplicate.
+Successful creation or **Discard draft** clears the saved draft. Drafts do not
+sync between devices, and existing-booking edits are not saved as new drafts.
+
 Default service keys are `flight`, `makkah`, `madinah`, `transfers`, `visas` and
 `extras`, labelled Flight Tickets, Makkah Hotel, Madinah Hotel, Transfers, Visas
 and Extras. Optional folders are still created. Only `required_services` drives

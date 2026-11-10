@@ -22,13 +22,21 @@ async function smoke() {
   await mkdir(resolve('.local'),{recursive:true});const directory=await mkdtemp(resolve('.local/release-smoke-'));
   const password=randomUUID().replaceAll('-',''),runtimePassword=randomUUID().replaceAll('-','');
   const env=join(directory,'runtime.env'),ownerEnv=join(directory,'owner.env'),ca=join(directory,'ca.crt');
+  const tls=join(directory,'tls');
   try {
+    // Linux preserves mkdtemp's 0700 owner permissions on bind mounts. Mount
+    // only disposable fixture certificates from a traversable child directory;
+    // keep credentials and the CA private key in the private parent directory.
+    await mkdir(tls,{mode:0o755});
     await writeFile(join(directory,'ca.cnf'),'[req]\ndistinguished_name=dn\nx509_extensions=v3\nprompt=no\n[dn]\nCN=LedgerBook release fixture CA\n[v3]\nbasicConstraints=critical,CA:TRUE\nkeyUsage=critical,keyCertSign,cRLSign\n');
     await run('openssl',['req','-new','-x509','-newkey','rsa:2048','-nodes','-days','1','-config',join(directory,'ca.cnf'),'-keyout',join(directory,'ca.key'),'-out',ca]);
-    await run('openssl',['req','-new','-newkey','rsa:2048','-nodes','-subj','/CN=ledger-release.test','-keyout',join(directory,'server.key'),'-out',join(directory,'server.csr')]);
+    await run('openssl',['req','-new','-newkey','rsa:2048','-nodes','-subj','/CN=ledger-release.test','-keyout',join(tls,'server.key'),'-out',join(directory,'server.csr')]);
     await writeFile(join(directory,'server.cnf'),'[v3]\nbasicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\nsubjectAltName=DNS:ledger-release-db,DNS:ledger-release.test\n');
-    await run('openssl',['x509','-req','-in',join(directory,'server.csr'),'-CA',ca,'-CAkey',join(directory,'ca.key'),'-CAserial',join(directory,'ca.srl'),'-CAcreateserial','-out',join(directory,'server.crt'),'-days','1','-extfile',join(directory,'server.cnf'),'-extensions','v3']);
+    await run('openssl',['x509','-req','-in',join(directory,'server.csr'),'-CA',ca,'-CAkey',join(directory,'ca.key'),'-CAserial',join(directory,'ca.srl'),'-CAcreateserial','-out',join(tls,'server.crt'),'-days','1','-extfile',join(directory,'server.cnf'),'-extensions','v3']);
     await chmod(ca,0o644);
+    // Caddy drops all capabilities and cannot override host UID permissions.
+    // These short-lived test certificates have no trust outside this fixture.
+    await chmod(join(tls,'server.crt'),0o644);await chmod(join(tls,'server.key'),0o644);
     const settings={NODE_ENV:'production',PUBLIC_APP_URL:'https://ledger-release.test',PUBLIC_HOST:'ledger-release.test',AUTH_PROVIDER:'clerk',
       CLERK_PUBLISHABLE_KEY:`pk_live_${Buffer.from('clerk.release.invalid$').toString('base64')}`,CLERK_SECRET_KEY:'sk_live_fixture_only_no_provider_access',
       DATABASE_URL:`postgresql://ledger_runtime:${runtimePassword}@ledger-release-db/ledger_release`,DATABASE_SSL:'true',DATABASE_SSL_CA_FILE:'/run/tls/ca.crt',NODE_EXTRA_CA_CERTS:'/run/tls/ca.crt',
@@ -39,7 +47,7 @@ async function smoke() {
     await run('docker',['pull','postgres:17-alpine']);await run('docker',['pull','caddy:2-alpine']);
     await run('docker',['network','create','--internal',network]);
     // The internal network has no Internet route: these fake provider keys cannot make external calls.
-    await run('docker',['run','-d','--name',db,'--network',network,'--network-alias','ledger-release-db','-e','POSTGRES_USER=ledger_owner','-e',`POSTGRES_PASSWORD=${password}`,'-e','POSTGRES_DB=ledger_release','-v',`${directory}:/tls:ro`,'postgres:17-alpine','sh','-c',
+    await run('docker',['run','-d','--name',db,'--network',network,'--network-alias','ledger-release-db','-e','POSTGRES_USER=ledger_owner','-e',`POSTGRES_PASSWORD=${password}`,'-e','POSTGRES_DB=ledger_release','-v',`${tls}:/tls:ro`,'postgres:17-alpine','sh','-c',
       'cp /tls/server.key /tmp/ledger-server.key && chown postgres:postgres /tmp/ledger-server.key && chmod 600 /tmp/ledger-server.key && exec docker-entrypoint.sh postgres -c ssl=on -c ssl_cert_file=/tls/server.crt -c ssl_key_file=/tmp/ledger-server.key']);
     await waitFor(()=>run('docker',['exec',db,'pg_isready','-U','ledger_owner','-d','ledger_release']));
     await assert.rejects(run('docker',['run','--rm','--network',network,'--env-file',ownerEnv,'-v',`${ca}:/run/tls/ca.crt:ro`,image]),/Release preflight failed/);
@@ -57,7 +65,7 @@ async function smoke() {
     const caddy=(await readFile(resolve('deploy/Caddyfile'),'utf8')).replace('{$PUBLIC_HOST} {','{$PUBLIC_HOST} {\n  tls /tls/server.crt /tls/server.key');
     await writeFile(join(directory,'Caddyfile'),caddy);
     await run('docker',['run','-d','--name',proxy,'--network',network,'--network-alias','ledger-release.test','--read-only','--cap-drop=ALL','--cap-add=NET_BIND_SERVICE','--security-opt=no-new-privileges',
-      '--tmpfs','/tmp:rw,size=16m','--tmpfs','/data:rw,size=16m','--tmpfs','/config:rw,size=1m','-e','PUBLIC_HOST=ledger-release.test','-e','ACME_EMAIL=fixture@release.invalid','-v',`${directory}:/tls:ro`,'-v',`${join(directory,'Caddyfile')}:/etc/caddy/Caddyfile:ro`,'caddy:2-alpine']);
+      '--tmpfs','/tmp:rw,size=16m','--tmpfs','/data:rw,size=16m','--tmpfs','/config:rw,size=1m','-e','PUBLIC_HOST=ledger-release.test','-e','ACME_EMAIL=fixture@release.invalid','-v',`${tls}:/tls:ro`,'-v',`${join(directory,'Caddyfile')}:/etc/caddy/Caddyfile:ro`,'caddy:2-alpine']);
     await waitFor(()=>run('docker',['exec',app,'node','dist/operations/scripts/release-preflight.js','--origin']));
     const monitor=JSON.parse((await run('docker',['exec',app,'node','dist/operations/scripts/release-monitor.js'])).trim());assert.equal(monitor.status,'ok');
     await run('docker',['exec',app,'node','-e',"fetch('https://ledger-release.test/').then(async r=>{if(!r.ok||!(await r.text()).includes('id=\"root\"'))process.exit(1)}).catch(()=>process.exit(1))"]);
