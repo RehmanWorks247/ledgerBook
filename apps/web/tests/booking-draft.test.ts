@@ -8,7 +8,7 @@ function storage() {
     setItem: (key: string, value: string) => { items.set(key, value); }, removeItem: (key: string) => { items.delete(key); } };
 }
 const draft: BookingDraft = {
-  fields: { reference: 'DRAFT-1', departure: '2026-12-20T10:30', amount: '500.00', effectiveDate: '2026-11-09',
+  fields: { reference: 'DRAFT-1', departure: '2026-12-20T10:30', amount: '500.00', instalmentTotal: '600.00', effectiveDate: '2026-11-09',
     required: ['flight', 'makkah'], instalments: [{ key: '7a634eea-c833-4c68-bf54-008f45ced383', due_date: '2026-12-01', amount: '495.00' }] },
   submission: { payload: '{"reference":"DRAFT-1"}', key: 'd0dcc7df-3f43-4345-9c8a-45c0f52333dc' },
 };
@@ -28,6 +28,13 @@ test('incomplete inputs survive draft restoration without requiring a valid book
     instalments: [{ ...draft.fields.instalments[0], due_date: '', amount: '' }] } };
   writeBookingDraft('draft', partial, store);
   assert.deepEqual(readBookingDraft('draft', store), partial);
+});
+
+test('drafts from before the calculation-total field retain their fields and retry key', () => {
+  const store = storage();
+  const { instalmentTotal: _total, ...fields } = draft.fields;
+  store.setItem('draft', JSON.stringify({ version: 1, ...draft, fields }));
+  assert.deepEqual(readBookingDraft('draft', store), { ...draft, fields: { ...fields, instalmentTotal: '' } });
 });
 
 test('corrupt or unsupported saved drafts are ignored safely', () => {

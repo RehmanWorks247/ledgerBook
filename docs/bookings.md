@@ -29,6 +29,7 @@ Booking creation accepts:
   "departure_at": "2026-11-12T10:30:00+00:00",
   "required_services": ["flight", "makkah", "madinah", "visas"],
   "amount": "2500.00",
+  "instalment_total": "2500.00",
   "effective_date": "2026-11-06",
   "instalments": [
     {"due_date": "2026-11-06", "amount": "1000.00"},
@@ -39,11 +40,15 @@ Booking creation accepts:
 ```
 
 The combined instalment total may be up to £5.00 (500 pennies) above or below
-the booking amount, inclusive. A difference of £5.01 is rejected. This is one
+the separate `instalment_total`, inclusive. This optional positive GBP decimal
+field is used only for schedule calculation and validation; omitting it uses
+`amount` for compatibility. It can differ from the booking charge. The API returns
+`instalment_total_minor` as integer pennies. Existing bookings initially use their
+booking total. A difference of £5.01 is rejected. This is one
 tolerance for the whole schedule, not for each instalment. Entered instalment
 amounts are preserved; the booking total and ledger charge are not adjusted.
 An omitted or empty schedule creates
-one instalment for the full total on the effective date. Amounts are decimal
+one instalment for the calculation total on the effective date. Amounts are decimal
 strings converted to integer pennies with the existing money parser. Booking
 charges require a GBP accounting workspace; existing foreign-currency history
 is never relabelled. Repeating a submission key with the same booking returns
@@ -51,7 +56,8 @@ the existing booking; conflicting input returns a conflict.
 
 New-booking forms save a draft automatically in this browser, scoped to the
 workspace, signed-in membership and selected customer. Refreshing or returning
-to that customer restores the entered fields and instalments. Selecting a
+to that customer restores the entered fields, instalment calculation total and
+instalments. Older saved drafts remain compatible and retain their retry keys. Selecting a
 customer from the general booking page moves to that customer's booking URL,
 so refresh also retains the selection. The retry key is saved before submission;
 a lost successful response can be retried after refresh without a duplicate.
@@ -121,10 +127,11 @@ business time zone and exact penny amounts. Both lifecycle mutations require
 a nonblank `reason` (at most 1,000 characters), and a valid `effective_date`.
 
 `PATCH /{bookingId}` accepts the same editable fields as creation: `reference`,
-`departure_at`, `required_services`, `amount`, and a nonempty `instalments` array.
+`departure_at`, `required_services`, `amount`, optional `instalment_total`, and a nonempty `instalments` array.
 Amounts must be positive GBP decimal strings, with at most 100 instalments that
-sum to within £5.00 above or below the total, using the same inclusive tolerance
-as creation. Changing the total atomically reverses the existing
+sum to within £5.00 above or below the calculation total, using the same inclusive tolerance
+as creation. Changing only the calculation total does not change the charge,
+invoice total or customer balance. Changing the booking amount atomically reverses the existing
 active charge and posts a replacement; the correction date cannot precede the
 current charge. The date is used only when a financial correction is needed.
 Previously posted entries and approved payments remain unchanged. Metadata-only

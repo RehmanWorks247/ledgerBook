@@ -14,7 +14,7 @@ import { validateInstalmentTotal } from './instalment-total';
 const date = z.string().refine(validDate, 'Use a valid date in YYYY-MM-DD format.');
 const operation = {expected_version:z.number().int().min(1),reason:z.string().trim().min(1).max(1000),effective_date:date,idempotency_key:z.uuid()};
 const editSchema = z.object({...operation,reference:z.string().trim().min(1).max(160),departure_at:z.iso.datetime({offset:true}),
-  required_services:z.array(z.enum(SERVICE_KEYS)).max(6),amount:z.string(),
+  required_services:z.array(z.enum(SERVICE_KEYS)).max(6),amount:z.string(),instalment_total:z.string().optional(),
   instalments:z.array(z.object({due_date:date,amount:z.string()}).strict()).min(1).max(100)}).strict();
 const deleteSchema = z.object({...operation,confirmation:z.string().min(1).max(160)}).strict();
 function parse<T>(schema:z.ZodType<T>, raw:unknown):T {
@@ -60,7 +60,7 @@ export class BookingManagementService {
   }
 
   private async snapshot(client:PoolClient,bookingId:string) {
-    const result=await client.query(`SELECT b.*,b.total_minor::text AS total_minor,b.charge_entry_id::text AS charge_entry_id,
+    const result=await client.query(`SELECT b.*,b.total_minor::text AS total_minor,COALESCE(b.instalment_total_minor,b.total_minor)::text AS instalment_total_minor,b.charge_entry_id::text AS charge_entry_id,
       e.effective_date::text AS effective_date,c.customer_code FROM bookings b
       JOIN customers c ON c.id=b.customer_id JOIN ledger_entries e ON e.id=b.charge_entry_id WHERE b.id=$1`,[bookingId]);
     const {request_hash:_hash,idempotency_key:_key,...booking}=result.rows[0];
@@ -91,10 +91,11 @@ export class BookingManagementService {
 
   async update(member:Membership,customerId:string,bookingId:string,raw:unknown) {
     const data=parse(editSchema,raw),amount=parseMoney(data.amount,2);
+    const calculationTotal=parseMoney(data.instalment_total ?? data.amount,2);
     const instalments=data.instalments.map(item=>({due_date:item.due_date,amount_minor:parseMoney(item.amount,2).toString()}));
-    validateInstalmentTotal(amount,instalments);
+    validateInstalmentTotal(calculationTotal,instalments);
     const required=[...new Set(data.required_services)].sort();
-    const fingerprint=digest({...data,amount:amount.toString(),instalments,required_services:required,customerId,bookingId,userId:member.user_id,action:'updated'});
+    const fingerprint=digest({...data,...(data.instalment_total === undefined ? {} : {instalment_total:calculationTotal.toString()}),amount:amount.toString(),instalments,required_services:required,customerId,bookingId,userId:member.user_id,action:'updated'});
     return this.db.transaction(async client=>{
       const {active,booking}=await this.context(client,member,customerId,bookingId);
       const prior=await this.prior(client,active.organization_id,data.idempotency_key,fingerprint);
@@ -111,8 +112,8 @@ export class BookingManagementService {
         chargeId=charge.rows[0].id;
         await this.audit(client,active,'ledger.posted',chargeId,{customer_id:customerId,booking_id:bookingId,kind:'charge',reason:data.reason});
       }
-      await client.query(`UPDATE bookings SET reference=$1,departure_at=$2,required_services=$3,total_minor=$4,charge_entry_id=$5,version=version+1,updated_at=now() WHERE id=$6`,
-        [data.reference,data.departure_at,required,amount.toString(),chargeId,bookingId]);
+      await client.query(`UPDATE bookings SET reference=$1,departure_at=$2,required_services=$3,total_minor=$4,charge_entry_id=$5,instalment_total_minor=$7,version=version+1,updated_at=now() WHERE id=$6`,
+        [data.reference,data.departure_at,required,amount.toString(),chargeId,bookingId,calculationTotal.toString()]);
       const scheduleKeys=(items:{due_date:string;amount_minor:string}[])=>items.map(item=>`${item.due_date}:${item.amount_minor}`).sort();
       if(JSON.stringify(scheduleKeys(instalments))!==JSON.stringify(scheduleKeys(before.instalments as {due_date:string;amount_minor:string}[]))) {
         await client.query(`UPDATE reminder_email_outbox SET state='cancelled',delivery_status='cancelled',lease_token=NULL,lease_until=NULL,last_error='Booking schedule changed before notification delivery.'

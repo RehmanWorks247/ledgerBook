@@ -22,6 +22,7 @@ type Booking = {
   departure_at: string;
   required_services: string[];
   total_minor: string;
+  instalment_total_minor: string;
   version: number;
   effective_date: string;
   deleted_at?: string | null;
@@ -183,11 +184,12 @@ function SelectedBookingForm({ customerId, onSaved, booking, onCancel }: { custo
     reference: booking?.reference || "",
     departure: booking ? departureLocal(booking.departure_at, booking.time_zone || "UTC") : "",
     amount: booking ? bookingAmountInput(booking.total_minor) : "",
+    instalmentTotal: booking ? bookingAmountInput(booking.instalment_total_minor ?? booking.total_minor) : "",
     effectiveDate: booking ? [booking.effective_date, businessDate(booking.time_zone || "UTC")].sort().at(-1)! : "",
     required: booking?.required_services || [],
     instalments: booking?.instalments?.map(item => ({ key: item.id, due_date: item.due_date, amount: bookingAmountInput(item.amount_minor) })) || [],
   });
-  const { reference, departure, amount, effectiveDate, required, instalments } = fields;
+  const { reference, departure, amount, instalmentTotal, effectiveDate, required, instalments } = fields;
   const currentFields = useRef(fields);
   const [draftStatus, setDraftStatus] = useState<"empty" | "saved" | "restored" | "error" | "discarded">(restoredDraft ? "restored" : "empty");
   const [reason, setReason] = useState("");
@@ -208,11 +210,12 @@ function SelectedBookingForm({ customerId, onSaved, booking, onCancel }: { custo
   const setReference = (value: string) => change("reference", value);
   const setDeparture = (value: string) => change("departure", value);
   const setAmount = (value: string) => change("amount", value);
+  const setInstalmentTotal = (value: string) => change("instalmentTotal", value);
   const setEffectiveDate = (value: string) => change("effectiveDate", value);
   const setRequired = (value: (previous: string[]) => string[]) => change("required", value);
   const setInstalments = (value: (previous: BookingDraftFields['instalments']) => BookingDraftFields['instalments']) => change("instalments", value);
   function discardDraft() {
-    const next = { reference: "", departure: "", amount: "", effectiveDate: businessDate(existing.data!.time_zone), required: [], instalments: [] };
+    const next = { reference: "", departure: "", amount: "", instalmentTotal: "", effectiveDate: businessDate(existing.data!.time_zone), required: [], instalments: [] };
     currentFields.current = next; setFields(next); setError("");
     submission.current = { payload: "", key: crypto.randomUUID() };
     setDraftStatus(draftKey && removeBookingDraft(draftKey) ? "discarded" : "error");
@@ -229,7 +232,8 @@ function SelectedBookingForm({ customerId, onSaved, booking, onCancel }: { custo
       const payload = {
         reference, departure_at: departureInstant(departure, existing.data.time_zone),
         amount, effective_date: effectiveDate, required_services: required,
-        instalments: (booking && !instalments.length ? [{ due_date: effectiveDate, amount }] : instalments).map(({ due_date, amount }) => ({ due_date, amount })),
+        ...(instalmentTotal ? { instalment_total: instalmentTotal } : {}),
+        instalments: (booking && !instalments.length ? [{ due_date: effectiveDate, amount: instalmentTotal || amount }] : instalments).map(({ due_date, amount }) => ({ due_date, amount })),
         ...(booking ? { expected_version: booking.version, reason } : {}),
       };
       const signature = JSON.stringify(payload);
@@ -262,9 +266,12 @@ function SelectedBookingForm({ customerId, onSaved, booking, onCancel }: { custo
     </div>
     {booking && <><p className="booking-help">Changing the total posts a reversal and replacement charge. Approved payments stay on the customer’s ledger.</p><label>Reason for change<textarea required maxLength={1000} value={reason} onChange={event => setReason(event.target.value)} /></label></>}
     <fieldset className="booking-services"><legend>Required services</legend><div>{bookingServices.map((service) => <label key={service.key}><input type="checkbox" checked={required.includes(service.key)} onChange={(event) => setRequired((previous) => event.target.checked ? [...previous, service.key] : previous.filter((key) => key !== service.key))} />{service.label}</label>)}</div></fieldset>
-    <fieldset className="booking-instalments"><legend>Instalments (GBP)</legend><small>{instalments.length ? "The instalment total can be up to £5 above or below the booking total. Your booking total stays the same." : "Full amount due on charge date unless scheduled below."}</small>
+    <fieldset className="booking-instalments"><legend>Instalments (GBP)</legend>
+      <label>Instalment calculation total (GBP)<input inputMode="decimal" pattern="[0-9]+([.][0-9]{1,2})?" maxLength={20} value={instalmentTotal} onChange={event => setInstalmentTotal(event.target.value)} placeholder={amount || "Defaults to booking total"} aria-describedby="instalment-total-help" /></label>
+      <small id="instalment-total-help">Used only for the instalment schedule. Leave blank to use the booking total. Scheduled instalments must add up to within £5 above or below this amount. The booking charge stays the same.</small>
+      {!instalments.length && <small>The calculation total is due on the charge date unless scheduled below.</small>}
       {instalments.map((instalment, index) => <div className="booking-instalment-row" key={instalment.key}><label>Due date {index + 1}<input required type="date" value={instalment.due_date} onChange={(event) => setInstalments((rows) => rows.map((row) => row.key === instalment.key ? { ...row, due_date: event.target.value } : row))} /></label><label>Amount (GBP)<input required inputMode="decimal" pattern="[0-9]+([.][0-9]{1,2})?" maxLength={20} value={instalment.amount} onChange={(event) => setInstalments((rows) => rows.map((row) => row.key === instalment.key ? { ...row, amount: event.target.value } : row))} /></label><button type="button" className="icon-button" aria-label={`Remove instalment ${index + 1}`} onClick={() => setInstalments((rows) => rows.filter((row) => row.key !== instalment.key))}><X size={17} /></button></div>)}
-      <button type="button" className="text-link" disabled={instalments.length >= 100} onClick={() => setInstalments((rows) => [...rows, { key: crypto.randomUUID(), due_date: effectiveDate, amount: rows.length ? "" : amount }])}><Plus size={15} />Add instalment</button>
+      <button type="button" className="text-link" disabled={instalments.length >= 100} onClick={() => setInstalments((rows) => [...rows, { key: crypto.randomUUID(), due_date: effectiveDate, amount: rows.length ? "" : instalmentTotal || amount }])}><Plus size={15} />Add instalment</button>
     </fieldset>
     <div className="form-actions">{onCancel ? <button type="button" className="button secondary" disabled={busy} onClick={onCancel}>Discard changes</button> : <Link className="button secondary" to={`/o/${member.organization_id}/users/${customerId}`}>Cancel</Link>}<button className="button" disabled={busy || member.currency !== "GBP" || account.data.status !== "active"}>{busy ? "Saving…" : booking ? "Save booking" : "Create booking"}</button></div>
   </form></section>;

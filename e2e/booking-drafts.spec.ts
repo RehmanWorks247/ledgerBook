@@ -33,6 +33,7 @@ test('booking drafts survive refresh and navigation, keep the customer, and clea
   await page.getByRole('option').filter({ hasText: account.customer_code }).click();
   await expect(page).toHaveURL(createPath(draftCustomerId));
   await fillBooking(page, 'REFRESH-DRAFT');
+  await page.getByLabel('Instalment calculation total (GBP)', { exact: true }).fill('600.00');
   await page.getByRole('checkbox', { name: 'Flight Tickets', exact: true }).check();
   await page.getByRole('checkbox', { name: 'Makkah Hotel', exact: true }).check();
   await page.getByRole('button', { name: 'Add instalment', exact: true }).click();
@@ -46,6 +47,7 @@ test('booking drafts survive refresh and navigation, keep the customer, and clea
   await expect(page.getByLabel('Booking reference', { exact: true })).toHaveValue('REFRESH-DRAFT');
   await expect(page.getByLabel(/^Departure \(/)).toHaveValue('2026-12-20T10:30');
   await expect(page.getByLabel('Booking total (GBP)', { exact: true })).toHaveValue('500.00');
+  await expect(page.getByLabel('Instalment calculation total (GBP)', { exact: true })).toHaveValue('600.00');
   await expect(page.getByLabel('Charge effective date')).toHaveValue('2026-11-09');
   await expect(page.getByRole('checkbox', { name: 'Flight Tickets', exact: true })).toBeChecked();
   await expect(page.getByRole('checkbox', { name: 'Makkah Hotel', exact: true })).toBeChecked();
@@ -55,6 +57,7 @@ test('booking drafts survive refresh and navigation, keep the customer, and clea
   await expect(page.getByLabel('Amount (GBP)', { exact: true }).nth(1)).toHaveValue('245.00');
   await page.goto(createPath(seed.secondCustomerId));
   await expect(page.getByLabel('Booking reference', { exact: true })).toHaveValue('');
+  await expect(page.getByLabel('Instalment calculation total (GBP)', { exact: true })).toHaveValue('');
   await expect(page.getByLabel('Amount (GBP)', { exact: true })).toHaveCount(0);
   await page.goto(createPath(draftCustomerId));
   await expect(page.getByLabel('Booking reference', { exact: true })).toHaveValue('REFRESH-DRAFT');

@@ -1,7 +1,7 @@
 import { bookingServices } from './booking-model';
 
 export type BookingDraftFields = {
-  reference: string; departure: string; amount: string; effectiveDate: string;
+  reference: string; departure: string; amount: string; instalmentTotal: string; effectiveDate: string;
   required: string[]; instalments: { key: string; due_date: string; amount: string }[];
 };
 export type BookingDraft = {
@@ -24,12 +24,13 @@ export function readBookingDraft(key: string, storage?: DraftStorage): BookingDr
     const fields = draft?.fields, submission = draft?.submission;
     if (draft?.version !== 1 || !fields || !submission ||
       !text(fields.reference, 160) || !text(fields.departure, 32) || !text(fields.amount, 20) || !text(fields.effectiveDate, 10) ||
+      (fields.instalmentTotal !== undefined && !text(fields.instalmentTotal, 20)) ||
       !Array.isArray(fields.required) || fields.required.length > 6 ||
       !fields.required.every((key: unknown) => bookingServices.some(service => service.key === key)) ||
       !Array.isArray(fields.instalments) || fields.instalments.length > 100 ||
       !fields.instalments.every((item: BookingDraftFields['instalments'][number]) => item && text(item.key, 36) && uuid.test(item.key) && text(item.due_date, 10) && text(item.amount, 20)) ||
       !text(submission.payload, 50_000) || !text(submission.key, 36) || !uuid.test(submission.key)) return null;
-    return { fields, submission };
+    return { fields: { ...fields, instalmentTotal: fields.instalmentTotal ?? '' }, submission };
   } catch { return null; }
 }
 
