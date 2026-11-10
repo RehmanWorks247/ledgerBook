@@ -3,26 +3,19 @@ import {
   useEffect,
   useState,
   type FormEvent,
-  type ReactNode,
 } from "react";
 import { useClerk, useSignIn, useSignUp, useUser } from "@clerk/react";
 import { Link, Navigate, useNavigate } from "../router";
 import {
-  ArrowDownLeft,
   ArrowRight,
-  ArrowUpRight,
-  BookOpen,
-  Check,
-  FileText,
   Mail,
-  ShieldCheck,
 } from "lucide-react";
 import { errorMessage, hasErrorCode, mutate } from "../api";
 import { AuthContext } from "../state";
 import { invitationLink, invitationUrl, clearInvitation } from "../invitation";
-import { Brand, ErrorNotice, Loading } from "../components";
-
-import { ThemeToggle } from "../theme";
+import { ErrorNotice, Loading } from "../components";
+import { AuthFrame } from "../branding/AuthFrame";
+import { PASSWORD_HINT, PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH } from "../password-policy";
 
 function PasswordField({
   value,
@@ -44,13 +37,13 @@ function PasswordField({
         autoComplete={newPassword ? "new-password" : "current-password"}
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        minLength={newPassword ? 15 : undefined}
-        maxLength={128}
+        minLength={newPassword ? PASSWORD_MIN_LENGTH : undefined}
+        maxLength={PASSWORD_MAX_LENGTH}
         required
       />
       {newPassword && !confirm && (
         <small>
-          Use at least 15 characters. A long, unique passphrase works well.
+          {PASSWORD_HINT}
         </small>
       )}
     </label>
@@ -81,60 +74,6 @@ function CodeField({
 async function checked(result: Promise<{ error: unknown }>) {
   const { error } = await result;
   if (error) throw error;
-}
-function AuthFrame({ children }: { children: ReactNode }) {
-  return (
-    <main className="auth-layout">
-      <aside className="auth-story">
-        <Brand light />
-        <div>
-          <span className="eyebrow">BUSINESS, IN BALANCE</span>
-          <h1>
-            A clear view.
-            <br />A confident next step.
-          </h1>
-          <p>
-            Your customer accounts, payments, and statements. Together in one
-            dependable place.
-          </p>
-          <div className="auth-illustration" aria-hidden="true">
-            <div className="illustration-header">
-              <BookOpen />
-              <span>A better way to keep track</span>
-              <Check size={18} />
-            </div>
-            <div className="illustration-line long" />
-            <div className="illustration-line" />
-            <div className="illustration-grid">
-              <div>
-                <ArrowUpRight />
-                <span>Charges</span>
-              </div>
-              <div>
-                <ArrowDownLeft />
-                <span>Payments</span>
-              </div>
-              <div>
-                <FileText />
-                <span>Statements</span>
-              </div>
-            </div>
-          </div>
-        </div>
-        <span className="auth-foot">
-          <ShieldCheck size={16} /> Private accounts. Clear records.
-        </span>
-      </aside>
-      <section className="auth-main">
-        <div className="auth-theme"><ThemeToggle /></div>
-        <div className="mobile-brand">
-          <Brand />
-        </div>
-        <div className="auth-card">{children}</div>
-        <p className="auth-bottom">LedgerBook · Built for everyday business</p>
-      </section>
-    </main>
-  );
 }
 export function AuthPage({ mode }: { mode: "login" | "forgot" | "reset" }) {
   const { refresh } = useContext(AuthContext);
@@ -315,7 +254,7 @@ export function AuthPage({ mode }: { mode: "login" | "forgot" | "reset" }) {
           ? "Choose a new password"
           : reset
             ? "Reset your password"
-            : "Welcome back";
+            : "Sign in";
   const description =
     step === "mfa"
       ? factor === "totp"
@@ -326,13 +265,12 @@ export function AuthPage({ mode }: { mode: "login" | "forgot" | "reset" }) {
       : step === "code"
         ? `If an account exists for ${email}, a password reset code has been sent. Enter it below, and check your spam folder too.`
         : step === "password"
-          ? "Choose a secure password. Your other sessions will be signed out."
+          ? "Choose a new password. Your other sessions will be signed out."
           : reset
             ? "Enter your account email. We’ll send you a secure verification code to reset your password."
-            : "Sign in to pick up where you left off.";
+            : "Enter your email and password.";
   return (
     <AuthFrame>
-      <span className="eyebrow">YOUR LEDGERBOOK ACCOUNT</span>
       <h1>{title}</h1>
       <p className="muted">{description}</p>
       <ErrorNotice message={error} />
@@ -428,8 +366,7 @@ export function AuthPage({ mode }: { mode: "login" | "forgot" | "reset" }) {
       </form>
       {!reset && step === "email" && (
         <p className="auth-help">
-          New here? Open the invitation email from your business to set up your
-          account.
+          To create an account, use the invitation email from your business.
         </p>
       )}
     </AuthFrame>
@@ -564,13 +501,12 @@ export function InvitationPage() {
   const invalid = info && info.status !== "valid";
   return (
     <AuthFrame>
-      <span className="eyebrow">YOU’RE INVITED</span>
       <h1>
         {invalid
           ? "Invitation unavailable"
           : info?.name
             ? `Welcome, ${info.name}`
-            : "Your account starts here"}
+            : "Accept invitation"}
       </h1>
       <ErrorNotice message={error} />
       {(!info || !isLoaded) && !error && <Loading />}
@@ -630,7 +566,7 @@ export function InvitationPage() {
           ) : info.existingUser && !user ? (
             <>
               <p>
-                Your email already has a LedgerBook account. Sign in with your
+                Your email already has an account. Sign in with your
                 existing password to accept this invitation.
               </p>
               <Link to={invitationUrl("/login")} className="button">

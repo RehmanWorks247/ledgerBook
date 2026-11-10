@@ -33,11 +33,15 @@ export class AccessService {
     const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
     if (!uuid.test(userId) || !uuid.test(orgId)) throw new NotFoundException('Organization access is unavailable.');
     const source: Pick<DatabaseService, 'query'> = client ?? this.db;
+    // Account disable/deletion locks the organization before memberships. A
+    // joined FOR SHARE OF m,o can lock m first and deadlock with those writes.
+    // Acquire the organization separately so all transactional readers agree.
+    if (client) await client.query('SELECT id FROM organizations WHERE id=$1 AND deleted_at IS NULL FOR SHARE', [orgId]);
     const result = await source.query<Membership>(
       `SELECT m.*, o.name AS organization_name, o.currency, o.currency_exponent
        FROM memberships m JOIN organizations o ON o.id = m.organization_id
-       WHERE m.user_id = $1 AND m.organization_id = $2 AND m.is_active = true AND m.deleted_at IS NULL
-       ${client ? 'FOR SHARE OF m, o' : ''}`,
+       WHERE m.user_id = $1 AND m.organization_id = $2 AND m.is_active = true AND m.deleted_at IS NULL AND o.deleted_at IS NULL
+       ${client ? 'FOR SHARE OF m' : ''}`,
       [userId, orgId],
     );
     const member = result.rows[0];

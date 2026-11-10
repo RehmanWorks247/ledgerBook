@@ -1,0 +1,800 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "LedgerBook standalone companies",
+    "version": "1.0.0",
+    "description": "One manually maintained row per company within a workspace. All money fields are independent; customer and hotel names are free text. No customer, booking, payment, invoice, reminder or ledger records are created. Optional text defaults to empty strings; dates and amounts default to null."
+  },
+  "servers": [
+    {
+      "url": "http://127.0.0.1:3000/api",
+      "description": "Replace with the configured application API origin."
+    }
+  ],
+  "security": [
+    {
+      "sessionCookie": []
+    },
+    {
+      "clerkBearer": []
+    }
+  ],
+  "paths": {
+    "/organizations/{orgId}/companies": {
+      "parameters": [
+        {
+          "name": "orgId",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "listCompanies",
+        "summary": "List standalone companies",
+        "description": "Administrator only. Literal case-insensitive substring search across company/hotel/customer names, room type, voucher number and remarks. Dates are inclusive; null dates are excluded when a bound is set. Results sort by creation time descending and ID descending. Count and items are from one database snapshot. Limited to 240 requests per minute per user.",
+        "responses": {
+          "200": {
+            "description": "Successful result.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompanyPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input, unknown field, unsupported precision, reversed stay dates or malformed date filter."
+          },
+          "401": {
+            "description": "Authentication required."
+          },
+          "403": {
+            "description": "Administrator access or valid CSRF headers required."
+          },
+          "404": {
+            "description": "Workspace access is unavailable or company not found in this workspace."
+          },
+          "409": {
+            "description": "Stale version, changed idempotency input, or retry after deletion."
+          },
+          "429": {
+            "description": "Rate limit exceeded; retry after the Retry-After header."
+          }
+        },
+        "parameters": [
+          {
+            "name": "search",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 200,
+              "default": ""
+            },
+            "description": ""
+          },
+          {
+            "name": "date_field",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "booking_date",
+                "check_in",
+                "check_out"
+              ],
+              "default": "booking_date"
+            },
+            "description": ""
+          },
+          {
+            "name": "start",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date"
+            },
+            "description": "Inclusive lower date boundary, on or before end."
+          },
+          {
+            "name": "end",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date"
+            },
+            "description": "Inclusive upper date boundary."
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000000,
+              "default": 1
+            },
+            "description": ""
+          },
+          {
+            "name": "page_size",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 25
+            },
+            "description": ""
+          }
+        ]
+      },
+      "post": {
+        "operationId": "createCompany",
+        "summary": "Add a company manually",
+        "description": "Administrator only. A workspace-scoped UUID key retries the original committed result, including after edits. Different input or a deleted company with the same key returns 409. All writes share a limit of 240 per hour per user.",
+        "parameters": [
+          {
+            "name": "X-CSRF-Protection",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "const": "1"
+            }
+          },
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uri"
+            },
+            "description": "Must match the configured application origin."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateCompany"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful result.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Company"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input, unknown field, unsupported precision, reversed stay dates or malformed date filter."
+          },
+          "401": {
+            "description": "Authentication required."
+          },
+          "403": {
+            "description": "Administrator access or valid CSRF headers required."
+          },
+          "404": {
+            "description": "Workspace access is unavailable or company not found in this workspace."
+          },
+          "409": {
+            "description": "Stale version, changed idempotency input, or retry after deletion."
+          },
+          "429": {
+            "description": "Rate limit exceeded; retry after the Retry-After header."
+          }
+        }
+      }
+    },
+    "/organizations/{orgId}/companies/{id}": {
+      "parameters": [
+        {
+          "name": "orgId",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      ],
+      "patch": {
+        "operationId": "updateCompany",
+        "summary": "Edit entered company fields",
+        "description": "Administrator only. Send at least one field and the current version. Omitted fields are preserved; null clears dates or money. A changed row increments version; an identical edit keeps it. No money field is calculated from another. All writes share a limit of 240 per hour per user.",
+        "parameters": [
+          {
+            "name": "X-CSRF-Protection",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "const": "1"
+            }
+          },
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uri"
+            },
+            "description": "Must match the configured application origin."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateCompany"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful result.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Company"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input, unknown field, unsupported precision, reversed stay dates or malformed date filter."
+          },
+          "401": {
+            "description": "Authentication required."
+          },
+          "403": {
+            "description": "Administrator access or valid CSRF headers required."
+          },
+          "404": {
+            "description": "Workspace access is unavailable or company not found in this workspace."
+          },
+          "409": {
+            "description": "Stale version, changed idempotency input, or retry after deletion."
+          },
+          "429": {
+            "description": "Rate limit exceeded; retry after the Retry-After header."
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteCompany",
+        "summary": "Delete a company",
+        "description": "Administrator only. Requires current version. Deletes the row and clears its stored creation snapshot, retaining an opaque request receipt so delayed creation retries cannot recreate it. Workspace deletion removes receipts as well. All writes share a limit of 240 per hour per user.",
+        "parameters": [
+          {
+            "name": "X-CSRF-Protection",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "const": "1"
+            }
+          },
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uri"
+            },
+            "description": "Must match the configured application origin."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeleteCompany"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful result.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeletedCompany"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input, unknown field, unsupported precision, reversed stay dates or malformed date filter."
+          },
+          "401": {
+            "description": "Authentication required."
+          },
+          "403": {
+            "description": "Administrator access or valid CSRF headers required."
+          },
+          "404": {
+            "description": "Workspace access is unavailable or company not found in this workspace."
+          },
+          "409": {
+            "description": "Stale version, changed idempotency input, or retry after deletion."
+          },
+          "429": {
+            "description": "Rate limit exceeded; retry after the Retry-After header."
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "sessionCookie": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "ledgerbook_session",
+        "description": "Local authentication cookie; production uses __Host-ledgerbook."
+      },
+      "clerkBearer": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT"
+      }
+    },
+    "schemas": {
+      "Company": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "organization_id",
+          "company_name",
+          "hotel_name",
+          "customer_name",
+          "check_in",
+          "check_out",
+          "room_type",
+          "booking_date",
+          "voucher_number",
+          "remarks",
+          "voucher_price_minor",
+          "paid_minor",
+          "unpaid_minor",
+          "balance_minor",
+          "version",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "organization_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "company_name": {
+            "type": "string",
+            "maxLength": 200,
+            "description": "Trimmed; null characters are rejected.",
+            "minLength": 1
+          },
+          "hotel_name": {
+            "type": "string",
+            "maxLength": 200,
+            "description": "Trimmed; null characters are rejected."
+          },
+          "customer_name": {
+            "type": "string",
+            "maxLength": 200,
+            "description": "Trimmed; null characters are rejected."
+          },
+          "check_in": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date",
+            "description": "Calendar date from 1900-01-01 through 9999-12-31, or null."
+          },
+          "check_out": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date",
+            "description": "Must be on or after check_in when both are set."
+          },
+          "room_type": {
+            "type": "string",
+            "maxLength": 200,
+            "description": "Trimmed; null characters are rejected."
+          },
+          "booking_date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date",
+            "description": "Calendar date from 1900-01-01 through 9999-12-31, or null."
+          },
+          "voucher_number": {
+            "type": "string",
+            "maxLength": 100,
+            "description": "Trimmed; null characters are rejected."
+          },
+          "remarks": {
+            "type": "string",
+            "maxLength": 2000,
+            "description": "Trimmed; null characters are rejected."
+          },
+          "voucher_price_minor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "pattern": "^\\d+$",
+            "description": "Exact manually entered minor units; never derived from other fields."
+          },
+          "paid_minor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "pattern": "^\\d+$",
+            "description": "Exact manually entered minor units; never derived from other fields."
+          },
+          "unpaid_minor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "pattern": "^\\d+$",
+            "description": "Exact manually entered minor units; never derived from other fields."
+          },
+          "balance_minor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "pattern": "^-?\\d+$",
+            "description": "Exact manually entered minor units; never derived from other fields."
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "CreateCompany": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "company_name",
+          "idempotency_key"
+        ],
+        "properties": {
+          "company_name": {
+            "type": "string",
+            "maxLength": 200,
+            "description": "Trimmed; null characters are rejected.",
+            "minLength": 1
+          },
+          "hotel_name": {
+            "type": "string",
+            "maxLength": 200,
+            "description": "Trimmed; null characters are rejected."
+          },
+          "customer_name": {
+            "type": "string",
+            "maxLength": 200,
+            "description": "Trimmed; null characters are rejected."
+          },
+          "check_in": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date",
+            "description": "Calendar date from 1900-01-01 through 9999-12-31, or null."
+          },
+          "check_out": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date",
+            "description": "Must be on or after check_in when both are set."
+          },
+          "room_type": {
+            "type": "string",
+            "maxLength": 200,
+            "description": "Trimmed; null characters are rejected."
+          },
+          "booking_date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date",
+            "description": "Calendar date from 1900-01-01 through 9999-12-31, or null."
+          },
+          "voucher_number": {
+            "type": "string",
+            "maxLength": 100,
+            "description": "Trimmed; null characters are rejected."
+          },
+          "voucher_price": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 24,
+            "pattern": "^\\d{1,18}(?:\\.\\d{1,3})?$",
+            "description": "Decimal text in workspace currency, or null. Precision follows currency_exponent. Maximum 100000000000000 minor units; zero is allowed."
+          },
+          "paid": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 24,
+            "pattern": "^\\d{1,18}(?:\\.\\d{1,3})?$",
+            "description": "Decimal text in workspace currency, or null. Precision follows currency_exponent. Maximum 100000000000000 minor units; zero is allowed."
+          },
+          "unpaid": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 24,
+            "pattern": "^\\d{1,18}(?:\\.\\d{1,3})?$",
+            "description": "Decimal text in workspace currency, or null. Precision follows currency_exponent. Maximum 100000000000000 minor units; zero is allowed."
+          },
+          "balance": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 24,
+            "pattern": "^-?\\d{1,18}(?:\\.\\d{1,3})?$",
+            "description": "Decimal text in workspace currency, or null. Precision follows currency_exponent. Maximum 100000000000000 minor units; zero is allowed. Negative balances are allowed."
+          },
+          "remarks": {
+            "type": "string",
+            "maxLength": 2000,
+            "description": "Trimmed; null characters are rejected."
+          },
+          "idempotency_key": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "UpdateCompany": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "expected_version"
+        ],
+        "minProperties": 2,
+        "properties": {
+          "company_name": {
+            "type": "string",
+            "maxLength": 200,
+            "description": "Trimmed; null characters are rejected.",
+            "minLength": 1
+          },
+          "hotel_name": {
+            "type": "string",
+            "maxLength": 200,
+            "description": "Trimmed; null characters are rejected."
+          },
+          "customer_name": {
+            "type": "string",
+            "maxLength": 200,
+            "description": "Trimmed; null characters are rejected."
+          },
+          "check_in": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date",
+            "description": "Calendar date from 1900-01-01 through 9999-12-31, or null."
+          },
+          "check_out": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date",
+            "description": "Must be on or after check_in when both are set."
+          },
+          "room_type": {
+            "type": "string",
+            "maxLength": 200,
+            "description": "Trimmed; null characters are rejected."
+          },
+          "booking_date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date",
+            "description": "Calendar date from 1900-01-01 through 9999-12-31, or null."
+          },
+          "voucher_number": {
+            "type": "string",
+            "maxLength": 100,
+            "description": "Trimmed; null characters are rejected."
+          },
+          "voucher_price": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 24,
+            "pattern": "^\\d{1,18}(?:\\.\\d{1,3})?$",
+            "description": "Decimal text in workspace currency, or null. Precision follows currency_exponent. Maximum 100000000000000 minor units; zero is allowed."
+          },
+          "paid": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 24,
+            "pattern": "^\\d{1,18}(?:\\.\\d{1,3})?$",
+            "description": "Decimal text in workspace currency, or null. Precision follows currency_exponent. Maximum 100000000000000 minor units; zero is allowed."
+          },
+          "unpaid": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 24,
+            "pattern": "^\\d{1,18}(?:\\.\\d{1,3})?$",
+            "description": "Decimal text in workspace currency, or null. Precision follows currency_exponent. Maximum 100000000000000 minor units; zero is allowed."
+          },
+          "balance": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 24,
+            "pattern": "^-?\\d{1,18}(?:\\.\\d{1,3})?$",
+            "description": "Decimal text in workspace currency, or null. Precision follows currency_exponent. Maximum 100000000000000 minor units; zero is allowed. Negative balances are allowed."
+          },
+          "remarks": {
+            "type": "string",
+            "maxLength": 2000,
+            "description": "Trimmed; null characters are rejected."
+          },
+          "expected_version": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2147483646
+          }
+        }
+      },
+      "DeleteCompany": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "expected_version"
+        ],
+        "properties": {
+          "expected_version": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2147483646
+          }
+        }
+      },
+      "CompanyPage": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "items",
+          "total",
+          "page",
+          "page_size",
+          "currency",
+          "currency_exponent"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Company"
+            }
+          },
+          "total": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "page": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "page_size": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
+          },
+          "currency": {
+            "type": "string"
+          },
+          "currency_exponent": {
+            "type": "integer",
+            "enum": [
+              0,
+              2,
+              3
+            ]
+          }
+        }
+      },
+      "DeletedCompany": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "deleted"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "deleted": {
+            "const": true
+          }
+        }
+      }
+    }
+  }
+}

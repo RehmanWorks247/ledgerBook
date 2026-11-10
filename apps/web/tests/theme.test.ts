@@ -62,9 +62,9 @@ test("theme follows the system until a user chooses, then persists across reload
   const store = createThemeStore(env.browser);
   let updates = 0;
   const stop = store.subscribe(() => updates++);
-  assert.deepEqual(store.getSnapshot(), { theme: "dark", preference: "system", accent: "green" });
+  assert.deepEqual(store.getSnapshot(), { theme: "dark", preference: "system", accent: "gold" });
   assert.equal(env.root.dataset.theme, "dark");
-  assert.equal(env.root.dataset.accent, "green");
+  assert.equal(env.root.dataset.accent, "gold");
   assert.equal(env.root.style.colorScheme, "dark");
   assert.equal(env.meta.content, "#0a0a0a");
 
@@ -72,7 +72,7 @@ test("theme follows the system until a user chooses, then persists across reload
   assert.equal(store.getSnapshot().theme, "light");
   assert.equal(updates, 1);
   store.toggle();
-  assert.deepEqual(store.getSnapshot(), { theme: "dark", preference: "dark", accent: "green" });
+  assert.deepEqual(store.getSnapshot(), { theme: "dark", preference: "dark", accent: "gold" });
   assert.equal(env.stored, "dark");
   env.systemDark(true);
   env.systemDark(false);
@@ -80,18 +80,18 @@ test("theme follows the system until a user chooses, then persists across reload
   assert.deepEqual(createThemeStore(env.browser).getSnapshot(), store.getSnapshot(), "reload restores the choice");
   store.setPreference("system");
   assert.equal(env.stored, null, "system mode removes the explicit mode preference");
-  assert.deepEqual(store.getSnapshot(), { theme: "light", preference: "system", accent: "green" });
+  assert.deepEqual(store.getSnapshot(), { theme: "light", preference: "system", accent: "gold" });
   env.systemDark(true);
   assert.equal(store.getSnapshot().theme, "dark");
   stop();
 });
 
-test("accent and mode are independently persisted and existing users receive the green default", () => {
+test("accent and mode are independently persisted and unset preferences receive the gold default", () => {
   const env = fixture({ saved: "dark" });
   const store = createThemeStore(env.browser);
   const stop = store.subscribe(() => {});
-  assert.deepEqual(store.getSnapshot(), { theme: "dark", preference: "dark", accent: "green" });
-  const accents: AccentTheme[] = ["green", "blue", "violet", "amber", "rose", "neutral"];
+  assert.deepEqual(store.getSnapshot(), { theme: "dark", preference: "dark", accent: "gold" });
+  const accents: AccentTheme[] = ["gold", "green", "blue", "violet", "amber", "rose", "neutral"];
   for (const accent of accents) {
     store.setAccent(accent);
     assert.equal(env.storedAccent, accent);
@@ -121,10 +121,10 @@ test("mode and accent sync across tabs, and clearing preferences restores the de
   env.storage(null);
   assert.deepEqual(store.getSnapshot(), { theme: "dark", preference: "system", accent: "rose" });
   env.storage(null, ACCENT_STORAGE_KEY);
-  assert.equal(store.getSnapshot().accent, "green");
+  assert.equal(store.getSnapshot().accent, "gold");
   env.storage("amber", ACCENT_STORAGE_KEY);
   env.storage(null, null);
-  assert.deepEqual(store.getSnapshot(), { theme: "dark", preference: "system", accent: "green" });
+  assert.deepEqual(store.getSnapshot(), { theme: "dark", preference: "system", accent: "gold" });
   env.systemDark(false);
   assert.equal(store.getSnapshot().theme, "light");
   stop();
@@ -137,7 +137,7 @@ test("mode and accent sync across tabs, and clearing preferences restores the de
 
 test("invalid preferences and blocked storage do not prevent changing mode or accent", () => {
   const invalid = fixture({ saved: "unexpected", savedAccent: "invalid", dark: true });
-  assert.deepEqual(createThemeStore(invalid.browser).getSnapshot(), { theme: "dark", preference: "system", accent: "green" });
+  assert.deepEqual(createThemeStore(invalid.browser).getSnapshot(), { theme: "dark", preference: "system", accent: "gold" });
   const env = fixture({ blocked: true });
   const store = createThemeStore(env.browser);
   const stop = store.subscribe(() => {});
@@ -163,7 +163,7 @@ test("snapshot identity changes only when mode, preference, or accent changes", 
   const initial = store.getSnapshot();
   assert.strictEqual(store.getSnapshot(), initial);
   assert.strictEqual(store.getServerSnapshot(), store.getServerSnapshot());
-  store.setAccent("green");
+  store.setAccent("gold");
   store.setPreference("system");
   env.systemDark(false);
   assert.strictEqual(store.getSnapshot(), initial);
@@ -177,9 +177,9 @@ test("snapshot identity changes only when mode, preference, or accent changes", 
   env.storage("violet", ACCENT_STORAGE_KEY);
   assert.equal(updates, 2);
   env.storage("invalid", ACCENT_STORAGE_KEY);
-  assert.equal(store.getSnapshot().accent, "green");
+  assert.equal(store.getSnapshot().accent, "gold");
   env.storage("invalid");
-  assert.deepEqual(store.getSnapshot(), { theme: "dark", preference: "system", accent: "green" });
+  assert.deepEqual(store.getSnapshot(), { theme: "dark", preference: "system", accent: "gold" });
   stop();
 });
 
@@ -191,7 +191,7 @@ test("pre-paint bootstrap and the React store agree on mode and accent", () => {
     { saved: "invalid", dark: true },
     { dark: false },
     { dark: true, blocked: true },
-    ...["green", "blue", "violet", "amber", "rose", "neutral", "invalid"].flatMap((savedAccent) => [
+    ...["gold", "green", "blue", "violet", "amber", "rose", "neutral", "invalid"].flatMap((savedAccent) => [
       { saved: "light", savedAccent, dark: true },
       { saved: "dark", savedAccent, dark: false },
       { saved: "system", savedAccent, dark: true },

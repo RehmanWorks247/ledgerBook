@@ -65,6 +65,8 @@ describe(`ledger integrity (${integrationBackend})`, () => {
     assert.equal((await ledger.post(seed.admin, id, reversalInput)).id, reversal.id);
     const statement = await ledger.statement(seed.admin, id);
     assert.equal(statement.current_balance_minor, '5000');
+    assert.equal(statement.total_amount_minor, '10000');
+    assert.equal(statement.total_paid_minor, '5000');
     assert.deepEqual(statement.entries.map((row) => row.running_balance_minor), ['10000', '12550', '7550', '5000']);
     assert.deepEqual(statement.entries.map((row) => row.id), [opening.id, charge.id, payment.id, reversal.id]);
     assert.equal(statement.entries.find((row) => row.id === charge.id)?.reversed_by, reversal.id);
@@ -86,9 +88,13 @@ describe(`ledger integrity (${integrationBackend})`, () => {
     assert.equal(filtered.opening_balance_minor, '7000');
     assert.equal(filtered.closing_balance_minor, '9500');
     assert.equal(filtered.current_balance_minor, '9500');
+    assert.equal(filtered.total_amount_minor, '12500');
+    assert.equal(filtered.total_paid_minor, '3000');
     const secondPage = await ledger.statement(seed.admin, id, { page: 2, page_size: 1 });
     assert.equal(secondPage.entries[0].id, backdated.id);
     assert.equal(secondPage.entries[0].running_balance_minor, '7000');
+    assert.equal(secondPage.total_amount_minor, '12500');
+    assert.equal(secondPage.total_paid_minor, '3000');
   });
 
   it('isolates tenants and limits customers even when a caller supplies a forged role', async () => {

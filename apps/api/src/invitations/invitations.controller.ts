@@ -2,13 +2,14 @@ import { Body, Controller, HttpCode, Inject, Post, Req, Res } from '@nestjs/comm
 import type { Request, Response } from 'express';
 import { z } from 'zod';
 import { AuthService } from '../auth/auth.service';
+import { passwordSchema } from '../auth/password-policy';
 import { parseBody } from '../auth/auth.controller';
 import { RateLimitService } from '../auth/rate-limit.service';
 import { sessionToken, setSessionCookie } from '../auth/session.guard';
 import { InvitationService } from './invitation.service';
 
 const inspectSchema = z.object({ token: z.string().regex(/^[A-Za-z0-9_-]{43}$/, 'This invitation link is invalid. Ask your administrator for a new invitation.') }).strict();
-const acceptSchema = inspectSchema.extend({ password: z.string().min(12, 'Use at least 12 characters for your password.').max(128).optional() });
+const acceptSchema = inspectSchema.extend({ password: passwordSchema.optional() });
 
 @Controller('auth/invitations')
 export class InvitationsController {

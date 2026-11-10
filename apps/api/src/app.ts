@@ -22,16 +22,32 @@ import { config } from './config';
 import { CurrencyController } from './currency/currency.controller';
 import { CurrencyService } from './currency/currency.service';
 import { RatesService } from './currency/rates.service';
+import { BookingManagementService } from './bookings/booking-management.service';
+import { BookingManagementController } from './bookings/booking-management.controller';
+import { DocumentVersionsService } from './bookings/document-versions.service';
+import { DocumentVersionsController } from './bookings/document-versions.controller';
+import { ReminderService } from './notifications/reminder.service';
+import { NotificationSettingsController, ReminderPreferencesController } from './notifications/notification-settings.controller';
+import { EmailDeliveryService, ResendWebhookController, resendWebhookVerifier, type VerifiedWebhookRequest } from './notifications/email-delivery.service';
 import { BookingsController } from './bookings/bookings.controller';
 import { BookingsService } from './bookings/bookings.service';
 import { DocumentStorage } from './bookings/document-storage';
+import { DocumentCleanupWorker } from './bookings/document-cleanup.worker';
 import { DocumentUploadInterceptor } from './bookings/document-upload.interceptor';
 import { DocumentDownloadInterceptor } from './bookings/document-download.interceptor';
+import { DocumentPreviewService } from './bookings/document-preview';
+import { DocumentPreviewController } from './bookings/document-preview.controller';
 import { DashboardService } from './dashboard/dashboard.service';
 import { PaymentsService } from './payments/payments.service';
 import { PaymentsController, PaymentReviewController, PaymentUploadGuard } from './payments/payments.controller';
 import { PaymentEmailOutbox } from './payments/email-outbox.service';
 import { PaymentEmailStatusController } from './payments/email-status.controller';
+import { OrganizationsController } from './organizations/organizations.controller';
+import { OrganizationsService } from './organizations/organizations.service';
+import { InvoicesService } from './invoices/invoices.service';
+import { InvoicesController } from './invoices/invoices.controller';
+import { CompaniesController } from './companies/companies.controller';
+import { CompaniesService } from './companies/companies.service';
 
 @Controller()
 class HealthController {
@@ -62,11 +78,12 @@ class SafeExceptionFilter implements ExceptionFilter {
   }
 }
 
-export async function createApp(options:{database?:DatabaseService;logger?:false;paymentEmails?:boolean}={}) {
+export async function createApp(options:{database?:DatabaseService;documentStorage?:DocumentStorage;logger?:false;paymentEmails?:boolean;reminderEmails?:boolean}={}) {
   @Module({imports:[DatabaseModule.forRoot(options.database),AuthModule,InvitationsModule],
-    controllers:[HealthController,CustomersController,UsersController,CurrencyController,BookingsController,PaymentsController,PaymentReviewController,PaymentEmailStatusController],
-    providers:[AccessService,LedgerService,CustomersService,UsersService,AccountDeletionService,CurrencyService,RatesService,BookingsService,DocumentStorage,DocumentUploadInterceptor,DocumentDownloadInterceptor,DashboardService,
-      PaymentsService,PaymentUploadGuard,PaymentEmailOutbox,{provide:'PAYMENT_EMAIL_WORKER_ENABLED',useValue:options.paymentEmails ?? true}]})
+    controllers:[HealthController,OrganizationsController,CompaniesController,CustomersController,UsersController,CurrencyController,BookingsController,BookingManagementController,InvoicesController,DocumentVersionsController,DocumentPreviewController,ResendWebhookController,NotificationSettingsController,ReminderPreferencesController,PaymentsController,PaymentReviewController,PaymentEmailStatusController],
+    providers:[AccessService,OrganizationsService,CompaniesService,LedgerService,CustomersService,UsersService,AccountDeletionService,CurrencyService,RatesService,BookingsService,BookingManagementService,DocumentVersionsService,EmailDeliveryService,ReminderService,
+      options.documentStorage ? {provide:DocumentStorage,useValue:options.documentStorage} : DocumentStorage,DocumentCleanupWorker,DocumentUploadInterceptor,DocumentDownloadInterceptor,DocumentPreviewService,DashboardService,
+      InvoicesService,PaymentsService,PaymentUploadGuard,PaymentEmailOutbox,{provide:'PAYMENT_EMAIL_WORKER_ENABLED',useValue:options.paymentEmails ?? true},{provide:'REMINDER_WORKER_ENABLED',useValue:options.reminderEmails ?? options.paymentEmails ?? true}]})
   class ApplicationModule {}
   const app=await NestFactory.create<NestExpressApplication>(ApplicationModule,{
     logger:options.logger===false?false:['error','warn','log'],bodyParser:false,abortOnError:false,
@@ -85,8 +102,10 @@ export async function createApp(options:{database?:DatabaseService;logger?:false
       defaultSrc: ["'self'"],
       scriptSrc: ["'self'", ...clerkOrigins, ...challengeOrigins],
       connectSrc: ["'self'", ...clerkOrigins, ...challengeOrigins,
+        ...(app.get(DocumentStorage).uploadOrigin ? [app.get(DocumentStorage).uploadOrigin!] : []),
         ...(config.authProvider === 'clerk' ? ['https://clerk-telemetry.com','https://*.clerk-telemetry.com'] : [])],
       imgSrc: ["'self'", 'data:', 'blob:', 'https://img.clerk.com'],
+      mediaSrc: ["'self'", 'blob:'],
       styleSrc: ["'self'", "'unsafe-inline'"],
       frameSrc: config.authProvider === 'clerk' ? [...clerkOrigins, ...challengeOrigins] : ["'none'"],
       workerSrc: ["'self'", 'blob:'],
@@ -94,10 +113,11 @@ export async function createApp(options:{database?:DatabaseService;logger?:false
       upgradeInsecureRequests: config.production ? [] : null,
     } },
   }));
+  app.use('/api/webhooks/resend',express.raw({type:'application/json',limit:'64kb',inflate:false}),resendWebhookVerifier());
   app.use((req:Request,res:Response,next:NextFunction)=>{
     if(req.path.startsWith('/api')) {
       res.setHeader('Cache-Control','no-store');
-      if(!['GET','HEAD','OPTIONS'].includes(req.method)) {
+      if(!['GET','HEAD','OPTIONS'].includes(req.method) && !(req as VerifiedWebhookRequest).verifiedResendWebhook) {
         if(req.headers.origin!==config.appUrl || req.headers['x-csrf-protection']!=='1') {
           res.status(403).json({statusCode:403,message:'Request origin verification failed. Refresh the application and try again.'});return;
         }

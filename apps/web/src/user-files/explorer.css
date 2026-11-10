@@ -136,9 +136,6 @@
   border-radius: inherit;
   padding: 18px;
 }
-.ufe-folder:has(+ .ufe-move) {
-  padding-right: 38px;
-}
 .ufe-folder-art {
   /* A little warmth stays inside the folder illustration. */
   --folder-back: #c38a35;
@@ -209,11 +206,8 @@
   color: var(--muted);
   border-radius: 5px;
 }
-.ufe-folders .ufe-move {
-  position: absolute;
-  right: 7px;
-  top: 7px;
-}
+.ufe-item-actions { display: flex; align-items: center; gap: 2px; }
+.ufe-folders .ufe-item-actions { justify-content: flex-end; padding: 0 7px 7px; }
 .ufe-move:hover,
 .ufe-move:focus-visible {
   color: var(--accent);
@@ -452,7 +446,7 @@
   display: flex;
   align-items: center;
   gap: 10px;
-  max-width: calc(100vw - 32px);
+  max-width: min(480px, calc(100vw - 32px));
   padding: 12px 14px;
   border: 1px solid var(--line-strong);
   border-radius: 10px;
@@ -462,6 +456,10 @@
   color: var(--text);
 }
 .ufe-toast > span { display: inline-flex; color: var(--success); }
+.ufe-toast > div { overflow-wrap: anywhere; line-height: 1.5; }
+.ufe-toast[data-tone="error"] > span { color: var(--danger); }
+.ufe-toast[data-tone="info"] > span { color: var(--muted); }
+.ufe-toast[data-tone="error"] { border-color: var(--danger); }
 .ufe-toast button { display: inline-flex; border: 0; background: transparent; color: var(--muted); padding: 4px; margin-left: 5px; border-radius: 4px; }
 .ufe-toast button:hover { background: var(--surface-hover); }
 @media (prefers-reduced-motion: reduce) { .ufe-spinning { animation: none; } }
@@ -499,3 +497,11 @@
     flex-basis: 100%;
   }
 }
+
+.ufe-text-editor { min-height: 240px; resize: vertical; font-family: ui-monospace, monospace; line-height: 1.5; white-space: pre; overflow: auto; }
+.ufe-version-list { padding: 0; list-style: none; max-height: 270px; overflow-y: auto; }
+.ufe-version-list li { display: flex; align-items: center; gap: 8px; padding: 10px 0; border-bottom: 1px solid var(--border); }
+.ufe-version-list li > div { flex: 1; min-width: 0; }
+.ufe-version-list small { display: block; opacity: .7; margin-top: 4px; }
+.ufe-version-list .button { padding: 7px 10px; }
+.ufe-restore-confirm { padding: 12px; border: 1px solid var(--border); border-radius: 8px; }

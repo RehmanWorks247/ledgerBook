@@ -6,7 +6,9 @@ import { HttpException } from '@nestjs/common';
 import sharp from 'sharp';
 import { AccessService } from '../apps/api/src/access/access.service';
 import { BookingsService } from '../apps/api/src/bookings/bookings.service';
+import { BookingManagementService } from '../apps/api/src/bookings/booking-management.service';
 import { businessDate, addDays } from '../apps/api/src/dashboard/time';
+import { config } from '../apps/api/src/config';
 import { LedgerService } from '../apps/api/src/ledger/ledger.service';
 import { PaymentsService } from '../apps/api/src/payments/payments.service';
 import { setupTestDatabase, type TestDatabase, type TestSeed } from './helpers';
@@ -53,7 +55,7 @@ describe('booking payment evidence, approvals and transactional notifications', 
   }
   const balance = async () => (await ledger.statement(seed.admin,seed.customerId)).current_balance_minor;
   const eventEmails = (paymentId:string) => database.db.query(
-    'SELECT recipient,subject,body,dedupe_key FROM payment_email_outbox WHERE dedupe_key LIKE $1 ORDER BY created_at,id', [`%${paymentId}%`]);
+    'SELECT recipient,subject,body,dedupe_key,state,delivery_status,attempts,sent_at FROM payment_email_outbox WHERE dedupe_key LIKE $1 ORDER BY created_at,id', [`%${paymentId}%`]);
 
   it('stores one or multiple real images in the booking and leaves balances pending manual approval', async () => {
     const trip = await booking();
@@ -82,12 +84,23 @@ describe('booking payment evidence, approvals and transactional notifications', 
       assert.match(file.url,new RegExp(`${trip.id}/payments/${payment.id}/receipts/${file.id}$`));
     }
     const messages = (await eventEmails(payment.id)).rows;
-    assert.equal(messages.length,1);
-    assert.equal(messages[0].recipient,'admin@example.test');
-    assert.ok(messages[0].body.includes(trip.reference));
-    assert.ok(messages[0].body.includes('Aster Studio'));
-    assert.ok(messages[0].body.includes(businessDate()));
-    assert.equal(messages.some(message => message.recipient === 'customer@example.test'),false);
+    assert.equal(messages.length,2);
+    const review=messages.find(message=>message.dedupe_key.startsWith('payment-submitted:'))!;
+    const received=messages.find(message=>message.dedupe_key.startsWith('payment-received:'))!;
+    assert.equal(review.recipient,'admin@example.test');
+    assert.ok(review.body.includes('Aster Studio'));
+    assert.equal(received.recipient,'customer@example.test');
+    assert.equal(received.dedupe_key,`payment-received:${payment.id}:${seed.customerUserId}`);
+    assert.match(`${received.subject} ${received.body}`,/receiv|receipt/i);
+    assert.match(received.body,/verify|review/i);
+    assert.match(received.body,/does not credit your account/i);
+    for(const message of messages) {
+      assert.ok(message.body.includes(trip.reference));
+      assert.ok(message.body.includes(businessDate()));
+      assert.match(message.body,/GBP 25\.00/);
+      assert.ok(message.body.includes(`${config.appUrl}/o/${seed.orgId}/users/${seed.customerId}/bookings/${trip.id}`));
+      assert.equal(message.state,'pending');assert.equal(message.attempts,0);assert.equal(message.sent_at,null);
+    }
   });
 
   it('replays the same upload safely and rejects reused keys or evidence with changed contents', async () => {
@@ -100,7 +113,9 @@ describe('booking payment evidence, approvals and transactional notifications', 
     ]);
     assert.equal(first.id,retry.id);
     assert.equal((await payments.list(seed.customerMember,seed.customerId,trip.id)).items.length,1);
-    assert.equal((await eventEmails(first.id)).rows.length,1);
+    const messages=(await eventEmails(first.id)).rows;
+    assert.equal(messages.length,2);
+    assert.equal(messages.filter(message=>message.dedupe_key.startsWith('payment-received:')).length,1);
     await rejectsStatus(payments.submit(seed.customerMember,seed.customerId,trip.id,{...raw,amount:'26.00'},files),409);
     await rejectsStatus(payments.submit(seed.customerMember,seed.customerId,trip.id,raw,[await image()]),409);
     await rejectsStatus(payments.submit(seed.customerMember,seed.customerId,trip.id,request(),files),409);
@@ -128,10 +143,15 @@ describe('booking payment evidence, approvals and transactional notifications', 
     assert.equal(entries.rows[0].customer_id,seed.customerId);
     assert.equal(entries.rows[0].created_by,seed.adminId);
     const messages = (await eventEmails(payment.id)).rows;
-    assert.equal(messages.filter(message => message.recipient === 'customer@example.test').length,1);
-    const approvedMessage = messages.find(message => message.recipient === 'customer@example.test')!;
+    assert.equal(messages.filter(message => message.recipient === 'customer@example.test').length,2);
+    const approvedMessage = messages.find(message => message.dedupe_key.startsWith('payment-approved:'))!;
+    assert.equal(messages.filter(message=>message.dedupe_key.startsWith('payment-approved:')).length,1);
+    assert.equal(approvedMessage.recipient,'customer@example.test');
     assert.match(`${approvedMessage.subject} ${approvedMessage.body}`,/approved/i);
     assert.ok(approvedMessage.body.includes(trip.reference));
+    assert.match(approvedMessage.body,/GBP 25\.00/);
+    assert.equal(messages.find(message=>message.dedupe_key.startsWith('payment-submitted:'))!.state,'cancelled');
+    assert.equal(messages.find(message=>message.dedupe_key.startsWith('payment-received:'))!.state,'pending');
     assert.ok((await database.db.query('SELECT 1 FROM audit_events WHERE object_id=$1',[payment.id])).rowCount! >= 2);
     await rejectsStatus(payments.reject(seed.admin,seed.customerId,trip.id,payment.id,{reason:'Cannot reject an approved payment'}),409);
     assert.equal((await payments.list(seed.customerMember,seed.customerId,trip.id)).items[0].status,'approved');
@@ -143,11 +163,30 @@ describe('booking payment evidence, approvals and transactional notifications', 
     const payment = await payments.submit(seed.customerMember,seed.customerId,trip.id,request(),files);
     const before = await balance();
     await rejectsStatus(payments.reject(seed.admin,seed.customerId,trip.id,payment.id,{reason:' '}),400);
-    const rejected = await payments.reject(seed.admin,seed.customerId,trip.id,payment.id,{reason:'Amount does not match the bank transaction.'});
+    const reason='Amount does not match the bank transaction.';
+    const [rejected,replayed]=await Promise.all([
+      payments.reject(seed.admin,seed.customerId,trip.id,payment.id,{reason}),
+      payments.reject(seed.admin,seed.customerId,trip.id,payment.id,{reason}),
+    ]);
+    assert.equal(replayed.id,rejected.id);
     assert.equal(rejected.status,'rejected');
     assert.equal(rejected.rejection_reason,'Amount does not match the bank transaction.');
     assert.equal(await balance(),before);
     assert.equal(rejected.ledger_entry_id,null);
+    const messages=(await eventEmails(payment.id)).rows;
+    const rejectedMessages=messages.filter(message=>message.dedupe_key.startsWith('payment-rejected:'));
+    assert.equal(rejectedMessages.length,1);
+    const decision=rejectedMessages[0];
+    assert.equal(decision.dedupe_key,`payment-rejected:${payment.id}:${seed.customerUserId}`);
+    assert.equal(decision.recipient,'customer@example.test');
+    assert.ok(decision.body.includes(reason));
+    assert.ok(decision.body.includes(trip.reference));
+    assert.match(decision.body,/GBP 25\.00/);
+    assert.ok(decision.body.includes(`${config.appUrl}/o/${seed.orgId}/users/${seed.customerId}/bookings/${trip.id}`));
+    assert.equal(decision.state,'pending');assert.equal(decision.attempts,0);assert.equal(decision.sent_at,null);
+    assert.equal(messages.find(message=>message.dedupe_key.startsWith('payment-submitted:'))!.state,'cancelled');
+    assert.equal(messages.find(message=>message.dedupe_key.startsWith('payment-received:'))!.state,'pending');
+    await rejectsStatus(payments.reject(seed.admin,seed.customerId,trip.id,payment.id,{reason:'Changed decision'}),409);
     await rejectsStatus(payments.approve(seed.admin,seed.customerId,trip.id,payment.id,{}),409);
     assert.ok((await payments.receipt(seed.customerMember,seed.customerId,trip.id,payment.id,payment.receipts[0].id)).content.length);
     const correction = await payments.submit(seed.customerMember,seed.customerId,trip.id,request({amount:'20.00'}),files);
@@ -240,19 +279,63 @@ describe('booking payment evidence, approvals and transactional notifications', 
     const raw = request();
     const files = [await image()];
     await database.db.query(`CREATE FUNCTION payment_test_fail_email() RETURNS trigger LANGUAGE plpgsql AS $$
-      BEGIN RAISE EXCEPTION 'simulated payment notification failure'; END; $$;`);
+      BEGIN IF NEW.dedupe_key LIKE 'payment-received:%' THEN RAISE EXCEPTION 'simulated payment notification failure'; END IF; RETURN NEW; END; $$;`);
     await database.db.query('CREATE TRIGGER payment_test_fail_email BEFORE INSERT ON payment_email_outbox FOR EACH ROW EXECUTE FUNCTION payment_test_fail_email()');
     try {
       await assert.rejects(payments.submit(seed.customerMember,seed.customerId,trip.id,raw,files),/simulated payment notification failure/);
       assert.equal((await payments.list(seed.customerMember,seed.customerId,trip.id)).items.length,0);
       assert.equal((await database.db.query('SELECT count(*)::int AS n FROM booking_payment_receipts WHERE booking_id=$1',[trip.id])).rows[0].n,0);
+      assert.equal((await database.db.query("SELECT count(*)::int AS n FROM payment_email_outbox WHERE body LIKE $1 AND dedupe_key LIKE 'payment-%'",[`%${trip.reference}%`])).rows[0].n,0);
     } finally {
       await database.db.query('DROP TRIGGER payment_test_fail_email ON payment_email_outbox');
       await database.db.query('DROP FUNCTION payment_test_fail_email()');
     }
     const payment = await payments.submit(seed.customerMember,seed.customerId,trip.id,raw,files);
     assert.equal(payment.status,'pending');
-    assert.equal((await eventEmails(payment.id)).rows.length,1);
+    assert.equal((await eventEmails(payment.id)).rows.length,2);
+  });
+
+  it('rolls rejection and review-notification cancellation back when its customer email cannot be queued',async()=>{
+    const trip=await booking();
+    const payment=await payments.submit(seed.customerMember,seed.customerId,trip.id,request(),[await image()]);
+    const before=await balance();
+    await database.db.query(`CREATE FUNCTION payment_test_fail_rejection_email() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN IF NEW.dedupe_key LIKE 'payment-rejected:%' THEN RAISE EXCEPTION 'simulated rejection notification failure'; END IF; RETURN NEW; END; $$;`);
+    await database.db.query('CREATE TRIGGER payment_test_fail_rejection_email BEFORE INSERT ON payment_email_outbox FOR EACH ROW EXECUTE FUNCTION payment_test_fail_rejection_email()');
+    try {
+      await assert.rejects(payments.reject(seed.admin,seed.customerId,trip.id,payment.id,{reason:'Receipt needs correction.'}),/simulated rejection notification failure/);
+      const pending=(await payments.list(seed.customerMember,seed.customerId,trip.id)).items[0];
+      assert.equal(pending.status,'pending');assert.equal(pending.rejection_reason,null);
+      const messages=(await eventEmails(payment.id)).rows;
+      assert.equal(messages.length,2);assert.ok(messages.every(message=>message.state==='pending'));
+      assert.equal(await balance(),before);
+      assert.equal((await database.db.query("SELECT 1 FROM audit_events WHERE object_id=$1 AND action='payment.rejected'",[payment.id])).rows.length,0);
+    } finally {
+      await database.db.query('DROP TRIGGER payment_test_fail_rejection_email ON payment_email_outbox');
+      await database.db.query('DROP FUNCTION payment_test_fail_rejection_email()');
+    }
+    assert.equal((await payments.reject(seed.admin,seed.customerId,trip.id,payment.id,{reason:'Receipt needs correction.'})).status,'rejected');
+    assert.equal((await eventEmails(payment.id)).rows.filter(message=>message.dedupe_key.startsWith('payment-rejected:')).length,1);
+  });
+
+  it('notifies the customer once when booking cancellation rejects their pending payment',async()=>{
+    const trip=await booking();
+    const payment=await payments.submit(seed.customerMember,seed.customerId,trip.id,request(),[await image()]);
+    const management=new BookingManagementService(database.db,new AccessService(database.db));
+    const cancellation={confirmation:trip.reference,expected_version:trip.version,reason:'Travel dates no longer work.',effective_date:businessDate(),idempotency_key:randomUUID()};
+    const first=await management.cancel(seed.admin,seed.customerId,trip.id,cancellation);
+    const replay=await management.cancel(seed.admin,seed.customerId,trip.id,cancellation);
+    assert.deepEqual(replay,first);
+    const reviewed=(await payments.list(seed.customerMember,seed.customerId,trip.id)).items[0];
+    assert.equal(reviewed.status,'rejected');assert.equal(reviewed.ledger_entry_id,null);
+    const messages=(await eventEmails(payment.id)).rows;
+    const rejected=messages.filter(message=>message.dedupe_key.startsWith('payment-rejected:'));
+    assert.equal(rejected.length,1);assert.equal(rejected[0].recipient,'customer@example.test');
+    assert.equal(rejected[0].dedupe_key,`payment-rejected:${payment.id}:${seed.customerUserId}`);
+    assert.ok(rejected[0].body.includes(cancellation.reason));assert.match(rejected[0].body,/Booking cancelled/i);
+    assert.equal(rejected[0].state,'pending');assert.equal(rejected[0].attempts,0);
+    assert.equal(messages.find(message=>message.dedupe_key.startsWith('payment-submitted:'))!.state,'cancelled');
+    assert.equal(messages.find(message=>message.dedupe_key.startsWith('payment-received:'))!.state,'pending');
   });
 
   it('rolls approval and ledger writes back together when its email cannot be queued, then retries cleanly', async () => {

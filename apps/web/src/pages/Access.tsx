@@ -1,7 +1,5 @@
 import { useContext, useEffect, useRef, useState, type FormEvent } from "react";
-import { UserProfile } from "@clerk/react";
 import {
-  ArrowLeft,
   Mail,
   RefreshCw,
   ShieldOff,
@@ -12,7 +10,7 @@ import {
 import { Link, Navigate } from "../router";
 import { AuthContext, useOrganization } from "../state";
 import { errorMessage, mutate, useResource } from "../api";
-import { Badge, Empty, ErrorNotice, Loading, PageHeading } from "../components";
+import { Badge, Empty, ErrorNotice, TableSkeleton, PageHeading } from "../components";
 import { DeleteAccountDialog } from "../DeleteAccountDialog";
 
 type WorkspaceUser = {
@@ -40,7 +38,7 @@ function UserManagement() {
   const base = `/organizations/${organization.organization_id}/users`;
   const { data, loading, error, refresh } = useResource<{
     users: WorkspaceUser[];
-  }>(base);
+  }>(base, { cache: true });
   const [selection, setSelection] = useState<{
     user: WorkspaceUser;
     action: UserAction;
@@ -68,9 +66,8 @@ function UserManagement() {
   return (
     <>
       <PageHeading
-        eyebrow="PEOPLE & PERMISSIONS"
         title="Users & access"
-        description="Manage invitations, sign-in access, and permanent customer account deletion for this business."
+        description="Manage invitations and account access."
         actions={
           <Link
             className="button"
@@ -108,9 +105,9 @@ function UserManagement() {
           </button>
         </div>
         {loading && !data ? (
-          <Loading />
+          <TableSkeleton columns={["User", "Role", "Access", "Customer account", "Actions"]} label="Loading users and access" />
         ) : users?.length ? (
-          <div className="table-scroll">
+          <div className="table-scroll" aria-busy={loading}>
             <table>
               <thead>
                 <tr>
@@ -331,38 +328,5 @@ function UserActionDialog({
         </div>
       </form>
     </dialog>
-  );
-}
-export function AccountPage({ embedded = false }: { embedded?: boolean }) {
-  const content = (
-    <>
-      <PageHeading
-        eyebrow="YOUR ACCOUNT"
-        title="Account settings"
-        description="Manage your profile, email addresses, password, and signed-in devices."
-      />
-      <div className="account-profile">
-        <UserProfile
-          routing="hash"
-          appearance={{
-            elements: {
-              rootBox: { width: "100%" },
-              cardBox: { width: "100%", maxWidth: "1000px" },
-            },
-          }}
-        />
-      </div>
-    </>
-  );
-  return embedded ? (
-    content
-  ) : (
-    <main className="standalone account-standalone">
-      <Link to="/" className="back-link">
-        <ArrowLeft size={16} />
-        Back to your workspaces
-      </Link>
-      {content}
-    </main>
   );
 }

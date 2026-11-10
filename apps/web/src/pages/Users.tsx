@@ -4,7 +4,7 @@ import {
   FolderSearch,
 } from "lucide-react";
 import { dateLabel, useResource, type Customer } from "../api";
-import { Badge, ErrorNotice, Loading, Pagination } from "../components";
+import { Badge, ErrorNotice, TableSkeleton, Pagination } from "../components";
 import { Link, Navigate } from "../router";
 import { useOrganization } from "../state";
 import { useDirectoryFilters } from "./directory-filters";
@@ -35,7 +35,7 @@ export function UserDirectory() {
 function Directory({ orgId }: { orgId: string }) {
   const { search, setSearch, status, setStatus, dates, setDate, setPage, params, clear, invalidDates, filtered } = useDirectoryFilters();
   const { data, error, loading, refresh } = useResource<DirectoryResponse>(
-    `/organizations/${orgId}/customers?${params}`,
+    `/organizations/${orgId}/customers?${params}`, { cache: true },
   );
 
   return (
@@ -46,7 +46,7 @@ function Directory({ orgId }: { orgId: string }) {
         </div>
       </header>
 
-      <section className="panel" aria-label="User directory">
+      <section className="panel" aria-label="User directory" aria-busy={loading}>
         <div className="record-filters" role="search" aria-label="Filter customer records">
           <label className="record-filter-search">Search customers<input type="search" value={search} maxLength={160} placeholder="ID, name, email, phone or date" onChange={event => setSearch(event.target.value)} /></label>
           <label className="record-filter-select">Account status<select value={status} onChange={event => setStatus(event.target.value)}>{statusFilters.map(({ value, label }) => <option key={value} value={value}>{label}</option>)}</select></label>
@@ -62,8 +62,8 @@ function Directory({ orgId }: { orgId: string }) {
               Try again
             </button>
           </div>
-        ) : loading || !data ? (
-          <Loading />
+        ) : !data ? (
+          <TableSkeleton columns={["User", "Account status", "Date added"]} label="Loading customer records" />
         ) : data.items.length ? (
           <>
             <div

@@ -4,6 +4,25 @@ LedgerBook is a multi-tenant customer receivables application built with **NestJ
 
 An organization administrator can create customer accounts, invite customers, post charges and payments, reverse mistakes, and export statements. Customers can sign in only after an organization invitation and can read only their own account. A login identity can have memberships in multiple organizations.
 
+Administrators can create, rename, customize, and permanently delete workspaces.
+Use **Workspaces** in the sidebar to switch or create, and **Settings → Workspace
+details** to edit the name, description, and color. Permanent deletion requires
+the exact workspace name and preserves other workspaces and sign-in identities.
+See [workspace behavior, deletion, and deployment](docs/workspaces.md).
+
+Administrators can use **Companies**, just above Settings in the sidebar, for a
+standalone table with one row per company. Add or edit the company and hotel
+details, customer name, dates, room type, voucher, manual amounts, and remarks.
+Search the table or filter by booking date, check-in, or check-out. These records
+do not create bookings, customer accounts, payments, or ledger entries. See
+[Companies fields and API](docs/companies.md).
+
+The sign-in, invitation and recovery screens use Umrah Packages UK branding with
+light and dark logo variants. Gold is the default appearance; existing saved
+color choices are preserved. Use **Customize** on the sign-in screen or
+**Settings → Appearance** to choose a color and light, dark or system mode.
+Appearance preferences are saved on the current browser and device.
+
 ## Local setup
 
 ### Clerk and a local database
@@ -16,7 +35,7 @@ npm ci
 
 Use a Clerk **development instance** with email/password sign-in enabled. Copy `.env.example` to the private `.env` if it does not exist, and set `CLERK_PUBLISHABLE_KEY` and `CLERK_SECRET_KEY` from the same instance. Keep `AUTH_PROVIDER=clerk`. Clerk sends invitations and recovery codes to real inboxes. Booking payment notifications use the separate email adapter described below.
 
-In Clerk's **User model → User permissions**, disable **Allow users to delete their account** and apply the setting to existing users. Administrators manage removal through LedgerBook so account deletion cannot bypass the last-administrator protection. Enable email verification and password authentication. Enable first/last name fields as optional, and require a minimum 15-character password to match the invitation/recovery forms. Production deployments should configure Clerk's production domain and protections for that environment.
+In Clerk's **User model → User permissions**, disable **Allow users to delete their account** and apply the setting to existing users. Administrators manage removal through LedgerBook so account deletion cannot bypass the last-administrator protection. Enable email verification and password authentication. Enable first/last name fields as optional. In **User & authentication → Password → Update password requirements**, set the minimum password length to **8** (Clerk’s lowest supported value), disable minimum-strength enforcement and compromised-password rejection, and leave lowercase, uppercase, number, and special-character rules off. This length-only policy matches invitation acceptance, password reset, account password changes, and legacy local provisioning. Sign-in accepts existing passwords without applying new-password rules. Clerk does not support the requested 6-character minimum; changing only the form cannot lower its server-side limit. Production deployments should configure Clerk's production domain and protections for that environment.
 
 Set the local browser origin and port together in `.env`, for example:
 
@@ -45,19 +64,31 @@ npm run admin:create -- --local --clerk-user-id user_YOUR_CLERK_ID --email owner
 
 The command verifies the Clerk user's primary email and requires it to match `--email`. It neither chooses nor changes the user's password. To add that administrator to an existing organization while preserving its data, also pass `--organization-id YOUR_ORGANIZATION_UUID`. Repeating provisioning reuses an active administrator membership. Disabled/deleted memberships are not silently restored. Sign in through Clerk after restarting the app. New travel workspaces should use GBP. Existing organizations keep their accounting currency and financial history; provisioning does not convert their balances.
 
-### Booking payment notification email
+### Booking, payment and reminder email on localhost
 
-Clerk handles invitations and password recovery. Payment submissions and approvals use the application's durable email outbox and `NotificationsService`. The local launcher writes these payment messages to private `.eml` files in `.local/mail` by default; they are **not delivered to real inboxes**.
+Clerk handles invitations and password recovery. Booking confirmations (with PDF invoices), payment notifications and enabled reminders use the application's email adapter. The local launcher writes these messages to private `.eml` files in `.local/mail` by default; they are **not delivered to real inboxes**.
 
-To enable live payment email locally, create the private, gitignored `.local/email.env` with exactly these three settings, using a verified Resend sender and key:
+To enable real inbox delivery from localhost, create the private, gitignored `.local/email.env` with exactly these three settings, using a verified Resend sender and key:
 
 ```dotenv
 EMAIL_MODE=resend
-EMAIL_FROM="LedgerBook <your-verified-sender@example.com>"
+EMAIL_FROM="Umrah Packages Ltd <your-verified-sender@example.com>"
 RESEND_API_KEY=your-resend-api-key
 ```
 
-Restart the app after changing the file. An invalid or incomplete file stops startup. Remove the file, or replace its contents with only `EMAIL_MODE=file`, to restore local payment email files. The local launcher deliberately ignores `.env` email delivery settings; `.local/email.env` controls payment delivery and does not change Clerk, the database, or the browser origin. Server deployments instead use `EMAIL_MODE`, `EMAIL_FROM`, and `RESEND_API_KEY` from their deployment environment. See [payment receipts and delivery operations](docs/payment-receipts.md) for outbox retries and status checks.
+Restart the app after changing the file. An invalid or incomplete file stops startup. Remove the file, or replace its contents with only `EMAIL_MODE=file`, to restore local email files. The local launcher deliberately ignores `.env` email delivery settings; `.local/email.env` controls application email delivery and does not change Clerk, the database, or the browser origin. Server deployments instead use `EMAIL_MODE`, `EMAIL_FROM`, and `RESEND_API_KEY` from their deployment environment. See [payment receipts and delivery operations](docs/payment-receipts.md) for outbox retries and status checks.
+
+Keep `PUBLIC_APP_URL=http://localhost:3001` and `PORT=3001` in `.env` when that is where you open the app. Outbound Resend email does not need a tunnel; its links point to this configured browser origin. Open localhost links on the same computer running LedgerBook. Clerk development invitations also support a [localhost redirect with its port](https://clerk.com/docs/guides/users/inviting).
+
+Send one diagnostic email to an inbox you control without creating customer or booking records:
+
+```sh
+npm run email:test -- --to you@example.com
+```
+
+This command uses `.local/email.env`, requires real delivery mode, and prints the provider message ID after acceptance. Check the actual inbox and Spam folder to confirm arrival. If the launcher uses `--public-url`, pass the same override to `email:test`. The split `dev:api`/`dev:web` workflow also reads `.local/email.env`; set `PUBLIC_APP_URL=http://localhost:5173` for its browser origin. When the private email file is absent, `dev:api` retains the email settings from `.env`. Restart either API launcher after changing email settings. Invitations and recovery use the configured Clerk instance in both workflows.
+
+A public HTTPS tunnel is needed for Resend to call the local delivery-status webhook, or to open app links on another device. It is not required to send email from localhost. Without a local webhook, the local outbox reports **Accepted**; inspect delivery in Resend and the recipient's inbox. Do not point the production webhook at a temporary dev tunnel.
 
 ### Email testing through Cloudflare Tunnel
 
@@ -133,8 +164,10 @@ Seeding requires a database on a local host and is disabled otherwise. It adds f
 | `SESSION_TTL_SECONDS` | Absolute session lifetime; default 12 hours. |
 | `INVITATION_TTL_HOURS` | Invitation lifetime; default 72 hours. |
 | `TRUST_PROXY_HOPS` | Known reverse-proxy hop count. Leave `0` unless the deployment topology is controlled. |
-| `DOCUMENT_STORAGE` | `database` stores document bytes in PostgreSQL; `s3` uses private S3 storage. Production defaults to S3. |
-| `AWS_REGION`, `S3_DOCUMENT_BUCKET` | Region and private document bucket for S3 storage; prefer an IAM role for credentials. |
+| `DOCUMENT_STORAGE` | `r2` enables private Cloudflare R2 and direct browser uploads; `database` is available for offline tests; `s3` retains legacy AWS support. Set `r2` explicitly for both cloud environments. |
+| `STORAGE_ENVIRONMENT` | `development` or `production`; must agree with `NODE_ENV` and the bucket's environment suffix. |
+| `R2_ACCOUNT_ID`, `R2_DOCUMENT_BUCKET` | Cloudflare account and private environment-specific bucket. |
+| `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` | Server-only Object Read & Write credentials scoped to that environment's bucket. Never expose in browser configuration. |
 | `REDIS_URL` | Optional shared exchange-rate cache; the local launcher works without it. |
 | `EXCHANGE_RATE_URL` | Reference-rate provider endpoint; defaults to Frankfurter's v2 rates API. |
 | `EXCHANGE_RATE_TTL_SECONDS` | Fresh rate cache lifetime; default one hour. |
@@ -147,6 +180,7 @@ Clerk manages invitation and recovery delivery. Payment notifications use Resend
 ## Application behavior
 
 - Customers can submit one to five receipt images inside a booking. Administrators review them under **Payment reviews** or in the booking itself. Submissions stay pending until approval; approval posts one ledger payment and queues the customer's confirmation email. Admins receive an email when a customer submits receipts. See [payment receipts and delivery operations](docs/payment-receipts.md) for upload limits, migrations, security, and retry behavior.
+- Administrator-created bookings generate a PDF invoice and queue it with the booking confirmation. Approved payments, reversals, amendments and cancellations preserve new invoice versions; customers and administrators can download the full history, including for cancelled bookings. See [booking invoices](docs/invoices.md) for accounting rules, the replaceable generic template and deployment requirements.
 
 - A **positive** balance means the customer owes the business. A **negative** balance means the customer has credit. The dashboard reports debt and credits separately.
 - Each organization has one currency and its minor-unit precision. Amounts are parsed from decimal strings into integers; JavaScript floating-point arithmetic is never used for ledger money. API money values and ledger IDs are strings.
@@ -173,6 +207,7 @@ apps/api/src/
   bookings/         Travel bookings, instalments, and PostgreSQL/S3 documents
   currency/         Reference rates and display conversion
   customers/        Customer account use cases
+  companies/        Standalone company table and date filters
   dashboard/        Travel overview, dates, and activity
   database/         PostgreSQL adapter and versioned SQL migrations
   invitations/      Invitation state and customer access lifecycle
@@ -198,6 +233,31 @@ npm test
 npm run build
 ```
 
+Repeatable browser workflows are also available:
+
+```sh
+npx playwright install chromium webkit
+npm run test:e2e
+E2E_BROWSER=webkit npm run test:e2e
+```
+
+These tests exercise the React interface and real HTTP API with disposable data,
+private file email, and database-backed documents. They cover customer edits and
+deletion, bookings, folder/file operations, receipt approval/rejection, ledger
+reversals, directory search, themes, and mobile layouts. Set `TEST_DATABASE_URL`
+to a disposable loopback PostgreSQL database to include real multi-connection
+behavior; otherwise they use PGlite. Ports 4311 and 4312 must be free. Reports and
+failure traces are saved under `.local/e2e/`. A Clerk UI adapter is resolved only
+by this test server; live Clerk sign-in, cloud storage, and inbox delivery need
+separate checks. CI runs Chromium and WebKit against its PostgreSQL service,
+audits dependencies, and builds the production container.
+
+See [the implemented launch improvements](docs/implementation-verification-2026-11-09.md)
+for booking editing/cancellation, document versions, reminders, verification and
+performance measurements, and [deployment and recovery](docs/deployment.md) for
+the production image, preflight, monitoring and verified backups.
+The [original audit](docs/launch-verification-2026-11-09.md) preserves baseline results.
+
 The test runner forces the isolated local authentication provider and clears delivery credentials so `.env` cannot send test emails or modify the configured Clerk instance. Clerk gateway integration tests exercise provider outcomes with controlled test doubles; live browser/email checks establish actual provider behavior.
 
 By default integration tests execute migrations and SQL against PGlite, a local PostgreSQL engine, with a fresh database per suite. They exercise foreign keys, constraints, triggers, service behavior, and HTTP authorization without Docker. PGlite uses one connection, and its test adapter serializes transactions. This verifies repeated/concurrent service submissions deterministically, but **does not prove PostgreSQL multi-connection locking behavior**.
@@ -220,7 +280,7 @@ Configure a [Clerk production instance](https://clerk.com/docs/guides/developmen
 
 Use a dedicated PostgreSQL role with only required runtime privileges, a separate migration role where practical, managed backups, and tested restores. Do not grant the application role superuser privileges or permission to disable triggers. Schedule `npm run db:cleanup` to remove expired session/recovery/rate-limit records. Preserve ledger, customer, and audit records according to the business's retention policy.
 
-For S3 deployments, schedule `npm run storage:cleanup` with the matching database and bucket configuration. Customer deletion immediately removes application access and relational records, while a private removal journal retains object coordinates until cloud deletion succeeds. Cleanup waits 24 hours to avoid racing uploads already in progress and retains failed removals for the next run.
+For R2 deployments, use separate development and production buckets, credentials and exact-origin CORS rules; see [booking document storage](docs/file-storage.md). The API runs storage cleanup automatically; `npm run storage:cleanup` is also available with the matching database and bucket configuration. Deletion immediately removes application access, while a private removal journal retains object coordinates until cloud deletion succeeds. Cleanup waits 24 hours to avoid racing uploads already in progress and retains failed removals for the next run.
 
 Payment notification intents are stored in the durable database outbox and retried by the application worker. Configure `EMAIL_MODE=resend`, `EMAIL_FROM`, and `RESEND_API_KEY` for production delivery, and monitor the payment-email status endpoint for a backlog. In explicit legacy authentication mode, password recovery email is dispatched asynchronously in the API process without a persistent recovery queue; graceful shutdown waits for pending work, but abrupt termination may require the user to request another link.
 

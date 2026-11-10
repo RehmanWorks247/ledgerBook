@@ -3,6 +3,7 @@ import type { Request, Response } from 'express';
 import { z } from 'zod';
 import { config } from '../config';
 import { AuthService } from './auth.service';
+import { passwordSchema } from './password-policy';
 import { RateLimitService } from './rate-limit.service';
 import { type AuthenticatedRequest, clearSessionCookie, SessionGuard, sessionToken, setSessionCookie } from './session.guard';
 
@@ -11,7 +12,7 @@ const loginSchema = z.object({ email: emailSchema, password: z.string().min(1).m
 const recoverySchema = z.object({ email: emailSchema }).strict();
 const resetSchema = z.object({
   token: z.string().regex(/^[A-Za-z0-9_-]{43}$/, 'This password reset link is invalid. Request a new link.'),
-  password: z.string().min(12, 'Use at least 12 characters for your password.').max(128),
+  password: passwordSchema,
 }).strict();
 
 export function parseBody<T>(schema: z.ZodType<T>, input: unknown): T {

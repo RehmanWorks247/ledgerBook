@@ -1,5 +1,5 @@
-import { api, ApiError, authenticatedHeaders, errorMessage, mutate } from "../api";
-import type { FileNode, FileStore, ImportEntry, UploadItem, UploadResult } from "./model";
+import { api, ApiError, authenticatedFetch, authenticatedHeaders, errorMessage, mutate } from "../api";
+import type { DocumentHistory, FileNode, FileStore, ImportEntry, UploadItem, UploadResult } from "./model";
 
 export type BookingFileContext = {
   organizationId: string;
@@ -36,11 +36,77 @@ async function fileDigest(file: File) {
 
 function abortError() { return new DOMException("Upload stopped. Retry to confirm whether the file was saved.", "AbortError"); }
 
-// XHR provides actual transmitted-byte progress. Completion is reported only
-// after the API confirms storage and metadata have both committed.
+type UploadTicket =
+  | { transport: "proxy" }
+  | { transport: "complete"; document: FileNode }
+  | { transport: "direct"; uploadId: string; url: string; headers: Record<string, string>; expiresAt: string };
+
+function storageError(status: number) {
+  if (status === 403) return "The storage upload link expired or was rejected. Retry to get a fresh link.";
+  if (status === 413) return "The file exceeds the storage upload limit. Choose a file up to 10 MB.";
+  if (status === 429 || status >= 500) return "Storage is temporarily busy. Wait a moment and retry this file.";
+  return "Storage could not accept this file. Retry; if it continues, contact your administrator.";
+}
+
+// Never attach application cookies or session headers to a signed storage URL.
+// Only the short-lived capability and headers returned by the API go to R2.
+async function putDirectUpload(ticket: Extract<UploadTicket, { transport: "direct" }>, file: File,
+  signal: AbortSignal, onProgress: (loaded: number) => void) {
+  if (signal.aborted) throw abortError();
+  if (new URL(ticket.url).protocol !== "https:") throw new Error("The storage upload address is invalid. Contact your administrator.");
+  if (typeof XMLHttpRequest === "undefined") {
+    const response = await fetch(ticket.url, { method: "PUT", body: file, headers: ticket.headers, signal, credentials: "omit" });
+    // A retry may find the immutable object from a previously interrupted save.
+    // Finalization still verifies the size and digest before trusting it.
+    if (!response.ok && response.status !== 412) throw new Error(storageError(response.status));
+    onProgress(file.size);
+    return;
+  }
+  return new Promise<void>((resolve, reject) => {
+    const request = new XMLHttpRequest();
+    const abort = () => request.abort();
+    const finish = (error?: Error) => {
+      signal.removeEventListener("abort", abort);
+      if (error) reject(error); else resolve();
+    };
+    request.open("PUT", ticket.url);
+    request.withCredentials = false;
+    request.timeout = 180_000;
+    for (const [header, value] of Object.entries(ticket.headers)) request.setRequestHeader(header, value);
+    request.upload.onprogress = (event) => onProgress(Math.min(event.loaded, file.size));
+    request.onload = () => {
+      if ((request.status >= 200 && request.status < 300) || request.status === 412) { onProgress(file.size); finish(); }
+      else finish(new Error(storageError(request.status)));
+    };
+    request.onerror = () => finish(new Error("Could not reach file storage. Check your connection and retry. If it continues, ask your administrator to check storage access."));
+    request.ontimeout = () => finish(new Error("The storage upload timed out. Check your connection and retry this file."));
+    request.onabort = () => finish(abortError());
+    signal.addEventListener("abort", abort, { once: true });
+    request.send(file);
+  });
+}
+
+// Completion is reported only after the API verifies the uploaded object and
+// commits booking metadata. A stable key safely recovers a lost final response.
 export async function uploadDocument(path: string, file: File, name: string, key: string, signal: AbortSignal,
-  onProgress: (loaded: number) => void): Promise<FileNode> {
-  const headers = { "Content-Type": "application/octet-stream", "X-File-Name": encodeURIComponent(name), "Idempotency-Key": key };
+  onProgress: (loaded: number) => void, sha256?: string): Promise<FileNode> {
+  if (signal.aborted) throw abortError();
+  const uploadsPath = path.replace(/\/documents$/, "/uploads");
+  const ticket = await api<UploadTicket>(uploadsPath, {
+    method: "POST", signal,
+    body: JSON.stringify({ name, size: file.size, sha256: sha256 ?? await fileDigest(file), idempotency_key: key }),
+  });
+  if (ticket.transport === "complete") return ticket.document;
+  if (ticket.transport === "proxy") return uploadProxyDocument(path, file, name, key, signal, onProgress);
+  if (ticket.transport !== "direct") throw new Error("The upload could not be prepared. Refresh the page and retry.");
+  await putDirectUpload(ticket, file, signal, onProgress);
+  return api<FileNode>(`${uploadsPath}/${encodeURIComponent(ticket.uploadId)}/complete`, { method: "POST", signal, body: "{}" });
+}
+
+// The database-backed local environment retains its existing upload route.
+async function uploadProxyDocument(path: string, file: File, name: string, key: string, signal: AbortSignal,
+  onProgress: (loaded: number) => void, extraHeaders: Record<string,string> = {}): Promise<FileNode> {
+  const headers = { "Content-Type": "application/octet-stream", "X-File-Name": encodeURIComponent(name), "Idempotency-Key": key, ...extraHeaders };
   if (signal.aborted) return Promise.reject(abortError());
   if (typeof XMLHttpRequest === "undefined") return api<FileNode>(path, { method: "POST", headers, body: file, signal });
   const authorizedHeaders = await authenticatedHeaders(headers);
@@ -72,7 +138,7 @@ export async function uploadDocument(path: string, file: File, name: string, key
   });
 }
 
-type UploadJob = { item: UploadItem; entry: Extract<ImportEntry, { kind: "file" }>; destination: string; key?: string };
+type UploadJob = { item: UploadItem; entry: Extract<ImportEntry, { kind: "file" }>; destination: string; key?: string; digest?: string };
 
 export class BookingFileStore implements FileStore {
   private nodes: FileNode[] = [];
@@ -82,6 +148,7 @@ export class BookingFileStore implements FileStore {
   private jobs: UploadJob[] = [];
   private controller: AbortController | undefined;
   private loadVersion = 0;
+  private folderAttempts = new Map<string, string>();
   readonly path: string;
 
   constructor(context: BookingFileContext) { this.path = bookingFilesPath(context); }
@@ -142,10 +209,16 @@ export class BookingFileStore implements FileStore {
   }
 
   private async folder(parentId: string | null, name: string, signal?: AbortSignal) {
+    const attempt = JSON.stringify([parentId, name.trim()]);
+    const key = this.folderAttempts.get(attempt) ?? crypto.randomUUID();
+    this.folderAttempts.set(attempt, key);
     const result = await api<FileNode>(`${this.path}/folders`, {
       method: "POST", signal,
-      body: JSON.stringify({ parent_id: parentId, name, idempotency_key: await submissionKey(`${this.path}/folder/${parentId}/${name.trim()}`) }),
+      body: JSON.stringify({ parent_id: parentId, name, idempotency_key: key }),
     });
+    // Keep an interrupted attempt retryable, but a confirmed creation must not
+    // reserve this name forever after its folder is renamed, moved or deleted.
+    if (this.folderAttempts.get(attempt) === key) this.folderAttempts.delete(attempt);
     this.upsert(result);
     return result;
   }
@@ -194,7 +267,11 @@ export class BookingFileStore implements FileStore {
         for (const entry of list) {
           if (controller.signal.aborted) throw abortError();
           if (entry.kind === "folder") {
-            const folder = await this.folder(destination, entry.name, controller.signal);
+            // Re-selecting an interrupted folder import should reuse its
+            // confirmed tree while individual failed creations retain keys.
+            const folder = this.nodes.find(node => node.kind === "folder" && node.parentId === destination
+              && node.name.normalize().toLowerCase() === entry.name.trim().normalize().toLowerCase())
+              ?? await this.folder(destination, entry.name, controller.signal);
             await append(entry.children, folder.id);
           } else planned.push({ entry, destination, item: { id: crypto.randomUUID(), name: entry.name, status: "queued", loaded: 0, total: entry.file.size } });
         }
@@ -225,16 +302,17 @@ export class BookingFileStore implements FileStore {
         const job = jobs[index++];
         try {
           if (signal.aborted) throw abortError();
-          job.item.status = "uploading";
+          job.item.status = "preparing";
           this.publishUploads();
           // Hash only the bounded number of active files, not the entire batch.
-          job.key ??= await submissionKey(`${this.path}/${job.destination}/${job.entry.name}/${await fileDigest(job.entry.file)}`);
+          job.digest ??= await fileDigest(job.entry.file);
+          job.key ??= await submissionKey(`${this.path}/${job.destination}/${job.entry.name}/${job.digest}`);
           if (signal.aborted) throw abortError();
           const node = await uploadDocument(`${this.path}/folders/${job.destination}/documents`, job.entry.file, job.entry.name, job.key, signal, (loaded) => {
             job.item.loaded = loaded;
             job.item.status = loaded >= job.item.total ? "saving" : "uploading";
             this.publishUploads();
-          });
+          }, job.digest);
           this.upsert(node);
           job.item.status = "complete";
           job.item.loaded = job.item.total;
@@ -254,8 +332,73 @@ export class BookingFileStore implements FileStore {
   }
 
   async move(id: string, parentId: string | null) {
-    await mutate(`${this.path}/files/${encodeURIComponent(id)}`, { parent_id: parentId }, "PATCH");
-    await this.load();
+    const moved = await mutate<FileNode>(`${this.path}/files/${encodeURIComponent(id)}`, { parent_id: parentId }, "PATCH");
+    const children = new Map<string, string[]>();
+    for (const node of this.nodes) {
+      if (!node.parentId) continue;
+      const siblings = children.get(node.parentId) ?? [];
+      siblings.push(node.id);
+      children.set(node.parentId, siblings);
+    }
+    const descendants = new Set([id]);
+    for (const descendant of descendants) {
+      for (const child of children.get(descendant) ?? []) descendants.add(child);
+    }
+    // The server moves the whole subtree to the destination service. Reflect
+    // that confirmed change without relying on a second request succeeding.
+    ++this.loadVersion;
+    this.commit(this.nodes.map(node => node.id === id ? moved : descendants.has(node.id)
+      ? { ...node, serviceKey: moved.serviceKey, modifiedAt: moved.modifiedAt } : node));
+  }
+
+  async rename(id: string, name: string) {
+    this.upsert(await mutate<FileNode>(`${this.path}/files/${encodeURIComponent(id)}`, { name }, "PATCH"));
+  }
+
+  async history(id: string) {
+    return api<DocumentHistory>(`${this.path}/documents/${encodeURIComponent(id)}/versions`);
+  }
+  async readText(id: string) {
+    return api<{name:string;version:number;text:string}>(`${this.path}/documents/${encodeURIComponent(id)}/text`);
+  }
+  async restore(id: string, version: number, expectedVersion: number) {
+    this.upsert(await mutate<FileNode>(`${this.path}/documents/${encodeURIComponent(id)}/versions/${version}/restore`, { expected_version: expectedVersion }));
+  }
+  async downloadVersion(id: string, version: number, name: string) {
+    const response = await authenticatedFetch(`${this.path}/documents/${encodeURIComponent(id)}/versions/${version}`);
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({})) as {message?:string};
+      throw new Error(data.message || "This version could not be downloaded.");
+    }
+    const url = URL.createObjectURL(await response.blob());
+    const anchor = document.createElement("a");
+    anchor.href = url; anchor.download = name; document.body.append(anchor); anchor.click(); anchor.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  }
+  async replace(node: FileNode, file: File, onProgress: (message: string) => void = () => {}) {
+    if (!node.parentId || !node.version) throw new Error("Refresh the booking before editing this file.");
+    if (!file.size || file.size > MAX_DOCUMENT_BYTES) throw new Error("Choose a non-empty replacement up to 10 MB.");
+    const base = `${this.path}/folders/${encodeURIComponent(node.parentId)}/documents/${encodeURIComponent(node.id)}`;
+    const sha256 = await fileDigest(file);
+    const key = await submissionKey(`${base}/${node.version}/${file.name}/${sha256}`);
+    const signal = new AbortController().signal;
+    onProgress("Preparing replacement…");
+    const ticket = await api<UploadTicket>(`${base}/uploads`, {method:"POST",body:JSON.stringify({name:file.name,size:file.size,sha256,idempotency_key:key,expected_version:node.version})});
+    let saved: FileNode;
+    const progress = (loaded:number) => onProgress(loaded >= file.size ? "Verifying & saving…" : `Uploading ${Math.round(loaded / file.size * 100)}%…`);
+    if (ticket.transport === "complete") saved = ticket.document;
+    else if (ticket.transport === "proxy") saved = await uploadProxyDocument(`${base}/content`,file,file.name,key,signal,progress,{"X-Document-Version":String(node.version)});
+    else {
+      await putDirectUpload(ticket,file,signal,progress);
+      saved = await api<FileNode>(`${base}/uploads/${encodeURIComponent(ticket.uploadId)}/complete`,{method:"POST",body:"{}"});
+    }
+    this.upsert(saved);
+  }
+
+  async remove(id: string) {
+    await mutate(`${this.path}/files/${encodeURIComponent(id)}`, undefined, "DELETE");
+    ++this.loadVersion;
+    this.commit(this.nodes.filter((node) => node.id !== id));
   }
 }
 

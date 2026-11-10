@@ -91,23 +91,30 @@ export class InvitationService {
       );
       return { invitation: result.rows[0], customer, token, organizationName: member.organization_name };
     });
-    let delivered = false;
-    try {
-      const base = config.appUrl;
-      await this.notifications.send({
-        to: delivery.customer.email,
-        subject: 'Your LedgerBook account invitation',
-        text: `${delivery.organizationName} invited you to view your balance and statements in LedgerBook. Open the link to join and choose your password. If you already have an account, sign in with ${delivery.customer.email} to accept.\n\n${base}/invite#${delivery.token}\n\nThis link expires in ${config.invitationTtlHours} hours and can only be used once.`,
-      });
-      delivered = true;
-    } catch {
-      // Customer and invitation are already committed. Admin can explicitly resend.
-    }
-    await this.db.query(
-      `UPDATE invitations SET delivery_status=$1,delivered_at=CASE WHEN $1='sent' THEN now() ELSE NULL END WHERE id=$2`,
-      [delivered ? 'sent' : 'failed', delivery.invitation.id],
-    );
-    return { ...delivery.invitation, delivery_status: delivered ? 'sent' : 'failed' };
+    return this.db.transaction(async client => {
+      // Keep workspace access locked through delivery. Deletion may have
+      // committed after the invitation was saved, before this send started.
+      const member = await this.access.membership(membership.user_id, membership.organization_id, true, client);
+      const customer = await this.access.customer(member, customerId, client, true);
+      if (customer.status !== 'active') throw new BadRequestException('Restore the customer account before inviting them.');
+      let delivered = false;
+      try {
+        const base = config.appUrl;
+        await this.notifications.send({
+          to: customer.email,
+          subject: 'Your LedgerBook account invitation',
+          text: `${member.organization_name} invited you to view your balance and statements in LedgerBook. Open the link to join and choose your password. If you already have an account, sign in with ${customer.email} to accept.\n\n${base}/invite#${delivery.token}\n\nThis link expires in ${config.invitationTtlHours} hours and can only be used once.`,
+        });
+        delivered = true;
+      } catch {
+        // The saved invitation remains available for an explicit resend.
+      }
+      await client.query(
+        `UPDATE invitations SET delivery_status=$1,delivered_at=CASE WHEN $1='sent' THEN now() ELSE NULL END WHERE id=$2`,
+        [delivered ? 'sent' : 'failed', delivery.invitation.id],
+      );
+      return { ...delivery.invitation, delivery_status: delivered ? 'sent' : 'failed' };
+    });
   }
 
   private async inviteClerk(membership: Membership, customerId: string) {
@@ -209,7 +216,7 @@ export class InvitationService {
     const result = await this.db.query<InvitationRow>(
       `SELECT i.*,o.name AS organization_name,c.status AS customer_status,c.email AS customer_email,c.name AS customer_name
        FROM invitations i JOIN organizations o ON o.id=i.organization_id JOIN customers c ON c.id=i.customer_id
-       WHERE i.token_hash=$1`, [tokenHash(token)],
+       WHERE i.token_hash=$1 AND o.deleted_at IS NULL`, [tokenHash(token)],
     );
     const invitation = result.rows[0];
     const status = this.clerk.enabled && !invitation?.clerk_invitation_id ? 'invalid' : state(invitation);
@@ -223,23 +230,26 @@ export class InvitationService {
     const candidate = await this.db.query<InvitationRow>(
       `SELECT i.*,o.name AS organization_name,c.status AS customer_status,c.email AS customer_email,c.name AS customer_name
        FROM invitations i JOIN organizations o ON o.id=i.organization_id JOIN customers c ON c.id=i.customer_id
-       WHERE i.token_hash=$1`, [digest],
+       WHERE i.token_hash=$1 AND o.deleted_at IS NULL`, [digest],
     );
     if (this.clerk.enabled && (!candidate.rows[0]?.clerk_invitation_id || !userId)) throw new UnauthorizedException('Sign in with the invited email address to accept this invitation.');
     if (state(candidate.rows[0]) !== 'valid') this.rejectState(state(candidate.rows[0]));
     const initial = candidate.rows[0];
     let passwordHash: string | undefined;
     if (!this.clerk.enabled && !userId && password !== undefined) {
-      validatePassword(password, initial.email);
+      validatePassword(password);
       passwordHash = await hashPassword(password);
     }
     return this.db.transaction(async (client) => {
+      // Match deletion's organization -> customer -> membership lock order.
+      const organization = await client.query('SELECT id FROM organizations WHERE id=$1 AND deleted_at IS NULL FOR SHARE', [initial.organization_id]);
+      if (!organization.rows.length) this.rejectState('invalid');
       // Both acceptance and admin revocation serialize on the ledger-account row.
       await client.query(`SELECT id FROM customers WHERE id=$1 FOR UPDATE`, [initial.customer_id]);
       const fresh = await client.query<InvitationRow>(
         `SELECT i.*,o.name AS organization_name,c.status AS customer_status,c.email AS customer_email,c.name AS customer_name
          FROM invitations i JOIN organizations o ON o.id=i.organization_id JOIN customers c ON c.id=i.customer_id
-         WHERE i.token_hash=$1 FOR UPDATE OF i`, [digest],
+         WHERE i.token_hash=$1 AND o.deleted_at IS NULL FOR UPDATE OF i`, [digest],
       );
       const invitation = fresh.rows[0];
       const currentState = state(invitation);

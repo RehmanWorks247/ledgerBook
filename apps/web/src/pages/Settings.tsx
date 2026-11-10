@@ -1,14 +1,21 @@
-import { Check, Monitor, Moon, Sun } from "lucide-react";
-import { PageHeading } from "../components";
+import { AccountSettings } from "../account/AccountSettings";
+import { useContext } from "react";
+import { ArrowLeft, Check, Monitor, Moon, Sun } from "lucide-react";
+import { NotificationSettings } from "../NotificationSettings";
+import { Brand, PageHeading } from "../components";
+import { Link } from "../router";
+import { AuthContext } from "../state";
 import { useTheme, type AccentTheme, type ThemePreference } from "../theme";
+import { WorkspaceSettings } from "../workspaces/WorkspaceSettings";
 
 const modes = [
-  { id: "light", label: "Light", description: "A bright, clear workspace", Icon: Sun },
+  { id: "light", label: "Light", description: "A bright, clear view", Icon: Sun },
   { id: "dark", label: "Dark", description: "A quieter view after hours", Icon: Moon },
   { id: "system", label: "System", description: "Follow your device settings", Icon: Monitor },
 ] satisfies { id: ThemePreference; label: string; description: string; Icon: typeof Sun }[];
 
 const palettes = [
+  { id: "gold", label: "Gold" },
   { id: "green", label: "Emerald" },
   { id: "blue", label: "Blue" },
   { id: "violet", label: "Violet" },
@@ -38,15 +45,19 @@ function PalettePreview() {
   );
 }
 
-export function Settings() {
+export function Settings({ standalone = false }: { standalone?: boolean }) {
+  const { session } = useContext(AuthContext);
+  const canManageWorkspaces = session?.can_create_workspaces || session?.memberships.some(member => member.role === "admin");
   const { theme, preference, accent, setPreference, setAccent } = useTheme();
   const paletteName = palettes.find((palette) => palette.id === accent)!.label;
 
-  return (
+  const content = (
     <>
       <PageHeading
         title="Settings"
       />
+      <AccountSettings />
+      {!standalone && <WorkspaceSettings />}
       <section className="panel appearance-settings" aria-labelledby="appearance-title">
         <header className="appearance-settings-heading">
           <h2 id="appearance-title">Appearance</h2>
@@ -95,7 +106,7 @@ export function Settings() {
                 <span className="theme-option-label">
                   <span className="theme-option-swatch" aria-hidden="true" />
                   <strong>{label}</strong>
-                  {id === "green" && <small>Default</small>}
+                  {id === "gold" && <small>Default</small>}
                   <span className="appearance-check" aria-hidden="true">
                     {accent === id && <Check size={13} strokeWidth={2.5} />}
                   </span>
@@ -113,6 +124,19 @@ export function Settings() {
           </span>
         </footer>
       </section>
+      {!standalone && <NotificationSettings />}
     </>
   );
+  return standalone ? (
+    <main className="standalone account-standalone">
+      <Link to="/" className="brand-link account-brand">
+        <Brand />
+      </Link>
+      <Link to={canManageWorkspaces ? "/workspaces" : "/"} className="back-link">
+        <ArrowLeft size={16} />
+        {canManageWorkspaces ? "Back to your workspaces" : "Back to my account"}
+      </Link>
+      {content}
+    </main>
+  ) : content;
 }

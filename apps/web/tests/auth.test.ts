@@ -85,11 +85,13 @@ test("invitation context survives sign-in/reset routes without mistaking profile
   const token = "x".repeat(43);
   const ticket = "ticket+with/symbols=";
   const query = new URLSearchParams({ token, __clerk_ticket: ticket });
-  for (const path of ["invite", "login", "forgot-password"]) {
-    assert.deepEqual(
-      readInvitationLink(new URL(`https://ledger.test/${path}?${query}`)),
-      { token, ticket },
-    );
+  for (const origin of ["https://ledger.test", "http://localhost:3001", "http://localhost:5173"]) {
+    for (const path of ["invite", "login", "forgot-password", "reset-password"]) {
+      assert.deepEqual(
+        readInvitationLink(new URL(`${origin}/${path}?${query}`)),
+        { token, ticket },
+      );
+    }
   }
   assert.deepEqual(
     readInvitationLink(new URL("https://ledger.test/account#security")),

@@ -48,7 +48,7 @@ export function PaymentDetailsDialog({ payment, organizationId, timeZone, canRev
     element.showModal();
     document.body.style.overflow = "hidden";
     if (receipts) {
-      const receipt = element.querySelector<HTMLAnchorElement>(".payment-receipt");
+      const receipt = element.querySelector<HTMLButtonElement>("button.payment-receipt");
       receipt?.focus();
     }
     return () => {

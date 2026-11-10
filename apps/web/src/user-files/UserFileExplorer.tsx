@@ -1,4 +1,5 @@
-import { canPreviewAsset, usePrivateAsset } from "../private-assets";
+import { usePrivateAsset } from "../private-assets";
+import { FilePreviewModal } from "../file-preview/FilePreviewModal";
 import { ErrorNotice } from "../components";
 import {
   Fragment,
@@ -24,12 +25,16 @@ import {
   FolderInput,
   FolderPlus,
   HardDrive,
+  History,
   Image,
+  Info,
   LockKeyhole,
   LoaderCircle,
   Monitor,
+  Pencil,
   RotateCcw,
   Sheet,
+  Trash2,
   Upload,
   X,
 } from "lucide-react";
@@ -37,6 +42,7 @@ import {
   entriesFromFiles,
   getUserFileStore,
   readDroppedEntries,
+  type DocumentHistory,
   type FileNode,
   type FileStore,
   type UploadItem,
@@ -54,7 +60,8 @@ type ExplorerProps = {
 };
 type DialogState =
   | { kind: "create" }
-  | { kind: "move" | "details"; node: FileNode };
+  | { kind: "move" | "details" | "preview" | "rename" | "delete" | "versions"; node: FileNode };
+type Toast = { message: string; tone: "success" | "error" | "info"; id: number };
 const root = "root";
 const dragType = "application/x-ledgerbook-record-item";
 const names = new Intl.Collator(undefined, {
@@ -65,6 +72,10 @@ const dates = new Intl.DateTimeFormat(undefined, { dateStyle: "medium" });
 const emptyUploads: readonly UploadItem[] = [];
 const noUploads = () => emptyUploads;
 const noUploadSubscription = () => () => {};
+
+export function UploadNotification({ message, tone, dismiss }: { message: string; tone: Toast["tone"]; dismiss: () => void }) {
+  return <div className="ufe-toast" data-tone={tone} role={tone === "error" ? "alert" : "status"} aria-live={tone === "error" ? "assertive" : "polite"} aria-atomic="true"><span>{tone === "success" ? <Check size={16} /> : <AlertCircle size={16} />}</span><div>{message}</div><button type="button" aria-label="Dismiss notification" onClick={dismiss}><X size={14} /></button></div>;
+}
 
 function sizeLabel(bytes: number) {
   if (bytes < 1024) return `${bytes} B`;
@@ -188,18 +199,19 @@ function FileDetails({
   node,
   path,
   close,
+  preview,
 }: {
   node: FileNode;
   path: string;
   close: () => void;
+  preview: () => void;
 }) {
   const { url, error } = usePrivateAsset(node.url, node.file);
-  const preview = canPreviewAsset(node.mimeType || node.file?.type || "");
   return (
     <ExplorerDialog title="File details" close={close}>
       <div className="ufe-detail-name">
         <FileArt node={node} />
-        <strong>{url ? <a href={url} target={preview ? "_blank" : undefined} download={preview ? undefined : node.name} rel="noopener noreferrer" style={{ color: "inherit", textDecoration: "inherit" }} aria-label={`${preview ? "Open" : "Download"} ${node.name}`}>{node.name}</a> : node.name}</strong>
+        <strong>{node.name}</strong>
       </div>
       <ErrorNotice message={error} />
       {!url && !error && (node.url || node.file) && <p role="status">Loading attachment…</p>}
@@ -217,6 +229,9 @@ function FileDetails({
         <button className="button secondary" onClick={close}>
           Close
         </button>
+        <button type="button" className="button secondary" onClick={preview} aria-haspopup="dialog">
+          Preview file
+        </button>
         {url && (
           <a className="button" href={url} download={node.name}>
             <Download size={16} />
@@ -226,6 +241,84 @@ function FileDetails({
       </div>
     </ExplorerDialog>
   );
+}
+
+export function canEditText(node: FileNode) {
+  return node.kind === "file" && node.size <= 256 * 1024 && /\.(txt|csv|json|md|markdown)$/i.test(node.name);
+}
+
+export function validateTextEdit(name: string, text: string) {
+  const size = new TextEncoder().encode(text).length;
+  if (!size || size > 256 * 1024) throw new Error("Enter non-empty UTF-8 text up to 256 KB.");
+  if (Array.from(text).some(char => { const code=char.charCodeAt(0); return code===127 || code<32 && ![9,10,13].includes(code); })) throw new Error("Remove binary control characters before saving.");
+  if (/\.json$/i.test(name)) {
+    try { JSON.parse(text); } catch { throw new Error("Enter valid JSON before saving."); }
+  }
+}
+
+export function FileVersionDialog({node,store,canManage,close,saved}:{node:FileNode;store:FileStore;canManage:boolean;close:()=>void;saved:(message:string)=>void}) {
+  const [history,setHistory] = useState<DocumentHistory>();
+  const [error,setError] = useState("");
+  const [status,setStatus] = useState("Loading versions…");
+  const [working,setWorking] = useState(false);
+  const [editing,setEditing] = useState(false);
+  const [text,setText] = useState("");
+  const [original,setOriginal] = useState("");
+  const [editVersion,setEditVersion] = useState(node.version);
+  const [replacement,setReplacement] = useState<File>();
+  const [confirmRestore,setConfirmRestore] = useState<number>();
+  const dirty = editing && text !== original || Boolean(replacement);
+  const pending = useRef(false);
+  useEffect(() => {
+    let active = true;
+    void store.history?.(node.id).then(value => {if(active) {setHistory(value);setStatus("");}}).catch(reason => {if(active) {setError(reason instanceof Error?reason.message:"Versions could not be loaded.");setStatus("");}});
+    return () => {active=false;};
+  },[store,node.id]);
+  useEffect(() => {
+    if (!dirty && !working) return;
+    const warn = (event:BeforeUnloadEvent) => event.preventDefault();
+    window.addEventListener("beforeunload",warn);
+    return () => window.removeEventListener("beforeunload",warn);
+  },[dirty,working]);
+  function dismiss() {
+    if (working) return;
+    if (dirty && !window.confirm("Discard the unsaved changes to this file?")) return;
+    close();
+  }
+  async function run(action:()=>Promise<void>) {
+    if (pending.current) return;
+    pending.current=true;setWorking(true);setError("");
+    try {await action();} catch(reason) {setError(reason instanceof Error?reason.message:"The file could not be saved.");setStatus("");}
+    finally {pending.current=false;setWorking(false);}
+  }
+  return <ExplorerDialog title={canManage?"Edit file & version history":"File version history"} close={dismiss}>
+    <p className="ufe-dialog-context"><FileText size={16}/>{node.name}</p>
+    <ErrorNotice message={error}/>
+    {status && <p role="status">{status}</p>}
+    {canManage && history && <div className="stack-form">
+      <p>Saved changes create a new version. The customer sees the latest file; earlier versions remain available below.</p>
+      {canEditText(node) && store.readText && !editing && <button type="button" className="button secondary" disabled={working} onClick={() => void run(async()=>{
+        setStatus("Opening text…");const result=await store.readText!(node.id);setText(result.text);setOriginal(result.text);setEditVersion(result.version);setEditing(true);setReplacement(undefined);setStatus("");
+      })}>Edit text</button>}
+      {editing && <label>File content<textarea className="ufe-text-editor" aria-label="File content" spellCheck={false} value={text} disabled={working} onChange={event=>setText(event.target.value)}/><small>UTF-8 · TXT, CSV, JSON and Markdown · Up to 256 KB</small></label>}
+      {!editing && <label>Replace file<input aria-label="Replacement file" type="file" disabled={working} onChange={event=>{setReplacement(event.target.files?.[0]);setError("");}}/><small>Choose a file with the same extension, up to 10 MB. The current name stays the same.</small></label>}
+      <div className="form-actions"><button type="button" className="button" disabled={working || !dirty} onClick={()=>void run(async()=>{
+        let file=replacement;
+        if(editing) {validateTextEdit(node.name,text);file=new globalThis.File([text],node.name,{type:node.mimeType});}
+        if(!file) return;
+        await store.replace!({...node,version:editing?editVersion:history.version},file,setStatus);
+        saved("New file version saved successfully.");close();
+      })}>{working?"Saving…":editing?"Save text":"Save replacement"}</button></div>
+    </div>}
+    <h3>Version history</h3>
+    {history && <ol className="ufe-version-list">{history.items.map(version=><li key={version.version}>
+      <div><strong>Version {version.version}{version.current?" · Current":""}</strong><small>{dates.format(new Date(version.createdAt))} · {sizeLabel(version.size)}</small></div>
+      <button type="button" className="button secondary" disabled={working} aria-label={`Download version ${version.version}`} onClick={()=>void run(async()=>{await store.downloadVersion!(node.id,version.version,version.name);})}><Download size={14}/>Download</button>
+      {canManage && !version.current && <button type="button" className="button secondary" disabled={working || dirty} aria-label={`Restore version ${version.version}`} onClick={()=>setConfirmRestore(version.version)}>Restore</button>}
+    </li>)}</ol>}
+    {confirmRestore && <div className="ufe-restore-confirm"><p>Restore version {confirmRestore} as the latest file? The current content will remain in version history.</p><div className="form-actions"><button type="button" className="button secondary" disabled={working} onClick={()=>setConfirmRestore(undefined)}>Keep current version</button><button type="button" className="button" disabled={working} onClick={()=>void run(async()=>{setStatus("Restoring…");await store.restore!(node.id,confirmRestore,history!.version);saved("Earlier file version restored successfully.");close();})}>Confirm restore</button></div></div>}
+    <div className="form-actions"><button type="button" className="button secondary" disabled={working} onClick={dismiss}>Close</button></div>
+  </ExplorerDialog>;
 }
 
 export function UserFileExplorer({
@@ -250,7 +343,7 @@ export function UserFileExplorer({
     return () => { unsubscribe(); clearTimeout(timer); };
   }, [store, onFilesChanged]);
   return (
-    <Explorer
+    <FileExplorer
       key={`${recordKey}/${canManage}`}
       store={store}
       canManage={canManage}
@@ -258,7 +351,7 @@ export function UserFileExplorer({
   );
 }
 
-function Explorer({
+export function FileExplorer({
   store,
   canManage,
 }: {
@@ -277,7 +370,7 @@ function Explorer({
   const [formError, setFormError] = useState("");
   const [notice, setNotice] = useState({ message: "", error: false });
   const [busy, setBusy] = useState(false);
-  const [toast, setToast] = useState<{ message: string; id: number } | null>(null);
+  const [toast, setToast] = useState<Toast | null>(null);
   const [dropTarget, setDropTarget] = useState<string | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const folderInput = useRef<HTMLInputElement>(null);
@@ -294,12 +387,12 @@ function Explorer({
     };
   }, [store]);
   useEffect(() => {
-    if (!toast) return;
+    if (!toast || toast.tone === "error") return;
     const timer = window.setTimeout(() => setToast(null), 4500);
     return () => window.clearTimeout(timer);
   }, [toast]);
   useEffect(() => {
-    if (!uploads.some((item) => ["queued", "uploading", "saving"].includes(item.status))) return;
+    if (!uploads.some((item) => ["queued", "preparing", "uploading", "saving"].includes(item.status))) return;
     const beforeUnload = (event: BeforeUnloadEvent) => { event.preventDefault(); };
     window.addEventListener("beforeunload", beforeUnload);
     return () => window.removeEventListener("beforeunload", beforeUnload);
@@ -342,17 +435,28 @@ function Explorer({
     id ? byId.get(id)?.name || "this folder" : "All files";
   const uploaded = uploads.filter((item) => item.status === "complete").length;
   const retryable = uploads.filter((item) => ["failed", "cancelled"].includes(item.status)).length;
-  const uploading = uploads.some((item) => ["queued", "uploading", "saving"].includes(item.status));
+  const uploading = uploads.some((item) => ["queued", "preparing", "uploading", "saving"].includes(item.status));
   const uploadDestination = !store.load || path.some((folder) => folder.serviceKey);
+
+  function notify(message: string, tone: Toast["tone"] = "success") {
+    setToast({ message, tone, id: Date.now() });
+  }
 
   function reportUpload(result: void | UploadResult, target?: string | null) {
     if (!mounted.current) return;
     if (!result) {
       setNotice({ message: `Added to ${location(target ?? null)}.`, error: false });
+      notify(`Added to ${location(target ?? null)}.`);
       return;
     }
-    if (result.succeeded) setToast({ message: `${result.succeeded === 1 ? "File" : `${result.succeeded} files`} uploaded successfully.`, id: Date.now() });
     const incomplete = result.failed + result.cancelled;
+    if (incomplete) {
+      const failure = store.getUploads?.().find((item) => item.status === "failed");
+      const saved = result.succeeded ? `${result.succeeded} ${result.succeeded === 1 ? "file" : "files"} saved. ` : "";
+      notify(`${saved}${result.failed ? `${result.failed} ${result.failed === 1 ? "file could" : "files could"} not be uploaded. ${failure ? `${failure.name}: ${failure.error}` : "Retry below."}` : "Uploads stopped. Retry below to finish saving your files."}`, result.failed ? "error" : "info");
+    } else {
+      notify(result.succeeded ? `${result.succeeded === 1 ? "File" : `${result.succeeded} files`} uploaded successfully.` : "Folders added successfully.");
+    }
     setNotice({
       message: incomplete ? `${incomplete} ${incomplete === 1 ? "file needs" : "files need"} attention. Retry below.`
         : result.succeeded ? target === undefined ? "Files saved." : `Saved to ${location(target)}.` : "Folders added.",
@@ -367,17 +471,16 @@ function Explorer({
   }
   function openDialog(next: DialogState) {
     setDialog(next);
-    setField("");
+    setField(next.kind === "rename" ? next.node.name : "");
     setFormError("");
   }
   function reportError(error: unknown) {
+    const message = error instanceof Error ? error.message : "The change could not be made. Please retry.";
     setNotice({
-      message:
-        error instanceof Error
-          ? error.message
-          : "The items could not be added.",
+      message,
       error: true,
     });
+    notify(message, "error");
   }
   async function addFromPicker(event: ChangeEvent<HTMLInputElement>) {
     if (!canManage || busy || mutationPending.current || !event.target.files?.length) return;
@@ -461,9 +564,9 @@ function Explorer({
   }
   function dragProps(node: FileNode) {
     return {
-      draggable: canManage && !busy,
+      draggable: canManage && !busy && !node.defaultFolder,
       onDragStart(event: DragEvent) {
-        if (!canManage || busy) return event.preventDefault();
+        if (!canManage || busy || node.defaultFolder) return event.preventDefault();
         dragging.current = node.id;
         event.dataTransfer.effectAllowed = "move";
         event.dataTransfer.setData(dragType, node.id);
@@ -474,9 +577,13 @@ function Explorer({
       },
     };
   }
-  function moveButton(node: FileNode) {
+  function managementButtons(node: FileNode) {
     return (
-      canManage && (
+      !node.defaultFolder && (
+        <div className="ufe-item-actions">
+        {node.kind === "file" && <button type="button" className="ufe-move" aria-label={`Details for ${node.name}`} title="File details" aria-haspopup="dialog" onClick={() => openDialog({ kind: "details", node })}><Info size={15} /></button>}
+        {node.kind === "file" && store.history && <button type="button" className="ufe-move" disabled={busy} aria-label={`${canManage ? "Edit file and versions" : "Version history"} ${node.name}`} title={canManage ? "Edit file and version history" : "Version history"} onClick={() => openDialog({kind:"versions",node})}><History size={15}/></button>}
+        {canManage && <>
         <button
           type="button"
           className="ufe-move"
@@ -487,6 +594,10 @@ function Explorer({
         >
           <FolderInput size={16} />
         </button>
+        {store.rename && <button type="button" className="ufe-move" disabled={busy} aria-label={`Rename ${node.name}`} title={`Rename ${node.name}`} onClick={() => openDialog({ kind: "rename", node })}><Pencil size={15} /></button>}
+        {store.remove && <button type="button" className="ufe-move" disabled={busy || (node.kind === "folder" && Boolean(counts.get(node.id)))} aria-label={`Delete ${node.name}`} title={node.kind === "folder" && counts.get(node.id) ? "Move or delete this folder’s contents first" : `Delete ${node.name}`} onClick={() => openDialog({ kind: "delete", node })}><Trash2 size={15} /></button>}
+        </>}
+        </div>
       )
     );
   }
@@ -494,7 +605,7 @@ function Explorer({
     dialog?.kind === "move" ? moveDestinations(byId, dialog.node) : [];
   async function submit(event: FormEvent) {
     event.preventDefault();
-    if (!canManage || busy || mutationPending.current || !dialog || dialog.kind === "details") return;
+    if (!canManage || busy || mutationPending.current || !dialog || dialog.kind === "details" || dialog.kind === "preview" || dialog.kind === "versions") return;
     setBusy(true);
     mutationPending.current = true;
     ++statusVersion.current;
@@ -502,19 +613,29 @@ function Explorer({
       if (dialog.kind === "create") {
         await store.createFolder(folderId, field);
         setNotice({ message: `Created ${field.trim()}.`, error: false });
+        notify(`Created ${field.trim()}.`);
+      } else if (dialog.kind === "rename") {
+        const originalExtension = dialog.node.kind === "file" ? /\.[^.]+$/.exec(dialog.node.name)?.[0] ?? "" : "";
+        const nextExtension = /\.[^.]+$/.exec(field.trim())?.[0] ?? "";
+        if (dialog.node.kind === "file" && nextExtension.toLowerCase() !== originalExtension.toLowerCase())
+          throw new Error(originalExtension ? `Keep the original ${originalExtension} extension when renaming this file.` : "Keep this file without an extension when renaming it.");
+        await store.rename?.(dialog.node.id, field.trim());
+        notify(`Renamed to ${field.trim()}.`);
+      } else if (dialog.kind === "delete") {
+        await store.remove?.(dialog.node.id);
+        notify(`Deleted ${dialog.node.name}.`);
       } else {
         if (!field) return;
         const target = field === root ? null : field;
         await store.move(dialog.node.id, target);
         setNotice({ message: `Moved to ${location(target)}.`, error: false });
+        notify(`Moved to ${location(target)}.`);
       }
       setDialog(null);
     } catch (error) {
-      setFormError(
-        error instanceof Error
-          ? error.message
-          : "The change could not be made.",
-      );
+      const message = error instanceof Error ? error.message : "The change could not be made.";
+      setFormError(message);
+      notify(message, "error");
     } finally {
       mutationPending.current = false;
       if (mounted.current) setBusy(false);
@@ -524,7 +645,6 @@ function Explorer({
     <section
       aria-labelledby={titleId}
       className="panel ufe"
-      aria-busy={busy}
       {...dropProps(folderId)}
       onDragLeave={(event) => {
         if (
@@ -536,7 +656,7 @@ function Explorer({
     >
       <header className="ufe-header">
         <div>
-          <span className="eyebrow">USER FILES</span>
+          <span className="eyebrow">User files</span>
           <h2 id={titleId}>File explorer</h2>
         </div>
         {canManage ? (
@@ -607,7 +727,7 @@ function Explorer({
           {children.length} {children.length === 1 ? "item" : "items"}
         </span>
       </div>
-      <div className="ufe-body">
+      <div className="ufe-body" aria-busy={busy}>
         {folders.length > 0 && (
           <>
             <h3 className="ufe-label">
@@ -639,7 +759,7 @@ function Explorer({
                         </small>
                       </span>
                     </button>
-                    {moveButton(node)}
+                    {managementButtons(node)}
                   </li>
                 );
               })}
@@ -656,8 +776,9 @@ function Explorer({
                 <li key={node.id} {...dragProps(node)}>
                   <button
                     className="ufe-file"
-                    title={node.name}
-                    onClick={() => openDialog({ kind: "details", node })}
+                    title={`Preview ${node.name}`}
+                    aria-haspopup="dialog"
+                    onClick={() => openDialog({ kind: "preview", node })}
                   >
                     <FileArt node={node} />
                     <span>{node.name}</span>
@@ -666,7 +787,7 @@ function Explorer({
                   <small className="ufe-date">
                     {dates.format(node.modifiedAt)}
                   </small>
-                  {moveButton(node)}
+                  {managementButtons(node)}
                 </li>
               ))}
             </ul>
@@ -716,14 +837,14 @@ function Explorer({
           </div>
           <ul className="ufe-upload-list">
             {uploads.map((item) => {
-              const active = item.status === "uploading" || item.status === "saving";
+              const active = ["preparing", "uploading", "saving"].includes(item.status);
               const percent = Math.min(100, Math.round(item.loaded / Math.max(1, item.total) * 100));
               return (
                 <li key={item.id} data-state={item.status}>
                   <span className="ufe-upload-icon">{item.status === "complete" ? <Check size={16} /> : active ? <LoaderCircle size={16} className="ufe-spinning" /> : item.error ? <AlertCircle size={16} /> : <FileText size={16} />}</span>
                   <div className="ufe-upload-file">
-                    <div><strong title={item.name}>{item.name}</strong><small>{item.status === "complete" ? "Saved" : item.status === "saving" ? "Saving…" : item.status === "uploading" ? `${percent}%` : item.status === "cancelled" ? "Stopped" : item.status === "failed" ? "Failed" : "Queued"}</small></div>
-                    {active && <progress max={100} value={percent} aria-label={`Uploading ${item.name}`} />}
+                    <div><strong title={item.name}>{item.name}</strong><small>{item.status === "complete" ? "Saved" : item.status === "saving" ? "Verifying & saving…" : item.status === "preparing" ? "Preparing…" : item.status === "uploading" ? `${percent}%` : item.status === "cancelled" ? "Stopped" : item.status === "failed" ? "Failed" : "Queued"}</small></div>
+                    {active && <progress max={100} value={item.status === "preparing" ? undefined : percent} aria-label={`${item.status === "preparing" ? "Preparing" : item.status === "saving" ? "Saving" : "Uploading"} ${item.name}`} />}
                     {item.error && <p>{item.error}</p>}
                   </div>
                 </li>
@@ -749,17 +870,25 @@ function Explorer({
           )}
         </span>
       </footer>
-      {toast && <div key={toast.id} className="ufe-toast" role="status" aria-live="polite"><span><Check size={16} /></span>{toast.message}<button type="button" aria-label="Dismiss notification" onClick={() => setToast(null)}><X size={14} /></button></div>}
+      {toast && <UploadNotification key={toast.id} message={toast.message} tone={toast.tone} dismiss={() => setToast(null)} />}
       {dialog?.kind === "details" && (
         <FileDetails
           node={dialog.node}
           path={folderPath(path)}
           close={() => setDialog(null)}
+          preview={() => openDialog({ kind: "preview", node: dialog.node })}
         />
       )}
-      {dialog && dialog.kind !== "details" && canManage && (
+      {dialog?.kind === "preview" && (
+        <FilePreviewModal
+          file={{ name: dialog.node.name, mimeType: dialog.node.mimeType || dialog.node.file?.type, size: dialog.node.size, url: dialog.node.url, blob: dialog.node.file }}
+          onClose={() => setDialog(null)}
+        />
+      )}
+      {dialog?.kind === "versions" && <FileVersionDialog node={dialog.node} store={store} canManage={canManage} close={() => setDialog(null)} saved={message => notify(message)} />}
+      {dialog && dialog.kind !== "details" && dialog.kind !== "preview" && dialog.kind !== "versions" && canManage && (
         <ExplorerDialog
-          title={dialog.kind === "create" ? "New folder" : "Move item"}
+          title={dialog.kind === "create" ? "New folder" : dialog.kind === "rename" ? "Rename item" : dialog.kind === "delete" ? "Delete item" : "Move item"}
           close={() => setDialog(null)}
         >
           <form className="stack-form" onSubmit={submit}>
@@ -767,11 +896,12 @@ function Explorer({
               <FolderClosed size={16} />
               {dialog.kind === "create" ? folderPath(path) : dialog.node.name}
             </p>
-            {dialog.kind === "create" ? (
+            {dialog.kind === "delete" ? <p>This permanently deletes this {dialog.node.kind} from the booking. {dialog.node.kind === "file" && "The customer will no longer be able to open it."}</p> : dialog.kind === "create" || dialog.kind === "rename" ? (
               <label>
-                Folder name
+                {dialog.kind === "create" ? "Folder name" : "Name"}
                 <input
                   required
+                  maxLength={240}
                   autoFocus
                   autoComplete="off"
                   placeholder="e.g. Signed agreements"
@@ -821,8 +951,8 @@ function Explorer({
               >
                 Cancel
               </button>
-              <button className="button" disabled={busy || !field.trim()}>
-                {dialog.kind === "create" ? "Create folder" : "Move item"}
+              <button className={`button${dialog.kind === "delete" ? " danger" : ""}`} disabled={busy || (dialog.kind !== "delete" && !field.trim())}>
+                {busy ? "Saving…" : dialog.kind === "create" ? "Create folder" : dialog.kind === "rename" ? "Save name" : dialog.kind === "delete" ? "Delete permanently" : "Move item"}
               </button>
             </div>
           </form>

@@ -39,7 +39,7 @@ export function CurrencySettingsPanel() {
       {data?.fetched_at ? ` Last checked ${new Date(data.fetched_at).toLocaleString()}.` : ' Rates are loading or unavailable.'}
       {data?.unavailable ? ' The provider is unavailable; cached rates are shown where available.' : ''}</span>
       <button className="button secondary small" onClick={() => { void refresh(); }}>Check rates</button></div>
-    <p className="muted">{member.role === 'admin' ? 'Manual rates apply to everyone in this workspace until you restore the automatic rate.' : 'An administrator can change workspace exchange rates.'}</p>
+    <p className="muted">{member.role === 'admin' ? 'Manual rates apply to everyone in this workspace until you restore the automatic rate.' : 'An administrator can change exchange rates.'}</p>
     <label className="currency-search">Find a currency<input type="search" value={search} onChange={e => setSearch(e.target.value)} placeholder="Search code or name" /></label>
     <div className="currency-rate-list">
       {data?.currencies.filter(c => c.code !== data.base_currency && `${c.code} ${c.name}`.toLowerCase().includes(search.toLowerCase())).map(quote =>

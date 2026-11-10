@@ -1,0 +1,16 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "outDir": "dist/operations",
+    "rootDir": ".",
+    "noEmit": false,
+    "sourceMap": false
+  },
+  "include": [
+    "scripts/migrate.ts",
+    "scripts/release-preflight.ts",
+    "scripts/release-monitor.ts",
+    "scripts/database-backup.ts",
+    "scripts/document-backup.ts"
+  ]
+}

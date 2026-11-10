@@ -34,6 +34,7 @@ export class AuthService {
       await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [identity.email]);
       const linked = await client.query<AuthUser>('SELECT id,email,name,clerk_user_id FROM users WHERE clerk_user_id=$1 FOR UPDATE', [identity.id]);
       if (linked.rows[0]) {
+        if(linked.rows[0].email===identity.email && linked.rows[0].name===identity.name) return linked.rows[0];
         const collision = await client.query('SELECT id FROM users WHERE email=$1 AND id<>$2', [identity.email,linked.rows[0].id]);
         if (collision.rowCount) throw new ConflictException(EMAIL_LINK_CONFLICT);
         // Clerk is the source of truth for the verified account email and display name.
@@ -96,12 +97,21 @@ export class AuthService {
   }
 
   async session(user: AuthUser) {
-    const memberships = await this.db.query(
-      `SELECT m.id,m.organization_id,m.role,m.is_active,m.customer_id,o.name AS organization_name,o.currency,o.currency_exponent
-       FROM memberships m JOIN organizations o ON o.id=m.organization_id
+    const [memberships, capability] = await Promise.all([this.db.query(
+      `SELECT m.id,m.organization_id,m.role,m.is_active,m.customer_id,o.name AS organization_name,o.currency,o.currency_exponent,
+        o.description AS organization_description,o.color AS organization_color,o.version AS organization_version
+       FROM memberships m JOIN LATERAL (
+         SELECT name,currency,currency_exponent,description,color,version FROM organizations
+         WHERE id=m.organization_id AND deleted_at IS NULL LIMIT 1
+       ) o ON true
        WHERE m.user_id=$1 AND m.is_active=true AND m.deleted_at IS NULL ORDER BY o.name,m.id`, [user.id],
-    );
-    return { user, memberships: memberships.rows.map(member => ({ ...member, time_zone: config.businessTimeZone })) };
+    ), this.db.query<{ allowed: boolean }>(
+      'SELECT workspace_creator AS allowed FROM users WHERE id=$1', [user.id],
+    )]);
+    // The bounded lateral lookup avoids scanning every tenant as the service
+    // grows. Removing a last workspace preserves only the creator capability.
+    return { user, can_create_workspaces: Boolean(capability.rows[0]?.allowed) || memberships.rows.some(member => member.role === 'admin'),
+      memberships: memberships.rows.map(member => ({ ...member, time_zone: config.businessTimeZone })) };
   }
 
   /** All requests return before identity lookup or email, including unknown addresses. */
@@ -155,8 +165,7 @@ export class AuthService {
     if (!candidate.rows[0]) throw new BadRequestException('This password reset link is invalid or has expired.');
     const passwordHash = await hashPassword(password);
     await this.db.transaction(async (client) => {
-      const user = await client.query(`SELECT id,email FROM users WHERE id=$1 FOR UPDATE`, [candidate.rows[0].user_id]);
-      validatePassword(password, user.rows[0].email);
+      await client.query(`SELECT id FROM users WHERE id=$1 FOR UPDATE`, [candidate.rows[0].user_id]);
       const consumed = await client.query(
         `UPDATE password_resets SET used_at=now() WHERE token_hash=$1 AND used_at IS NULL AND expires_at>now() RETURNING user_id`, [digest],
       );

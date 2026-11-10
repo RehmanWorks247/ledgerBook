@@ -4,6 +4,41 @@ import { it } from 'node:test';
 import { ClerkService } from '../apps/api/src/auth/clerk.service';
 import { config } from '../apps/api/src/config';
 
+it('requests real invitation delivery with the configured localhost port and encoded invitation token', async (test) => {
+  const previousKey = config.clerkSecretKey;
+  const previousUrl = config.appUrl;
+  config.clerkSecretKey = 'sk_test_unit-test-placeholder';
+  const token = 'local+invitation/token=with&symbols';
+  const bodies: Record<string, unknown>[] = [];
+  const fetchMock = test.mock.method(globalThis, 'fetch', async (input: string | URL | Request, init?: RequestInit) => {
+    const request = new Request(input, init);
+    assert.equal(request.method, 'POST');
+    assert.equal(new URL(request.url).pathname, '/v1/invitations');
+    bodies.push(await request.json() as Record<string, unknown>);
+    return Response.json({object:'invitation', id:'inv_localhost', email_address:'person@example.test', status:'pending', public_metadata:{}});
+  });
+  try {
+    const gateway = new ClerkService();
+    for (const origin of ['http://localhost:3001', 'http://localhost:5173']) {
+      config.appUrl = origin;
+      const invitation = await gateway.invite({email:'person@example.test', name:'Local Test', organizationName:'Local Workspace', invitationId:'inv_app_local', token});
+      assert.equal(invitation.id, 'inv_localhost');
+      const body = bodies.at(-1)!;
+      const redirect = new URL(String(body.redirect_url));
+      assert.equal(redirect.origin, origin);
+      assert.equal(redirect.pathname, '/invite');
+      assert.equal(redirect.searchParams.get('token'), token);
+      assert.equal([...redirect.searchParams].length, 1);
+      assert.equal(body.email_address, 'person@example.test');
+      assert.equal(body.notify, true);
+      assert.deepEqual(body.public_metadata, {invitationId:'inv_app_local', name:'Local Test', organizationName:'Local Workspace'});
+    }
+    assert.equal(bodies.length, 2);
+  } finally {
+    fetchMock.mock.restore(); config.clerkSecretKey = previousKey; config.appUrl = previousUrl;
+  }
+});
+
 it('verifies signed Clerk sessions, origin, live revocation and verified primary email without trusting browser claims', async (test) => {
   const previousKey = config.clerkSecretKey;
   const previousPublishableKey = config.clerkPublishableKey;
@@ -16,9 +51,12 @@ it('verifies signed Clerk sessions, origin, live revocation and verified primary
   let verificationStatus = 'verified';
   let sessionUserId = 'user_gateway';
   let providerUnavailable = false;
+  let liveRequests=0;
   const fetchMock = test.mock.method(globalThis,'fetch',async (input: string | URL | Request) => {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
     if (url.endsWith('/jwks')) return Response.json({keys:[jwk]});
+    liveRequests++;
+    await new Promise(resolve=>setTimeout(resolve,5));
     if (providerUnavailable) throw new Error('Provider unavailable');
     if (url.endsWith('/sessions/sess_gateway')) return Response.json({object:'session',id:'sess_gateway',user_id:sessionUserId,status:sessionStatus,client_id:'client_gateway'});
     if (url.endsWith('/users/user_gateway')) return Response.json({
@@ -37,11 +75,18 @@ it('verifies signed Clerk sessions, origin, live revocation and verified primary
     const gateway = new ClerkService();
     const token = signed();
     assert.deepEqual(await gateway.verify(token),{id:'user_gateway',email:'person@example.test',name:'Gateway Test'});
+    liveRequests=0;
+    const parallel=await Promise.all(Array.from({length:10},()=>gateway.verify(token)));
+    assert.equal(liveRequests,2,'one session and one user check for a simultaneous burst');
+    assert.ok(parallel.every(identity=>identity?.id==='user_gateway'));
+    parallel[0]!.name='Changed locally';assert.equal(parallel[1]!.name,'Gateway Test');
     assert.equal(await gateway.verify(`${token.slice(0,-10)}forged`),null);
     assert.equal(await gateway.verify(signed({azp:'https://attacker.example'})),null);
     assert.equal(await gateway.verify(signed({exp:1})),null);
     assert.equal(await gateway.verify(signed({sts:'pending'})),null);
+    liveRequests=0;
     sessionStatus = 'revoked'; assert.equal(await gateway.verify(token),null); sessionStatus = 'active';
+    assert.equal(liveRequests,2,'completed checks cannot hide subsequent revocation');
     userBanned = true; assert.equal(await gateway.verify(token),null); userBanned = false;
     verificationStatus = 'unverified'; assert.equal(await gateway.verify(token),null); verificationStatus = 'verified';
     sessionUserId = 'user_other'; assert.equal(await gateway.verify(token),null); sessionUserId = 'user_gateway';

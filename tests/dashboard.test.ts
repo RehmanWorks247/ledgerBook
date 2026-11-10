@@ -153,6 +153,26 @@ describe('customer overview and combined ledger', () => {
     assert.equal((await dashboard.overview(seed.admin,{start:'2000-01-01',end:'2000-01-02'},now)).activity.length,0);
   });
 
+  it('chooses the newest applicable instalment or customer reminder without mixing bookings or tenants', async () => {
+    const instalment = (await fixture.db.query('SELECT id FROM booking_instalments WHERE booking_id=$1',[second.id])).rows[0].id;
+    const record = async (status:string, metadata:Record<string,string>, createdAt:string, organization=seed.orgId, actor=seed.adminId) => {
+      await fixture.db.query(`INSERT INTO audit_events(organization_id,actor_id,action,object_id,metadata,created_at)
+        VALUES($1,$2,'reminder.sent',$3,$4::jsonb,$5)`,
+      [organization,actor,randomUUID(),JSON.stringify({...metadata,status}),createdAt]);
+    };
+    const current = async () => (await dashboard.overview(seed.admin,{},now)).attention.find(row=>row.id===instalment)?.reminder_status;
+    await record('instalment',{instalment_id:instalment},'2026-11-08T10:00:00Z');
+    assert.equal(await current(),'instalment');
+    await record('customer',{customerId:seed.customerId},'2026-11-08T11:00:00Z');
+    assert.equal(await current(),'customer');
+    await record('booking',{customer_id:seed.customerId,booking_id:second.id},'2026-11-08T12:00:00Z');
+    await record('other booking',{customer_id:seed.customerId,booking_id:first.id},'2026-11-08T13:00:00Z');
+    await record('other tenant',{instalment_id:instalment},'2026-11-08T14:00:00Z',seed.otherOrgId,seed.otherAdminId);
+    assert.equal(await current(),'booking');
+    await record('instalment tie winner',{instalment_id:instalment},'2026-11-08T12:00:00Z');
+    assert.equal(await current(),'instalment tie winner');
+  });
+
   it('does not reuse payments that settled older unscheduled debt, and accounts for credit and later reversals', async () => {
     const customerId=randomUUID();
     await fixture.db.query(`INSERT INTO customers(id,organization_id,name,email,created_by,idempotency_key,request_hash)

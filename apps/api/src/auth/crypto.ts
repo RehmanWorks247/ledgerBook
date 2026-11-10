@@ -1,5 +1,6 @@
 import { createHash, randomBytes, scrypt, timingSafeEqual } from 'node:crypto';
 import { BadRequestException } from '@nestjs/common';
+import { passwordSchema } from './password-policy';
 
 const PARAMETERS = { N: 32768, r: 8, p: 3, maxmem: 64 * 1024 * 1024 };
 
@@ -20,14 +21,9 @@ function derive(password: string, salt: Buffer): Promise<Buffer> {
   });
 }
 
-export function validatePassword(password: unknown, email?: string): asserts password is string {
-  if (typeof password !== 'string' || password.length < 12 || password.length > 128) {
-    throw new BadRequestException('Use a password between 12 and 128 characters.');
-  }
-  const common = new Set(['password1234', 'password12345', 'password123456', '123456789012', 'qwerty12345678']);
-  if (common.has(password.toLowerCase()) || (email && password.toLowerCase().includes(email.toLowerCase()))) {
-    throw new BadRequestException('Choose a password that is difficult to guess and does not contain your email.');
-  }
+export function validatePassword(password: unknown): asserts password is string {
+  const parsed = passwordSchema.safeParse(password);
+  if (!parsed.success) throw new BadRequestException(parsed.error.issues.map(issue => issue.message).join(' '));
 }
 
 export async function hashPassword(password: string): Promise<string> {

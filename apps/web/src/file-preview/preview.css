@@ -1,0 +1,86 @@
+.file-preview-dialog { width: min(1180px, calc(100vw - 48px)); height: min(900px, calc(100dvh - 48px)); max-width: none; max-height: none; padding: 0; border: 1px solid var(--line); border-radius: 14px; color: var(--text); background: var(--surface); box-shadow: 0 24px 100px #0005; overflow: hidden; }
+.file-preview-dialog[open] { display: flex; flex-direction: column; }
+.file-preview-dialog::backdrop { background: rgb(12 20 29 / 68%); }
+.file-preview-heading { display: flex; flex: 0 0 auto; align-items: center; gap: 14px; padding: 18px 20px; border-bottom: 1px solid var(--line); }
+.file-preview-file-icon { display: grid; place-items: center; flex: 0 0 42px; width: 42px; height: 42px; border: 1px solid var(--line); border-radius: 9px; color: var(--muted); }
+.file-preview-title { min-width: 0; flex: 1; }
+.file-preview-title h2 { margin: 0; font-size: 16px; line-height: 1.4; font-weight: 600; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.file-preview-title p { margin: 4px 0 0; color: var(--muted); font-size: 12px; }
+.file-preview-close { flex-shrink: 0; }
+.file-preview-body { flex: 1; min-height: 0; min-width: 0; display: flex; background: var(--surface-subtle); overflow: hidden; }
+.file-preview-state { margin: auto; padding: 32px; max-width: 560px; text-align: center; color: var(--muted); }
+.file-preview-state > svg { display: block; margin: 0 auto 14px; }
+.file-preview-state h3 { color: var(--text); font-size: 17px; margin: 0 0 8px; }
+.file-preview-state p { margin: 8px 0 18px; line-height: 1.6; font-size: 14px; }
+.file-preview-state .button { margin: auto; }
+.file-preview-spinner { animation: file-preview-spin 1s linear infinite; }
+@keyframes file-preview-spin { to { transform: rotate(360deg); } }
+.file-preview-footer { display: flex; justify-content: space-between; gap: 16px; flex: 0 0 auto; padding: 11px 20px; border-top: 1px solid var(--line); color: var(--muted); font-size: 11px; }
+.file-preview-image-view, .file-preview-pdf { display: flex; flex-direction: column; width: 100%; min-height: 0; }
+.file-preview-tools { display: flex; justify-content: center; align-items: center; flex-wrap: wrap; gap: 7px; padding: 9px 12px; background: var(--surface); border-bottom: 1px solid var(--line); flex: 0 0 auto; }
+.file-preview-tools output { font-size: 12px; font-variant-numeric: tabular-nums; min-width: 42px; text-align: center; }
+.file-preview-tools .button { font-size: 11px; min-height: 30px; padding: 6px 10px; }
+.file-preview-tool-divider { width: 1px; height: 20px; background: var(--line); margin: 0 7px; }
+.file-preview-image-scroll { flex: 1; overflow: auto; position: relative; min-height: 0; }
+.file-preview-image-scroll > .file-preview-state { position: absolute; inset: 0; display: grid; place-content: center; }
+.file-preview-image-stage { display: flex; align-items: center; justify-content: center; padding: 24px; box-sizing: border-box; }
+.file-preview-image-stage img { object-fit: contain; flex-shrink: 0; }
+.file-preview-pdf-scroll { flex: 1; min-height: 0; overflow: auto; padding: 20px; position: relative; }
+.file-preview-pdf-sheet { position: relative; width: max-content; min-width: 1px; margin: 0 auto; }
+.file-preview-pdf-sheet canvas { display: block; background: white; box-shadow: 0 2px 12px #0002; }
+/* Scoped layout for PDF.js 6's TextLayer; keep its font/transform variables in
+   sync with pdfjs-dist when upgrading. The canvas supplies the visible glyphs. */
+.file-preview-pdf-sheet .textLayer {
+  position: absolute; inset: 0; overflow: clip; z-index: 1;
+  color-scheme: only light; line-height: 1; text-align: initial;
+  letter-spacing: normal; word-spacing: normal;
+  -webkit-text-size-adjust: none; text-size-adjust: none; forced-color-adjust: none;
+  transform-origin: 0 0; caret-color: CanvasText;
+  --min-font-size: 1;
+  --text-scale-factor: calc(var(--total-scale-factor) * var(--min-font-size));
+  --min-font-size-inv: calc(1 / var(--min-font-size));
+}
+.file-preview-pdf-sheet .textLayer :is(span, br) {
+  position: absolute; color: transparent; white-space: pre;
+  cursor: text; transform-origin: 0 0; -webkit-user-select: text; user-select: text;
+}
+.file-preview-pdf-sheet .textLayer > :not(.markedContent),
+.file-preview-pdf-sheet .textLayer .markedContent span:not(.markedContent) {
+  z-index: 1; --font-height: 0; --scale-x: 1; --rotate: 0deg;
+  font-size: calc(var(--text-scale-factor) * var(--font-height));
+  transform: rotate(var(--rotate)) scaleX(var(--scale-x)) scale(var(--min-font-size-inv));
+}
+.file-preview-pdf-sheet .textLayer .markedContent { display: contents; }
+.file-preview-pdf-sheet .textLayer[data-main-rotation="90"] { transform: rotate(90deg) translateY(-100%); }
+.file-preview-pdf-sheet .textLayer[data-main-rotation="180"] { transform: rotate(180deg) translate(-100%, -100%); }
+.file-preview-pdf-sheet .textLayer[data-main-rotation="270"] { transform: rotate(270deg) translateX(-100%); }
+.file-preview-pdf-sheet .textLayer ::selection { background: rgb(0 100 255 / 30%); color: transparent; }
+.file-preview-pdf-sheet .textLayer br::selection { background: transparent; }
+.file-preview-page-loading { position: absolute; z-index: 1; top: 28px; left: 50%; transform: translateX(-50%); padding: 8px 14px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); color: var(--muted); font-size: 12px; }
+.file-preview-document-scroll { width: 100%; overflow: auto; padding: 24px; }
+.file-preview-note { margin: 0 auto 16px; max-width: 850px; font-size: 12px; color: var(--muted); }
+.file-preview-text, .file-preview-word { -webkit-user-select: text; user-select: text; }
+.file-preview-text { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; tab-size: 4; font: 13px/1.8 ui-monospace, SFMono-Regular, Consolas, monospace; color: var(--text); }
+.file-preview-word { max-width: 850px; margin: 0 auto; padding: 48px 56px; min-height: 100%; background: white; color: #20252b; box-shadow: 0 2px 12px #0001; line-height: 1.7; font-size: 15px; overflow-wrap: anywhere; }
+.file-preview-word h1, .file-preview-word h2, .file-preview-word h3, .file-preview-word h4 { color: inherit; line-height: 1.3; margin: 1.2em 0 .6em; }
+.file-preview-word img { display: block; max-width: 100%; height: auto; margin: 16px 0; }
+.file-preview-word table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+.file-preview-word td, .file-preview-word th { border: 1px solid #d8dee4; padding: 8px; vertical-align: top; }
+.file-preview-word pre { white-space: pre-wrap; }
+.file-preview-media { display: grid; place-items: center; width: 100%; padding: 24px; }
+.file-preview-media video, .file-preview-media audio { max-width: 100%; max-height: 100%; }
+@media (max-width: 640px) {
+  .file-preview-dialog { width: 100vw; height: 100dvh; border: 0; border-radius: 0; }
+  .file-preview-heading { padding: 12px; gap: 9px; }
+  .file-preview-title h2 { font-size: 14px; }
+  .file-preview-file-icon { display: none; }
+  .file-preview-download { font-size: 11px; padding: 8px; }
+  .file-preview-download svg { display: none; }
+  .file-preview-footer { padding: 10px 12px; }
+  .file-preview-footer > span:last-child { display: none; }
+  .file-preview-document-scroll { padding: 14px; }
+  .file-preview-word { padding: 24px 18px; }
+  .file-preview-image-stage { padding: 12px; }
+  .file-preview-tools { gap: 4px; }
+}
+@media (prefers-reduced-motion: reduce) { .file-preview-spinner { animation: none; } }

@@ -1,7 +1,7 @@
 import { useEffect, useState, type ChangeEvent, type FormEvent } from 'react';
 import { ArrowDownLeft, ArrowUpRight, Clock3, Plane, Plus, Users } from 'lucide-react';
 import { dateLabel, useResource, type Entry } from '../api';
-import { Badge, Empty, ErrorNotice, Loading, PageHeading, Pagination, Stat } from '../components';
+import { Badge, Empty, ErrorNotice, DashboardSkeleton, TableSkeleton, PageHeading, Pagination, Stat } from '../components';
 import { useLedgerMoney } from '../currency';
 import { Link, Navigate, useNavigate, useSearch } from '../router';
 import { useOrganization } from '../state';
@@ -43,17 +43,17 @@ export function Dashboard() {
   const root = `/o/${member.organization_id}`;
   const [applied, setApplied] = useState({ start: '', end: '' });
   const query = new URLSearchParams(Object.fromEntries(Object.entries(applied).filter(([, value]) => value)));
-  const { data, error, loading, refresh } = useResource<DashboardData>(`/organizations/${member.organization_id}/dashboard?${query}`);
+  const { data, error, loading, refresh } = useResource<DashboardData>(`/organizations/${member.organization_id}/dashboard?${query}`, { cache: true });
   const format = (value: string) => money(value, data!.currency, data!.currency_exponent);
   const paymentQuery = new URLSearchParams({ kind: 'payment', ...(data?.period || {}) });
   return <>
     <PageHeading title="Overview"
-      actions={<><Link className="button secondary" to={`${root}/customers/new`}><Plus size={16} />Add Customer</Link>
-        <Link className="button secondary" to={`${root}/bookings/new`}><Plane size={16} />Add Booking</Link>
-        <Link className="button button-success" to={`${root}/payments/new`}><ArrowDownLeft size={16} />Record Payment</Link></>} />
+      actions={<><Link className="button secondary" to={`${root}/customers/new`}><Plus size={16} />Add customer</Link>
+        <Link className="button secondary" to={`${root}/bookings/new`}><Plane size={16} />Add booking</Link>
+        <Link className="button button-success" to={`${root}/payments/new`}><ArrowDownLeft size={16} />Record payment</Link></>} />
     <div className="dashboard-controls"><CustomerSearch />{data && <PeriodPicker today={data.today} value={data.period} onChange={setApplied} />}</div>
     <ErrorNotice message={error} />{error && <button className="button secondary" onClick={refresh}>Try again</button>}
-    {loading && <Loading />}
+    {loading && !data && <DashboardSkeleton />}
     {data && !error && <div aria-busy={loading}>
       <div className="stats-grid customer-summary">
         <Link aria-label="Total Customers: open Customer Data" to={`${root}/customers`}><Stat label="Customers" value={data.customer_count.toLocaleString()} detail={`${data.customers_added_this_month} added this month`} icon={<Users size={21} />} tone="info" /></Link>
@@ -68,7 +68,7 @@ export function Dashboard() {
             <small className="customer-reference">{item.customer_code}</small>
             <div className="work-item-meta"><Badge value={item.status} /><span>Due {dateLabel(item.due_date)}</span></div>
             <small>{item.booking_reference} · {(item.reminder_status || item.reminder_at) ? `Latest reminder: ${item.reminder_status || 'status unavailable'}${item.reminder_at ? ` · ${timestamp(item.reminder_at, data.time_zone)}` : ''}` : 'No reminder'}</small>
-            <div className="work-actions"><Link className="text-link" to={`${root}/customers/${item.customer_id}`}>Open Ledger</Link><Link className="text-link money-payment" to={paymentLink(root, item.customer_id)}>Record Payment</Link></div>
+            <div className="work-actions"><Link className="text-link" to={`${root}/customers/${item.customer_id}`}>Open ledger</Link><Link className="text-link money-payment" to={paymentLink(root, item.customer_id)}>Record payment</Link></div>
           </li>)}</ul> : <p className="compact-empty">No payments due</p>}
         </section>
         <section className="panel"><div className="panel-heading"><div><h2>Upcoming departures</h2><p>Next 7 days · {data.time_zone}</p></div></div>
@@ -80,7 +80,7 @@ export function Dashboard() {
               {service.name}: {service.document_count ? `${service.document_count} document${service.document_count === 1 ? '' : 's'}` : 'document missing'}{service.issued ? ' · issued' : ''}
             </small>)}</div>
             {!item.services.some(service => service.required || service.document_count > 0) && <small>No required documents specified</small>}
-            <div className="work-actions"><Link className="text-link" to={bookingLink(root, item.customer_id, item.id)}>Open Booking</Link></div>
+            <div className="work-actions"><Link className="text-link" to={bookingLink(root, item.customer_id, item.id)}>Open booking</Link></div>
           </li>)}</ul> : <p className="compact-empty">No upcoming departures</p>}
         </section>
       </div>
@@ -98,7 +98,7 @@ export function Dashboard() {
 export function PaymentPicker() {
   const member = useOrganization();
   if (member.role !== 'admin') return <Navigate to={`/o/${member.organization_id}`} replace />;
-  return <><PageHeading title="Record Payment" /><CustomerSearch payment /></>;
+  return <><PageHeading title="Record payment" /><CustomerSearch payment /></>;
 }
 
 type LedgerFilters = { start: string; end: string; status: string; kind: string; search: string; min_balance: string; max_balance: string };
@@ -121,7 +121,7 @@ export function CustomerLedger() {
   useEffect(() => { setFilters(ledgerFilters(search)); setPage(1); setValidation(''); }, [search]);
   const query = new URLSearchParams(search);
   query.set('page', String(page)); query.set('page_size', '25');
-  const { data, error, loading, refresh } = useResource<CombinedLedger>(`/organizations/${member.organization_id}/customer-ledger?${query}`);
+  const { data, error, loading, refresh } = useResource<CombinedLedger>(`/organizations/${member.organization_id}/customer-ledger?${query}`, { cache: true });
   if (member.role !== 'admin') return <Navigate to={root} replace />;
   const format = (value: string | undefined) => money(value, data!.currency, data!.currency_exponent);
   const field = (name: keyof LedgerFilters) => ({ value: filters[name], onChange: (event: ChangeEvent<HTMLInputElement | HTMLSelectElement>) => setFilters({ ...filters, [name]: event.target.value }) });
@@ -132,9 +132,9 @@ export function CustomerLedger() {
     navigate(`${root}/customer-ledger?${new URLSearchParams(Object.fromEntries(Object.entries(filters).filter(([, value]) => value)))}`);
   }
   return <><PageHeading title="Customer Ledger"
-    actions={<Link className="button button-success" to={`${root}/payments/new`}>Record Payment</Link>} />
+    actions={<Link className="button button-success" to={`${root}/payments/new`}>Record payment</Link>} />
     <ErrorNotice message={validation || error} />{error && <button className="button secondary" onClick={refresh}>Try again</button>}
-    <section className="panel"><form className="record-filters combined-filters" onSubmit={apply} aria-label="Filter customer ledger">
+    <section className="panel" aria-busy={loading}><form className="record-filters combined-filters" onSubmit={apply} aria-label="Filter customer ledger">
       <label className="record-filter-search">Search ledger<input type="search" placeholder="ID, customer, date, description or reference" maxLength={200} {...field('search')} /></label>
       <label className="record-filter-date">From<input type="date" max={filters.end || undefined} {...field('start')} /></label><label className="record-filter-date">To<input type="date" min={filters.start || undefined} {...field('end')} /></label>
       <label className="record-filter-select">Status<select {...field('status')}><option value="all">All balances</option><option value="outstanding">Outstanding</option><option value="overdue">Overdue customers</option><option value="settled">Settled</option><option value="credit">Customer credit</option></select></label>
@@ -144,7 +144,7 @@ export function CustomerLedger() {
       <button className="button secondary" disabled={loading}>Apply filters</button><Link className="text-link" to={`${root}/customer-ledger`}>Clear</Link>
     </form>
     {member.currency !== 'GBP' && <p className="search-note">Historical balances are converted to GBP. Numeric balance filters require a GBP accounting workspace.</p>}
-    {loading && <Loading />}
+    {loading && !data && <TableSkeleton columns={["Customer / ID", "Date / entry", "Description", "Type", "Amount", "Running balance", "Actions"]} label="Loading customer ledger" />}
     {data && !error && <><div className="period-summary ledger-totals"><span>{data.customer_count} customers</span>
       <span>Charges <strong className={amountTone(data.totals.charges_minor, 'charge')}>{format(data.totals.charges_minor)}</strong></span><span>Payments <strong className={amountTone(data.totals.payments_minor, 'payment')}>{format(data.totals.payments_minor)}</strong></span>
       <span>Net movement <strong className={amountTone(data.totals.net_minor)}>{format(data.totals.net_minor)}</strong></span><span>Current outstanding <strong className={amountTone(data.totals.outstanding_minor, 'charge')}>{format(data.totals.outstanding_minor)}</strong></span></div>
@@ -153,7 +153,7 @@ export function CustomerLedger() {
         <tbody>{data.entries.map(entry => <tr key={entry.id}><td><Link className="table-link" to={recordLink(root, entry.customer_id)}>{entry.customer_name}</Link><small className="customer-reference">{entry.customer_code}</small></td>
           <td>{dateLabel(entry.effective_date)}<small>#{entry.id}</small></td><td>{entry.description}<small>{entry.reference}</small></td><td><Badge value={entry.kind} /></td>
           <td className={`align-right amount ${amountTone(entry.amount_minor, entry.kind)}`}>{format(entry.amount_minor)}</td><td className={`align-right amount ${amountTone(entry.running_balance_minor)}`}>{format(entry.running_balance_minor)}</td>
-          <td><Link className="text-link" to={`${root}/customers/${entry.customer_id}`}>Open Ledger</Link></td></tr>)}</tbody></table></div>
+          <td><Link className="text-link" to={`${root}/customers/${entry.customer_id}`}>Open ledger</Link></td></tr>)}</tbody></table></div>
         : <Empty title="No matching ledger entries" detail="Change the filters or record a customer transaction." />}
       <Pagination page={data.page} total={data.total} size={data.page_size} onPage={setPage} /></>}
     </section></>;

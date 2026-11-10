@@ -4,7 +4,7 @@ import { cleanupDocumentObjects, DocumentStorage } from '../apps/api/src/booking
 
 async function main() {
   const storage=new DocumentStorage();
-  if(!storage.cloud) throw new Error('Configure S3 document storage before running cleanup.');
+  if(!storage.cloud) throw new Error('Configure R2 or S3 document storage before running cleanup.');
   const db=new DatabaseService();
   try {
     const result=await cleanupDocumentObjects(db,storage);
@@ -12,4 +12,4 @@ async function main() {
     if(result.failed) process.exitCode=1;
   } finally { await db.close(); storage.onApplicationShutdown(); }
 }
-void main().catch(()=>{console.error('Document storage cleanup failed. Verify database and S3 configuration.');process.exitCode=1;});
+void main().catch(()=>{console.error('Document storage cleanup failed. Verify database and storage configuration.');process.exitCode=1;});

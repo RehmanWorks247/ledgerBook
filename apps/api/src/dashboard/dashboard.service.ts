@@ -6,6 +6,8 @@ import { config } from '../config';
 import { DatabaseService } from '../database/database.service';
 import { validDate } from '../ledger/money';
 import { addDays, businessDate } from './time';
+import { positionCtes } from './receivables';
+import { ReportCache } from './report-cache';
 
 const date = z.string().refine(validDate, 'Use a valid date in YYYY-MM-DD format.');
 const dates = z.object({ start: date.optional(), end: date.optional() }).strict();
@@ -55,52 +57,41 @@ interface LedgerTotals extends QueryResultRow {
   net_minor:string; current_balance_minor:string; outstanding_minor:string;
 }
 
-// Customer payments settle receivables in due-date order. Legacy charges use
-// their effective date, so a settled old debt cannot pay a new booking twice.
-// Reversed payments restore the schedule; reversed charges remove their debt.
-// The final cap prevents scheduled arrears exceeding the actual account debt.
-const positionCtes = `balances AS (
-  SELECT c.id, COALESCE(SUM(e.amount_minor),0) AS balance,
-    COALESCE(-SUM(e.amount_minor) FILTER (WHERE (e.kind='payment' OR (e.kind='opening' AND e.amount_minor<0))
-      AND NOT EXISTS (SELECT 1 FROM ledger_entries r WHERE r.reversal_of=e.id)),0) AS paid
-  FROM customers c LEFT JOIN ledger_entries e ON e.organization_id=c.organization_id AND e.customer_id=c.id
-  WHERE c.organization_id=$1 GROUP BY c.id
-), receivables AS (
-  SELECT i.id::text,i.customer_id,i.booking_id,i.due_date,i.amount_minor,i.created_at,1 AS priority,
-    b.reference AS booking_reference,c.name AS customer_name,c.customer_code
-  FROM booking_instalments i JOIN bookings b ON b.organization_id=i.organization_id AND b.customer_id=i.customer_id AND b.id=i.booking_id
-  JOIN customers c ON c.organization_id=i.organization_id AND c.id=i.customer_id
-  WHERE i.organization_id=$1 AND NOT EXISTS (SELECT 1 FROM ledger_entries r WHERE r.reversal_of=b.charge_entry_id)
-  UNION ALL
-  SELECT e.id::text,e.customer_id,NULL::uuid,e.effective_date,e.amount_minor,e.created_at,0,NULL::text,c.name,c.customer_code
-  FROM ledger_entries e JOIN customers c ON c.organization_id=e.organization_id AND c.id=e.customer_id
-  WHERE e.organization_id=$1 AND e.kind IN ('charge','opening') AND e.amount_minor>0
-    AND NOT EXISTS (SELECT 1 FROM ledger_entries r WHERE r.reversal_of=e.id)
-    AND NOT EXISTS (SELECT 1 FROM bookings b WHERE b.charge_entry_id=e.id)
-), allocated AS (
-  SELECT i.*,balance,GREATEST(0,i.amount_minor-GREATEST(0,paid-COALESCE(SUM(i.amount_minor) OVER
-    (PARTITION BY i.customer_id ORDER BY i.due_date,i.priority,i.created_at,i.id ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING),0))) AS raw_unpaid
-  FROM receivables i JOIN balances p ON p.id=i.customer_id
-), capped AS (
-  SELECT *, LEAST(raw_unpaid,GREATEST(0,balance-COALESCE(SUM(raw_unpaid) OVER
-    (PARTITION BY customer_id ORDER BY due_date,priority,created_at,id ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING),0))) AS unpaid
-  FROM allocated
-), positioned AS (
-  SELECT * FROM capped WHERE booking_id IS NOT NULL
-)`;
 
 @Injectable()
 export class DashboardService {
+  private readonly reports = new ReportCache();
   constructor(@Inject(DatabaseService) private readonly db: DatabaseService,
     @Inject(AccessService) private readonly access: AccessService) {}
 
-  async overview(member: Membership, raw: unknown = {}, now = new Date()) {
+  private async fingerprint(orgId:string) {
+    // Audit history is append-only. Customer purge changes the customer hash as
+    // well as deleting its audit rows; count detects late commits below max(id).
+    const row=(await this.db.query<{revision:string}>(`SELECT concat(
+      (SELECT md5(COALESCE(string_agg(id::text||':'||report_version::text,',' ORDER BY id),'')) FROM customers WHERE organization_id=$1),':',
+      (SELECT count(*)::text||':'||COALESCE(max(id)::text,'') FROM audit_events WHERE organization_id=$1)) AS revision`,[orgId])).rows[0];
+    return row.revision;
+  }
+
+  async overview(member: Membership, raw: unknown = {}, now?:Date) {
+    const filter=parse(dates,raw);
+    const active=await this.access.membership(member.user_id,member.organization_id,true);
+    const at=now??new Date();
+    const revision=await this.fingerprint(active.organization_id);
+    const key=JSON.stringify(['overview',active.organization_id,active.currency,active.currency_exponent,revision,filter,
+      businessDate(at),now?.toISOString()??Math.floor(at.getTime()/5000)]);
+    return this.reports.get(key,()=>this.computeOverview(active,filter,at));
+  }
+
+  private async computeOverview(member: Membership, raw: unknown = {}, now = new Date()) {
     const filter = parse(dates, raw);
     const today = businessDate(now);
     const period = { start: filter.start ?? `${today.slice(0,7)}-01`, end: filter.end ?? today };
     if (period.start > period.end) throw new BadRequestException('Start date must be on or before end date.');
     return this.db.transaction(async client => {
       await client.query('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ');
+      // Compiling these reporting expressions adds substantial latency at scale.
+      await client.query('SET LOCAL jit = off');
       const active = await this.access.membership(member.user_id, member.organization_id, true, client);
       const totals = await client.query<DashboardTotals>(`WITH ${positionCtes}
         SELECT (SELECT COUNT(*)::int FROM customers WHERE organization_id=$1) AS customer_count,
@@ -118,18 +109,28 @@ export class DashboardService {
         WHERE e.organization_id=$1 AND e.effective_date BETWEEN $2::date AND $3::date
         AND (e.kind='payment' OR (e.kind='reversal' AND original.kind='payment'))`,
       [active.organization_id, period.start, period.end]);
-      const attention = await client.query<Attention>(`WITH ${positionCtes}
+      const attention = await client.query<Attention>(`WITH ${positionCtes}, attention AS MATERIALIZED (
+          SELECT * FROM positioned WHERE unpaid>0 AND due_date<=$3::date
+          ORDER BY due_date,customer_name,id LIMIT 100
+        )
         SELECT p.id,p.customer_id,p.customer_name,p.customer_code,p.booking_id,p.booking_reference,p.amount_minor::text,
           p.unpaid::text AS unpaid_minor,p.due_date::text,
           CASE WHEN p.due_date<$2::date THEN 'overdue' ELSE 'due_soon' END AS status,
           COALESCE(reminder.metadata->>'status',split_part(reminder.action,'.',2)) AS reminder_status,reminder.created_at AS reminder_at
-        FROM positioned p LEFT JOIN LATERAL (
-          SELECT action,metadata,created_at FROM audit_events a WHERE a.organization_id=$1 AND a.action LIKE 'reminder.%'
-          AND (a.metadata->>'instalment_id'=p.id::text OR (a.metadata->>'instalment_id' IS NULL AND COALESCE(a.metadata->>'customer_id',a.metadata->>'customerId')=p.customer_id::text
-            AND (a.metadata->>'booking_id' IS NULL OR a.metadata->>'booking_id'=p.booking_id::text)))
-          ORDER BY a.created_at DESC,a.id DESC LIMIT 1
+        FROM attention p LEFT JOIN LATERAL (
+          SELECT action,metadata,created_at FROM (
+            (SELECT id,action,metadata,created_at FROM audit_events a
+              WHERE a.organization_id=$1 AND a.action LIKE 'reminder.%' AND a.metadata->>'instalment_id'=p.id
+              ORDER BY a.created_at DESC,a.id DESC LIMIT 1)
+            UNION ALL
+            (SELECT id,action,metadata,created_at FROM audit_events a
+              WHERE a.organization_id=$1 AND a.action LIKE 'reminder.%' AND a.metadata->>'instalment_id' IS NULL
+                AND COALESCE(a.metadata->>'customer_id',a.metadata->>'customerId')=p.customer_id::text
+                AND (a.metadata->>'booking_id' IS NULL OR a.metadata->>'booking_id'=p.booking_id::text)
+              ORDER BY a.created_at DESC,a.id DESC LIMIT 1)
+          ) matching ORDER BY created_at DESC,id DESC LIMIT 1
         ) reminder ON true
-        WHERE unpaid>0 AND due_date<=$3::date ORDER BY due_date,customer_name,p.id LIMIT 100`,
+        ORDER BY due_date,customer_name,p.id`,
       [active.organization_id, today, addDays(today, 7)]);
       const departures = await this.departures(client, active.organization_id, now);
       const activity = await this.activity(client, active.organization_id, period);
@@ -143,7 +144,7 @@ export class DashboardService {
     const rows = await client.query<Departure>(`SELECT b.id,b.customer_id,c.name AS customer_name,c.customer_code,b.reference,b.departure_at,b.required_services,
       b.departure_at <= $2::timestamptz + interval '24 hours' AS within_24_hours
       FROM bookings b JOIN customers c ON c.organization_id=b.organization_id AND c.id=b.customer_id
-      WHERE b.organization_id=$1 AND b.departure_at >= $2::timestamptz AND b.departure_at <= $2::timestamptz + interval '7 days'
+      WHERE b.organization_id=$1 AND b.deleted_at IS NULL AND b.departure_at >= $2::timestamptz AND b.departure_at <= $2::timestamptz + interval '7 days'
       AND NOT EXISTS (SELECT 1 FROM ledger_entries r WHERE r.reversal_of=b.charge_entry_id)
       ORDER BY b.departure_at,b.id LIMIT 100`, [orgId, now.toISOString()]);
     if (!rows.rows.length) return [];
@@ -169,7 +170,7 @@ export class DashboardService {
           CASE WHEN a.action LIKE 'customer.%' THEN a.object_id END) AS customer_id,
         a.metadata->>'booking_id' AS booking_id
       FROM audit_events a WHERE a.organization_id=$1 AND (a.action IN
-        ('customer.created','invitation.created','invitation.accepted','booking.created','document.uploaded') OR a.action LIKE 'reminder.%')
+        ('customer.created','invitation.created','invitation.accepted','booking.created','booking.updated','booking.cancelled','document.uploaded','document.replaced','document.restored') OR a.action LIKE 'reminder.%')
       UNION ALL
       SELECT 'ledger-'||e.id::text,CASE WHEN e.kind='payment' THEN 'payment.received' ELSE 'payment.reversed' END,
         e.created_at,e.id::text,e.customer_id::text,NULL::text
@@ -182,9 +183,18 @@ export class DashboardService {
   }
 
   async combinedLedger(member: Membership, raw: unknown = {}) {
+    const filter=parse(ledgerFilters,raw);
+    const active=await this.access.membership(member.user_id,member.organization_id,true);
+    const revision=await this.fingerprint(active.organization_id);
+    const key=JSON.stringify(['ledger',active.organization_id,active.currency,active.currency_exponent,revision,filter,businessDate()]);
+    return this.reports.get(key,()=>this.computeCombinedLedger(active,filter));
+  }
+
+  private async computeCombinedLedger(member: Membership, raw: unknown = {}) {
     const filter = parse(ledgerFilters, raw);
     return this.db.transaction(async client => {
       await client.query('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ');
+      await client.query('SET LOCAL jit = off');
       const active = await this.access.membership(member.user_id, member.organization_id, true, client);
       const minimum = balanceValue(filter.min_balance, active.currency_exponent!);
       const maximum = balanceValue(filter.max_balance, active.currency_exponent!);

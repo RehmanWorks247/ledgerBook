@@ -8,6 +8,8 @@ import { config } from '../config';
 import { DatabaseService } from '../database/database.service';
 import { businessDate } from '../dashboard/time';
 import { formatMoney, parseMoney, UUID_PATTERN, validDate } from '../ledger/money';
+import { cancelUnsentPaymentReviewEmails, queueCustomerPaymentEmail } from './payment-emails';
+import { ensureBookingInvoice, issueBookingInvoice } from '../invoices/invoices.service';
 
 export const MAX_RECEIPT_BYTES = 5 * 1024 * 1024;
 export const MAX_RECEIPTS = 5;
@@ -20,10 +22,10 @@ type Receipt = {name:string;content:Buffer;originalSha256:string;originalName:st
 type PaymentRow = QueryResultRow & {id:string;organization_id:string;customer_id:string;booking_id:string;
   amount_minor:string;currency:string;payment_date:string;note:string;status:'pending'|'approved'|'rejected';
   submitted_at:Date|string;reviewed_at:Date|string|null;reviewed_by:string|null;rejection_reason:string|null;
-  ledger_entry_id:string|null;request_hash:string;booking_reference:string;customer_name:string;customer_code:string};
+  ledger_entry_id:string|null;request_hash:string;booking_reference:string;customer_name:string;customer_code:string;submitted_by:string};
 const paymentColumns = `p.id,p.organization_id,p.customer_id,p.booking_id,p.amount_minor::text AS amount_minor,p.currency,
   p.payment_date::text AS payment_date,p.note,p.status,p.submitted_at,p.reviewed_at,p.reviewed_by,p.rejection_reason,
-  p.ledger_entry_id::text AS ledger_entry_id,p.request_hash,b.reference AS booking_reference,c.name AS customer_name,c.customer_code`;
+  p.ledger_entry_id::text AS ledger_entry_id,p.request_hash,p.submitted_by,b.reference AS booking_reference,c.name AS customer_name,c.customer_code`;
 const paymentJoins = `FROM booking_payments p JOIN bookings b ON b.id=p.booking_id AND b.organization_id=p.organization_id
   JOIN customers c ON c.id=p.customer_id AND c.organization_id=p.organization_id`;
 const submitSchema = z.object({amount:z.string().max(24),payment_date:z.string().refine(validDate,'Enter a valid payment date.'),
@@ -70,9 +72,12 @@ export class PaymentsService {
     uuid(bookingId,'booking');
     if(mode==='submit') {
       uuid(customerId,'customer');
-      // Access revocation locks the account before the customer's membership.
-      // Lock only an already-authorized account here, then revalidate membership
-      // below. Taking membership FOR SHARE first would deadlock with revocation.
+      // Account disable/deletion locks organization -> customer -> membership.
+      // Match that order before taking the customer's lock: membership() also
+      // shares the organization row, which would otherwise invert the order.
+      await client.query('SELECT id FROM organizations WHERE id=$1 FOR SHARE',[member.organization_id]);
+      // Lock only an already-authorized account, then revalidate membership.
+      // Taking the membership first would deadlock with access revocation.
       const locked=await client.query(`SELECT c.id FROM customers c JOIN memberships m
         ON m.organization_id=c.organization_id AND (m.customer_id=c.id OR m.role='admin')
         WHERE c.organization_id=$1 AND c.id=$2 AND m.user_id=$3 AND m.is_active FOR UPDATE OF c`,
@@ -86,6 +91,7 @@ export class PaymentsService {
       WHERE b.organization_id=$1 AND b.customer_id=$2 AND b.id=$3 ${mode!=='read'?'FOR UPDATE':''}`,[active.organization_id,customerId,bookingId]);
     const booking=result.rows[0];
     if(!booking) throw new NotFoundException('Booking was not found for this customer.');
+    if(mode!=='read' && booking.deleted_at) throw new ConflictException('This booking has been cancelled.');
     if(mode!=='read' && customer.status!=='active') throw new ConflictException('Restore this customer before submitting or reviewing payments.');
     if(mode!=='read' && (active.currency!=='GBP' || active.currency_exponent!==2 || booking.currency!=='GBP')) {
       throw new ConflictException('Booking payments require a GBP accounting workspace.');
@@ -145,7 +151,7 @@ export class PaymentsService {
     const receipts=await client.query<{id:string;payment_id:string;name:string;mime_type:string;size:number}>(
       `SELECT id,payment_id,name,mime_type,size FROM booking_payment_receipts WHERE organization_id=$1 AND payment_id=ANY($2::uuid[]) ORDER BY created_at,id`,
       [rows[0].organization_id,rows.map(row=>row.id)]);
-    return rows.map(({request_hash:_hash,organization_id:_organization,...row})=>({...row,
+    return rows.map(({request_hash:_hash,organization_id:_organization,submitted_by:_submitter,...row})=>({...row,
       receipts:receipts.rows.filter(receipt=>receipt.payment_id===row.id).map(({payment_id:_payment,...receipt})=>({...receipt,
         url:`/api/organizations/${_organization}/customers/${row.customer_id}/bookings/${row.booking_id}/payments/${row.id}/receipts/${receipt.id}`}))}));
   }
@@ -253,12 +259,16 @@ export class PaymentsService {
         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)`,[randomUUID(),active.organization_id,customerId,bookingId,id,receipt.name,receipt.content.length,receipt.content,receipt.originalSha256]);
       await this.audit(client,active,'payment.submitted',id,{customer_id:customerId,booking_id:bookingId,amount_minor:amount.toString(),receipt_count:receipts.length});
       const submittedAt=new Date(inserted.rows[0].submitted_at).toISOString();
-      const recipients=await client.query<{email:string}>(`SELECT u.email FROM memberships m JOIN users u ON u.id=m.user_id
-        WHERE m.organization_id=$1 AND m.role='admin' AND m.is_active`,[active.organization_id]);
       const link=`${config.appUrl}/o/${active.organization_id}/users/${customerId}/bookings/${bookingId}`;
-      for(const recipient of recipients.rows) await client.query(`INSERT INTO payment_email_outbox(organization_id,recipient,subject,body,dedupe_key)
-        VALUES($1,$2,$3,$4,$5) ON CONFLICT (dedupe_key) DO NOTHING`,[active.organization_id,recipient.email,
-        'Payment receipt awaiting review',`${customer.name} uploaded ${receipts.length} payment receipt image(s).\n\nBooking: ${booking.reference}\nAmount: GBP ${formatMoney(amount,2)}\nPayment date: ${data.payment_date}\nUploaded at: ${submittedAt}\n\nReview the receipts and verify the payment before approving:\n${link}`,`payment-submitted:${id}:${recipient.email}`]);
+      // Insert all administrator intents in one query, regardless of team size.
+      await client.query(`INSERT INTO payment_email_outbox(organization_id,recipient,subject,body,dedupe_key)
+        SELECT m.organization_id,u.email,$2,$3,$4||u.email FROM memberships m JOIN users u ON u.id=m.user_id
+        WHERE m.organization_id=$1 AND m.role='admin' AND m.is_active AND m.deleted_at IS NULL
+        ON CONFLICT (dedupe_key) DO NOTHING`,[active.organization_id,'Payment receipt submitted',
+        `${customer.name} uploaded ${receipts.length} payment receipt image(s).\n\nBooking: ${booking.reference}\nAmount: GBP ${formatMoney(amount,2)}\nPayment date: ${data.payment_date}\nUploaded at: ${submittedAt}\n\nOpen the booking to check the current review status. If still pending, verify the payment before approving:\n${link}`,`payment-submitted:${id}:`]);
+      await queueCustomerPaymentEmail(client,{kind:'received',organizationId:active.organization_id,organizationName:active.organization_name!,
+        customerId,customerName:customer.name,recipient:customer.email,bookingId,bookingReference:booking.reference,
+        paymentId:id,submittedBy:active.user_id,amountMinor:amount.toString(),currency:booking.currency,paymentDate:data.payment_date,receiptCount:receipts.length});
       return (await this.serialize(client,[await this.find(client,active.organization_id,customerId,bookingId,id)]))[0];
     });
   }
@@ -271,6 +281,7 @@ export class PaymentsService {
       if(payment.status==='approved') return (await this.serialize(client,[payment]))[0];
       if(payment.status!=='pending') throw new ConflictException('A rejected payment cannot be approved. Ask the customer to submit new evidence.');
       await this.assertChargeActive(client,booking.charge_entry_id);
+      await ensureBookingInvoice(client,{organizationId:active.organization_id,customerId,bookingId,actorId:active.user_id});
       const entry=await client.query<{id:string}>(`INSERT INTO ledger_entries(organization_id,customer_id,kind,amount_minor,currency,effective_date,description,reference,created_by,idempotency_key,request_hash)
         VALUES($1,$2,'payment',$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id::text AS id`,
         [active.organization_id,customerId,(-BigInt(payment.amount_minor)).toString(),payment.currency,payment.payment_date,
@@ -278,10 +289,12 @@ export class PaymentsService {
       await client.query(`UPDATE booking_payments SET status='approved',reviewed_by=$1,reviewed_at=now(),ledger_entry_id=$2 WHERE id=$3`,[active.user_id,entry.rows[0].id,payment.id]);
       await this.audit(client,active,'payment.approved',payment.id,{customer_id:customerId,booking_id:bookingId,entry_id:entry.rows[0].id});
       await this.audit(client,active,'ledger.posted',entry.rows[0].id,{customer_id:customerId,kind:'payment',booking_id:bookingId,payment_id:payment.id});
-      const link=`${config.appUrl}/o/${active.organization_id}/users/${customerId}/bookings/${bookingId}`;
-      await client.query(`INSERT INTO payment_email_outbox(organization_id,recipient,subject,body,dedupe_key)
-        VALUES($1,$2,$3,$4,$5) ON CONFLICT (dedupe_key) DO NOTHING`,[active.organization_id,customer.email,'Your payment has been approved',
-        `Hello ${customer.name},\n\nYour payment has been approved by ${active.organization_name}.\n\nBooking: ${booking.reference}\nAmount: GBP ${formatMoney(payment.amount_minor,2)}\nPayment date: ${payment.payment_date}\n\nThe payment has been credited to your account. View your booking:\n${link}`,`payment-approved:${payment.id}`]);
+      await cancelUnsentPaymentReviewEmails(client,active.organization_id,[payment.id]);
+      const invoice=await issueBookingInvoice(client,{organizationId:active.organization_id,customerId,bookingId,actorId:active.user_id,
+        reason:'payment_approved',eventKey:`payment-approved:${payment.id}`});
+      await queueCustomerPaymentEmail(client,{kind:'approved',organizationId:active.organization_id,organizationName:active.organization_name!,
+        customerId,customerName:customer.name,recipient:customer.email,bookingId,bookingReference:booking.reference,
+        paymentId:payment.id,submittedBy:payment.submitted_by,amountMinor:payment.amount_minor,currency:payment.currency,paymentDate:payment.payment_date,invoiceId:invoice.id});
       return (await this.serialize(client,[await this.find(client,active.organization_id,customerId,bookingId,payment.id)]))[0];
     });
   }
@@ -289,12 +302,16 @@ export class PaymentsService {
   async reject(member:Membership,customerId:string,bookingId:string,paymentId:string,raw:unknown) {
     const {reason}=parse(z.object({reason:z.string().trim().min(1).max(1000)}).strict(),raw);
     return this.db.transaction(async client=>{
-      const {active}=await this.context(client,member,customerId,bookingId,'review');
+      const {active,customer,booking}=await this.context(client,member,customerId,bookingId,'review');
       const payment=await this.find(client,active.organization_id,customerId,bookingId,paymentId,true);
       if(payment.status==='rejected' && payment.rejection_reason===reason) return (await this.serialize(client,[payment]))[0];
       if(payment.status!=='pending') throw new ConflictException('This payment has already been reviewed. Refresh the booking.');
       await client.query(`UPDATE booking_payments SET status='rejected',reviewed_by=$1,reviewed_at=now(),rejection_reason=$2 WHERE id=$3`,[active.user_id,reason,payment.id]);
       await this.audit(client,active,'payment.rejected',payment.id,{customer_id:customerId,booking_id:bookingId,reason});
+      await cancelUnsentPaymentReviewEmails(client,active.organization_id,[payment.id]);
+      await queueCustomerPaymentEmail(client,{kind:'rejected',organizationId:active.organization_id,organizationName:active.organization_name!,
+        customerId,customerName:customer.name,recipient:customer.email,bookingId,bookingReference:booking.reference,
+        paymentId:payment.id,submittedBy:payment.submitted_by,amountMinor:payment.amount_minor,currency:payment.currency,paymentDate:payment.payment_date,reason});
       return (await this.serialize(client,[await this.find(client,active.organization_id,customerId,bookingId,payment.id)]))[0];
     });
   }

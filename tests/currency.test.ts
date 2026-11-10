@@ -82,6 +82,22 @@ describe('currency precision, persistence, provider HTTP and tenant isolation', 
     await currencies.override(seed.admin,'PKR',{rate:null});
     assert.equal((await currencies.conversion(seed.admin,'PKR')).rate.rate,'277.12');
   });
+  it('does not mutate an in-flight rate snapshot shared by concurrent workspaces', async () => {
+    const shared = await rates.get('USD');
+    const sharedRates = { get: async () => shared } as unknown as RatesService;
+    const concurrent = new CurrencyService(database.db,new AccessService(database.db),sharedRates);
+    await database.db.query(`INSERT INTO exchange_rate_overrides(organization_id,currency,rate,updated_by)
+      VALUES($1,'PKR',280,$2)`,[seed.orgId,seed.adminId]);
+    try {
+      const [own,other] = await Promise.all([concurrent.settings(seed.admin),concurrent.settings(seed.otherAdmin)]);
+      assert.equal(own.currencies.find(row=>row.code==='PKR')?.rate,'280');
+      assert.equal(other.currencies.find(row=>row.code==='PKR')?.rate,'277.12');
+      assert.equal(shared.rates.PKR.rate,'277.12');
+      assert.equal(shared.rates.PKR.source,'Frankfurter');
+    } finally {
+      await database.db.query("DELETE FROM exchange_rate_overrides WHERE organization_id=$1 AND currency='PKR'",[seed.orgId]);
+    }
+  });
   it('exports converted values with rate provenance and preserves posted ledger amounts', async () => {
     const ledger = new LedgerService(database.db,new AccessService(database.db));
     await ledger.post(seed.admin,seed.customerId,{kind:'charge',amount:'12.34',effective_date:'2026-01-01',description:'Test',idempotency_key:randomUUID()});

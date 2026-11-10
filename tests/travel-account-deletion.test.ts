@@ -86,12 +86,15 @@ describe('merged travel records and permanent account deletion', () => {
     await context.db.query(`INSERT INTO payment_email_outbox(organization_id,recipient,subject,body,dedupe_key)
       VALUES($1,'beacon@example.test','Keep this','Other customer notification',$2)`,[seed.orgId,`retained-${randomUUID()}`]);
     await deletion.removeCustomer(seed.admin,seed.customerId,'customer@example.test');
-    for(const table of ['bookings','booking_instalments','booking_nodes','booking_payments','booking_payment_receipts','document_objects','ledger_entries','memberships','invitations']) {
+    for(const table of ['bookings','booking_instalments','booking_nodes','booking_payments','booking_payment_receipts','booking_invoices','document_objects','ledger_entries','memberships','invitations']) {
       assert.equal((await context.db.query(`SELECT 1 FROM ${table} WHERE customer_id=$1`,[seed.customerId])).rowCount,0,table);
     }
     assert.equal((await context.db.query('SELECT id FROM users WHERE id=$1',[seed.customerUserId])).rowCount,0);
     assert.equal((await context.db.query('SELECT id FROM audit_events WHERE metadata->>\'customer_id\'=$1',[seed.customerId])).rowCount,0);
-    assert.equal((await context.db.query('SELECT recipient FROM payment_email_outbox')).rowCount,1);
+    const remainingMail=(await context.db.query('SELECT recipient,dedupe_key FROM payment_email_outbox')).rows;
+    assert.equal(remainingMail.length,2,'The unrelated customer keeps their original notification and booking confirmation.');
+    assert.ok(remainingMail.every(row=>row.recipient==='beacon@example.test'));
+    assert.ok(remainingMail.some(row=>row.dedupe_key===`booking-created:${retained.id}`));
     assert.equal((await bookings.get(seed.admin,seed.secondCustomerId,retained.id)).total_minor,'10000');
     await assert.rejects(context.db.query('DELETE FROM ledger_entries WHERE id=$1',[retained.charge_entry_id]),/cannot be edited or deleted/);
     assert.equal((await context.db.query('SELECT * FROM account_purge_context')).rowCount,0);

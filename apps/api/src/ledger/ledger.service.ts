@@ -6,6 +6,7 @@ import { DatabaseService } from '../database/database.service';
 import { formatMoney, parseMoney, UUID_PATTERN, validDate } from './money';
 import { convertMinor } from '../currency/math';
 import type { Rate } from '../currency/rates.service';
+import { ensureBookingInvoice, issueBookingInvoice } from '../invoices/invoices.service';
 
 export interface PostEntryInput {
   kind: 'opening' | 'charge' | 'payment' | 'reversal';
@@ -152,6 +153,14 @@ export class LedgerService {
         const reversed = await client.query('SELECT 1 FROM ledger_entries WHERE reversal_of = $1', [original.id]);
         if (reversed.rows.length) throw new ConflictException('This transaction has already been reversed.');
       }
+      // Only explicitly associated booking money affects its invoice. General
+      // account payments cannot safely be allocated to a particular trip.
+      const affectedBookings=original ? (await client.query<{id:string}>(`SELECT b.id FROM bookings b
+        WHERE b.organization_id=$1 AND b.customer_id=$2 AND (b.charge_entry_id=$3 OR EXISTS (
+          SELECT 1 FROM booking_payments p WHERE p.booking_id=b.id AND p.ledger_entry_id=$3 AND p.status='approved'
+        )) ORDER BY b.id FOR UPDATE OF b`,[authorized.organization_id,customerId,original.id])).rows : [];
+      for(const booking of affectedBookings) await ensureBookingInvoice(client,{organizationId:authorized.organization_id,
+        customerId,bookingId:booking.id,actorId:authorized.user_id});
       // Account lock serializes ledger posts and reversals. A second unique key also guards
       // a malicious/reused submission key across separate customer accounts.
       const result = await client.query<LedgerEntry>(
@@ -172,6 +181,9 @@ export class LedgerService {
         [authorized.organization_id, authorized.user_id, original ? 'ledger.reversed' : 'ledger.posted', result.rows[0].id,
           JSON.stringify({ customer_id: customerId, kind: input.kind, reversal_of: original?.id ?? null })],
       );
+      for(const booking of affectedBookings) await issueBookingInvoice(client,{organizationId:authorized.organization_id,
+        customerId,bookingId:booking.id,actorId:authorized.user_id,reason:original!.kind==='payment'?'payment_reversed':'charge_reversed',
+        eventKey:`ledger-reversed:${result.rows[0].id}`});
       return result.rows[0];
     });
   }
@@ -210,15 +222,20 @@ export class LedgerService {
        ORDER BY running.effective_date,running.id LIMIT $${values.length + 1} OFFSET $${values.length + 2}`,
       [...values, limit, offset],
     );
-    const balances = await client.query<{ current: string; opening: string; closing: string }>(
-      `SELECT coalesce(sum(amount_minor),0)::text AS current,
-        coalesce(sum(amount_minor) FILTER (WHERE $3::date IS NOT NULL AND effective_date < $3::date),0)::text AS opening,
-        coalesce(sum(amount_minor) FILTER (WHERE $4::date IS NULL OR effective_date <= $4::date),0)::text AS closing
-       FROM ledger_entries WHERE organization_id = $1 AND customer_id = $2`,
+    const balances = await client.query<{ current: string; opening: string; closing: string; total_amount: string; total_paid: string }>(
+      `SELECT coalesce(sum(e.amount_minor),0)::text AS current,
+        coalesce(sum(e.amount_minor) FILTER (WHERE $3::date IS NOT NULL AND e.effective_date < $3::date),0)::text AS opening,
+        coalesce(sum(e.amount_minor) FILTER (WHERE $4::date IS NULL OR e.effective_date <= $4::date),0)::text AS closing,
+        coalesce(sum(e.amount_minor) FILTER (WHERE coalesce(original.kind,e.kind) <> 'payment'),0)::text AS total_amount,
+        (-coalesce(sum(e.amount_minor) FILTER (WHERE coalesce(original.kind,e.kind) = 'payment'),0))::text AS total_paid
+       FROM ledger_entries e
+       LEFT JOIN ledger_entries original ON original.id = e.reversal_of
+         AND original.organization_id = e.organization_id AND original.customer_id = e.customer_id
+       WHERE e.organization_id = $1 AND e.customer_id = $2`,
       [authorized.organization_id, customerId, normalized.start ?? null, normalized.end ?? null],
     );
     const visibleCustomer = authorized.role === 'admin' ? customer : {
-      id: customer.id, organization_id: customer.organization_id, name: customer.name,
+      id: customer.id, organization_id: customer.organization_id, customer_code: customer.customer_code, name: customer.name,
       email: customer.email, phone: customer.phone, status: customer.status,
       created_at: customer.created_at, updated_at: customer.updated_at,
     };
@@ -227,6 +244,8 @@ export class LedgerService {
       opening_balance_minor: balances.rows[0].opening,
       closing_balance_minor: balances.rows[0].closing,
       current_balance_minor: balances.rows[0].current,
+      total_amount_minor: balances.rows[0].total_amount,
+      total_paid_minor: balances.rows[0].total_paid,
       currency: authorized.currency!, currency_exponent: authorized.currency_exponent!,
     };
   }

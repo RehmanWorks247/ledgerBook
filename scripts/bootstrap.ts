@@ -19,7 +19,7 @@ async function readSecret(fromStdin:boolean):Promise<string> {
     return value.replace(/\r?\n$/,'');
   }
   if(!process.stdin.isTTY) throw new Error('Use an interactive terminal or explicitly supply --password-stdin.');
-  process.stdout.write('Choose the initial admin password (12–128 characters, hidden): ');
+  process.stdout.write('Choose the initial admin password (8–128 characters, hidden): ');
   process.stdin.setRawMode(true);process.stdin.resume();process.stdin.setEncoding('utf8');
   return new Promise((resolve,reject)=>{
     let value='';
@@ -65,7 +65,7 @@ async function bootstrap() {
     let passwordHash:string|undefined;
     if(!existing.rows[0]) {
       const password=await readSecret(values['password-stdin']===true);
-      validatePassword(password,email);passwordHash=await hashPassword(password);
+      validatePassword(password);passwordHash=await hashPassword(password);
     }
     const organizationId=await db.transaction(async client=>{
       await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[email]);

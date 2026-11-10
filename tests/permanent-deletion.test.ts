@@ -168,7 +168,9 @@ describe('permanent account deletion scope and immutable-history boundaries', ()
     await absent('memberships','id',membershipId); await absent('users','id',user.id); await absent('audit_events','id',identityAudit);
     const customerAfter=(await context.db.query('SELECT * FROM customers WHERE id=$1',[account.id])).rows[0];
     const entryAfter=(await context.db.query('SELECT * FROM ledger_entries WHERE id=$1',[posted.id])).rows[0];
-    assert.deepEqual(customerAfter,{...customerBefore,created_by:null}); assert.deepEqual(entryAfter,{...entryBefore,created_by:null});
+    assert.ok(BigInt(customerAfter.report_version)>BigInt(customerBefore.report_version),'anonymized activity invalidates reporting');
+    assert.deepEqual(customerAfter,{...customerBefore,created_by:null,report_version:customerAfter.report_version});
+    assert.deepEqual(entryAfter,{...entryBefore,created_by:null});
     assert.equal((await context.db.query('SELECT actor_id FROM audit_events WHERE id=$1',[auditId])).rows[0].actor_id,null);
     assert.equal((await context.db.query('SELECT created_by FROM invitations WHERE id=$1',[inv.id])).rows[0].created_by,null);
     assert.equal((await ledger.statement(seed.admin,account.id)).current_balance_minor,'1000');

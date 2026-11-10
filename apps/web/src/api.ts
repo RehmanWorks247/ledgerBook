@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import { clearResourceCache, forgetResourceCache, readResourceCache, resourceCacheGeneration, resourceCacheScope, writeResourceCache } from "./resource-cache";
 
 export type Membership = {
   id: string;
@@ -6,6 +7,9 @@ export type Membership = {
   role: "admin" | "customer";
   customer_id: string | null;
   organization_name: string;
+  organization_description?: string;
+  organization_color?: string;
+  organization_version?: number;
   currency: string;
   currency_exponent: number;
   time_zone?: string;
@@ -13,6 +17,7 @@ export type Membership = {
 export type Session = {
   user: { id: string; email: string; name?: string | null };
   memberships: Membership[];
+  can_create_workspaces?: boolean;
 };
 export type Customer = {
   id: string;
@@ -53,6 +58,8 @@ export type Statement = {
   opening_balance_minor: string;
   closing_balance_minor: string;
   current_balance_minor: string;
+  total_amount_minor: string;
+  total_paid_minor: string;
   currency: string;
   currency_exponent: number;
 };
@@ -81,7 +88,10 @@ export async function authenticatedFetch(
   options: RequestInit = {},
 ) {
   const headers = await authenticatedHeaders(options.headers);
-  return fetch(`/api${path}`, { ...options, credentials: "include", headers });
+  const response = await fetch(`/api${path}`, { ...options, credentials: "include", headers });
+  if ((response.ok && !["GET", "HEAD"].includes((options.method || "GET").toUpperCase())) ||
+      response.status === 401 || response.status === 403) clearResourceCache();
+  return response;
 }
 export async function api<T>(
   path: string,
@@ -174,34 +184,45 @@ export function hasErrorCode(error: unknown, code: string) {
   );
 }
 
-export function useResource<T>(path: string) {
-  const [data, setData] = useState<T>();
-  const [error, setError] = useState("");
-  const [loading, setLoading] = useState(true);
+export function useResource<T>(path: string | null, { cache = false }: { cache?: boolean } = {}) {
+  const scope = resourceCacheScope();
+  const cached = path && cache ? readResourceCache<T>(path) : undefined;
+  const [result, setResult] = useState<{
+    path: string | null; scope: string | null; data?: T; error: string; loading: boolean;
+  }>(() => ({ path, scope, data: cached, error: "", loading: Boolean(path) }));
   const [revision, setRevision] = useState(0);
   const refresh = useCallback(() => setRevision((value) => value + 1), []);
-  const lastPath = useRef(path);
   useEffect(() => {
+    if (!path) return;
     const controller = new AbortController();
-    setLoading(true);
-    setError("");
-    if (lastPath.current !== path) {
-      setData(undefined);
-      lastPath.current = path;
-    }
+    const generation = resourceCacheGeneration();
+    setResult(previous => ({ path, scope, error: "", loading: true,
+      data: previous.path === path && previous.scope === scope ? previous.data : cache ? readResourceCache<T>(path) : undefined,
+    }));
     api<T>(path, { signal: controller.signal })
-      .then((result) => {
-        if (!controller.signal.aborted) setData(result);
+      .then((data) => {
+        if (controller.signal.aborted) return;
+        if (cache) writeResourceCache(path, data, generation);
+        setResult({ path, scope, data, error: "", loading: false });
       })
       .catch((error) => {
-        if (!controller.signal.aborted) setError(errorMessage(error));
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) setLoading(false);
+        if (controller.signal.aborted) return;
+        forgetResourceCache(path);
+        setResult(previous => ({ path, scope,
+          data: error instanceof ApiError && [401, 403, 404].includes(error.status) ? undefined : previous.data,
+          error: errorMessage(error), loading: false,
+        }));
       });
     return () => controller.abort();
-  }, [path, revision]);
-  return { data, error, loading, refresh };
+  }, [path, scope, cache, revision]);
+  // Never expose the previous customer's/query's data for even one render.
+  const current = result.path === path && result.scope === scope;
+  return {
+    data: path ? current ? result.data : cached : undefined,
+    error: path && current ? result.error : "",
+    loading: Boolean(path) && (!current || result.loading),
+    refresh,
+  };
 }
 
 export function money(

@@ -13,7 +13,11 @@ export type FileNode = {
   serviceKey?: string | null;
   defaultFolder?: boolean;
   issuedAt?: string | null;
+  version?: number;
 };
+
+export type DocumentVersion = {version:number;name:string;mimeType:string;size:number;createdAt:string;current:boolean};
+export type DocumentHistory = {version:number;items:DocumentVersion[]};
 
 export interface FileStore {
   getSnapshot: () => readonly FileNode[];
@@ -21,18 +25,25 @@ export interface FileStore {
   createFolder: (parentId: ParentId, name: string) => void | Promise<void>;
   importEntries: (parentId: ParentId, entries: ImportEntry[]) => void | Promise<void | UploadResult>;
   move: (id: string, parentId: ParentId) => void | Promise<void>;
+  rename?: (id: string, name: string) => void | Promise<void>;
+  remove?: (id: string) => void | Promise<void>;
   load?: () => Promise<void>;
   getUploads?: () => readonly UploadItem[];
   subscribeUploads?: (listener: () => void) => () => void;
   retryUploads?: () => Promise<UploadResult>;
   cancelUploads?: () => void;
   clearUploads?: () => void;
+  history?: (id:string) => Promise<DocumentHistory>;
+  readText?: (id:string) => Promise<{name:string;version:number;text:string}>;
+  replace?: (node:FileNode,file:File,onProgress?:(message:string)=>void) => Promise<void>;
+  restore?: (id:string,version:number,expectedVersion:number) => Promise<void>;
+  downloadVersion?: (id:string,version:number,name:string) => Promise<void>;
 }
 
 export type UploadItem = {
   id: string;
   name: string;
-  status: "queued" | "uploading" | "saving" | "complete" | "failed" | "cancelled";
+  status: "queued" | "preparing" | "uploading" | "saving" | "complete" | "failed" | "cancelled";
   loaded: number;
   total: number;
   error?: string;

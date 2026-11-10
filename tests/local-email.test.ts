@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { it } from 'node:test';
-import { applyLocalEmailConfig, loadLocalEmailConfig, LocalEmailConfigError, parseLocalEmailConfig } from '../scripts/local-email';
+import { applyDevelopmentEmailConfig, applyLocalEmailConfig, loadLocalEmailConfig, LocalEmailConfigError, parseLocalEmailConfig } from '../scripts/local-email';
 
 const fakeKey='re_TEST_ONLY_1234567890abcdefgh';
 const valid=`EMAIL_MODE=resend\nEMAIL_FROM="LedgerBook <payments@example.test>"\nRESEND_API_KEY=${fakeKey}\n`;
@@ -66,4 +66,29 @@ it('defaults to file mode only when the opt-in file is absent and fails closed f
     assert.ok(directory.startsWith(resolve(tmpdir(),'ledgerbook-local-email-')));
     await rm(directory,{recursive:true,force:true});
   }
+});
+
+it('shares the local delivery opt-in with dev:api while preserving explicit environment settings when absent',async()=>{
+  const directory=await mkdtemp(resolve(tmpdir(),'ledgerbook-dev-email-'));
+  const environment:NodeJS.ProcessEnv={EMAIL_MODE:'resend',EMAIL_FROM:'Existing <sender@example.test>',RESEND_API_KEY:fakeKey,
+    PUBLIC_APP_URL:'http://localhost:5173',DATABASE_URL:'unchanged-local-database'};
+  try {
+    const original={...environment};
+    await applyDevelopmentEmailConfig(directory,environment);
+    assert.deepEqual(environment,original);
+    await writeFile(resolve(directory,'email.env'),valid,{mode:0o600});
+    await applyDevelopmentEmailConfig(directory,environment);
+    assert.equal(environment.EMAIL_MODE,'resend');
+    assert.equal(environment.EMAIL_FROM,'LedgerBook <payments@example.test>');
+    assert.equal(environment.RESEND_API_KEY,fakeKey);
+    assert.equal(environment.PUBLIC_APP_URL,'http://localhost:5173');
+    assert.equal(environment.DATABASE_URL,'unchanged-local-database');
+    await writeFile(resolve(directory,'email.env'),'EMAIL_MODE=file\n',{mode:0o600});
+    await applyDevelopmentEmailConfig(directory,environment);
+    assert.equal(environment.EMAIL_MODE,'file');
+    assert.equal(environment.RESEND_API_KEY,undefined);
+    await writeFile(resolve(directory,'email.env'),'EMAIL_MODE=resend\n',{mode:0o600});
+    await assert.rejects(applyDevelopmentEmailConfig(directory,environment),LocalEmailConfigError);
+    assert.equal(environment.EMAIL_MODE,'file');
+  } finally {await rm(directory,{recursive:true,force:true});}
 });

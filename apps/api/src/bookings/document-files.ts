@@ -11,12 +11,14 @@ const types:Record<string,string> = {
   '.pptx':'application/vnd.openxmlformats-officedocument.presentationml.presentation',
   '.odt':'application/vnd.oasis.opendocument.text',
   '.rtf':'application/rtf',
-  '.txt':'text/plain', '.csv':'text/csv', '.json':'application/json',
+  '.txt':'text/plain', '.md':'text/markdown', '.markdown':'text/markdown', '.csv':'text/csv', '.json':'application/json',
   '.png':'image/png', '.jpg':'image/jpeg', '.jpeg':'image/jpeg',
   '.gif':'image/gif', '.webp':'image/webp', '.avif':'image/avif',
-  '.bmp':'image/bmp', '.tif':'image/tiff', '.tiff':'image/tiff', '.heic':'image/heic',
+  '.bmp':'image/bmp', '.ico':'image/x-icon', '.svg':'image/svg+xml',
+  '.tif':'image/tiff', '.tiff':'image/tiff', '.heic':'image/heic', '.heif':'image/heif',
   '.zip':'application/zip', '.7z':'application/x-7z-compressed', '.gz':'application/gzip',
-  '.mp3':'audio/mpeg', '.wav':'audio/wav', '.mp4':'video/mp4', '.mov':'video/quicktime',
+  '.mp3':'audio/mpeg', '.wav':'audio/wav', '.ogg':'audio/ogg', '.m4a':'audio/mp4', '.flac':'audio/flac',
+  '.mp4':'video/mp4', '.mov':'video/quicktime', '.webm':'video/webm',
 };
 
 export function documentExtension(filename:string) {

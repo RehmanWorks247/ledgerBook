@@ -1,5 +1,6 @@
 import { Injectable, ServiceUnavailableException } from '@nestjs/common';
 import { createClerkClient, verifyToken } from '@clerk/backend';
+import { createHash } from 'node:crypto';
 import { config } from '../config';
 
 export type ClerkIdentity = { id: string; email: string; name: string };
@@ -7,6 +8,7 @@ export type ClerkIdentity = { id: string; email: string; name: string };
 /** Only this gateway handles Clerk identities. No client-supplied claims establish access. */
 @Injectable()
 export class ClerkService {
+  private readonly verifying = new Map<string,Promise<ClerkIdentity|null>>();
   private readonly client = config.clerkSecretKey ? createClerkClient({ secretKey: config.clerkSecretKey, publishableKey: config.clerkPublishableKey }) : null;
   get enabled() { return config.authProvider === 'clerk'; }
 
@@ -17,6 +19,19 @@ export class ClerkService {
 
   async verify(token?: string): Promise<ClerkIdentity | null> {
     if (!token || token.length > 8192) return null;
+    // Page loads issue several API requests at once. Share only their live
+    // verification, never retain an accepted session after that check completes.
+    const key=createHash('sha256').update(token).digest('hex');
+    const pending=this.verifying.get(key);
+    if(pending) return structuredClone(await pending);
+    if(this.verifying.size>=256) return this.verifyFresh(token);
+    const task=this.verifyFresh(token);
+    this.verifying.set(key,task);
+    try { return structuredClone(await task); }
+    finally { this.verifying.delete(key); }
+  }
+
+  private async verifyFresh(token:string):Promise<ClerkIdentity|null> {
     try {
       const claims = await verifyToken(token, { secretKey: config.clerkSecretKey, authorizedParties: [config.appUrl] });
       if (!claims.sub || !claims.sid || claims.sts === 'pending') return null;

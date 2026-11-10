@@ -105,7 +105,7 @@ describe('document uploads reject unsafe requests before body buffering',() => {
       {name:'custom.unknown',type:'application/octet-stream',bytes:Buffer.from([0xff]),inline:false},
       {name:'README',type:'application/octet-stream',bytes:Buffer.from('a'),inline:false},
       {name:'page.html',type:'application/octet-stream',bytes:Buffer.from('<script>alert(1)</script>'),inline:false},
-      {name:'drawing.svg',type:'application/octet-stream',bytes:Buffer.from('<svg onload="alert(1)"></svg>'),inline:false},
+      {name:'drawing.svg',type:'image/svg+xml',bytes:Buffer.from('<svg onload="alert(1)"></svg>'),inline:false},
     ];
     for (const item of cases) {
       const uploadHeaders={...headers,'Content-Type':'application/octet-stream','X-File-Name':encodeURIComponent(item.name),'Idempotency-Key':randomUUID()};

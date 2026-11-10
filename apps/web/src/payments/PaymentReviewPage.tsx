@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { RefreshCw, Search, SlidersHorizontal, X } from "lucide-react";
 import { useResource } from "../api";
-import { Empty, ErrorNotice, Loading, PageHeading, Pagination } from "../components";
+import { Empty, ErrorNotice, TableSkeleton, PageHeading, Pagination } from "../components";
 import { Navigate } from "../router";
 import { useOrganization } from "../state";
 import { PaymentDetailsDialog, PaymentTable } from "./PaymentTable";
@@ -47,8 +47,8 @@ function PaymentReviewContents() {
   if (to && !invalidDates) queryParams.set("to", to);
   const params = queryParams.toString();
   useEffect(() => { window.history.replaceState(window.history.state, "", `${window.location.pathname}?${params}`); }, [params]);
-  const resource = useResource<PaymentReviewResponse>(`/organizations/${member.organization_id}/payment-submissions?${params}`);
-  const emailStatus = useResource<{ retrying: number }>(`/organizations/${member.organization_id}/payment-email-status`);
+  const resource = useResource<PaymentReviewResponse>(`/organizations/${member.organization_id}/payment-submissions?${params}`, { cache: true });
+  const emailStatus = useResource<{ retrying: number }>(`/organizations/${member.organization_id}/payment-email-status`, { cache: true });
   useEffect(() => { if (resource.data) setPage(resource.data.page); }, [resource.data]);
   function refresh() { resource.refresh(); emailStatus.refresh(); }
   function clearFilters() { setSearch(""); setQuery(""); setFrom(""); setTo(""); setPage(1); }
@@ -70,7 +70,7 @@ function PaymentReviewContents() {
         <label>Sort by<select value={sort} onChange={event => { setSort(event.target.value); setPage(1); }}>{sorts.map(item => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label>
       </div>
       <div className="payment-query-summary"><p id="payment-search-help"><SlidersHorizontal size={13} aria-hidden="true" /><span>Search IDs, names, email, dates, amounts, notes and receipt names.</span></p>{filtered && <button type="button" className="text-link" onClick={clearFilters}><X size={13} />Clear filters</button>}</div>
-      {invalidDates ? <div className="payment-state"><ErrorNotice message="Payment from must be on or before payment to." /></div> : resource.error ? <div className="payment-state"><ErrorNotice message={resource.error} /><button type="button" className="button secondary" onClick={resource.refresh}>Try again</button></div> : !resource.data ? <Loading /> : <div aria-busy={resource.loading}>
+      {invalidDates ? <div className="payment-state"><ErrorNotice message="Payment from must be on or before payment to." /></div> : resource.error ? <div className="payment-state"><ErrorNotice message={resource.error} /><button type="button" className="button secondary" onClick={resource.refresh}>Try again</button></div> : !resource.data ? <TableSkeleton columns={["Customer", "Booking", "Payment date", "Amount", "Status", "Actions"]} label="Loading payment reviews" /> : <div aria-busy={resource.loading}>
         {!resource.data.items.length ? <div className="payment-empty"><Empty title={filtered ? "No matching payments" : status === "pending" ? "You’re all caught up" : "No payments here yet"} detail={filtered ? "Try another ID, name or date range, or clear your filters." : status === "pending" ? "New payment submissions will appear here for review." : "Payments will appear here as customers submit receipts and decisions are recorded."} />{filtered && <button type="button" className="button secondary" onClick={clearFilters}>Clear filters</button>}{status !== "all" && <button type="button" className="text-link" onClick={() => { setStatus("all"); setPage(1); }}>Search all statuses</button>}</div> : <PaymentTable payments={resource.data.items} organizationId={member.organization_id} timeZone={resource.data.time_zone} canReview showCustomer onOpen={payment => setSelected({ payment, timeZone: resource.data!.time_zone })} />}
         <div className="payment-table-footer"><label>Rows<select aria-label="Payments per page" value={size} onChange={event => { setSize(Number(event.target.value)); setPage(1); }}>{[10, 25, 50, 100].map(value => <option key={value} value={value}>{value}</option>)}</select></label><Pagination page={resource.data.page} total={resource.data.total} size={resource.data.page_size} onPage={setPage} /></div>
         <p className="payment-timezone">Dates shown in {resource.data.time_zone}. Payment dates use the date supplied by the customer.</p>

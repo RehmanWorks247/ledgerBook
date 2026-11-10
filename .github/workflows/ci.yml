@@ -21,6 +21,7 @@ jobs:
         ports:
           - 5432:5432
         options: >-
+          --shm-size=256m
           --health-cmd "pg_isready -U ledgerbook_test -d ledgerbook_test"
           --health-interval 5s
           --health-timeout 5s
@@ -38,6 +39,7 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
+      - run: npm audit --audit-level=moderate
       - run: npm run lint
       - run: npm run typecheck
       - run: npm run db:migrate
@@ -45,4 +47,22 @@ jobs:
         name: Verify migration replay
       - run: npm run build
       - run: npm test
+      - run: npx playwright install --with-deps chromium webkit
+      - run: npm run test:e2e
+      - run: npm run test:e2e
+        name: WebKit browser workflows
+        env:
+          E2E_BROWSER: webkit
+      - run: docker build --tag ledgerbook:ci .
+        name: Build non-root production image
+      - run: npm run test:release
+        name: Verify production TLS, startup guards and runtime permissions
+        env:
+          RELEASE_TEST_IMAGE: ledgerbook:ci
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: browser-test-results
+          path: .local/e2e/results
+          retention-days: 7
 

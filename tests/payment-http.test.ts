@@ -1,7 +1,10 @@
 import 'reflect-metadata';
 import { strict as assert } from 'node:assert';
 import { randomUUID } from 'node:crypto';
+import { mkdtemp, readdir, readFile, rm, stat } from 'node:fs/promises';
 import { IncomingMessage, ServerResponse } from 'node:http';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { Duplex } from 'node:stream';
 import type { Socket } from 'node:net';
 import { after, before, describe, it } from 'node:test';
@@ -13,6 +16,8 @@ import { AuthService } from '../apps/api/src/auth/auth.service';
 import { BookingsService } from '../apps/api/src/bookings/bookings.service';
 import { config } from '../apps/api/src/config';
 import { businessDate } from '../apps/api/src/dashboard/time';
+import { PaymentEmailOutbox } from '../apps/api/src/payments/email-outbox.service';
+import { NotificationsService } from '../apps/api/src/notifications/notifications.service';
 import { setupTestDatabase, type TestDatabase, type TestSeed } from './helpers';
 
 describe('payment multipart upload, protected image delivery and approval HTTP contracts', () => {
@@ -29,6 +34,9 @@ describe('payment multipart upload, protected image delivery and approval HTTP c
   let foreignCustomerBooking:string;
   let png:Buffer;
   let imageNumber = 0;
+  let mail:NotificationsService;
+  let originalSend:NotificationsService['send'];
+  let requestSends=0;
 
   before(async () => {
     database = await setupTestDatabase();
@@ -46,6 +54,9 @@ describe('payment multipart upload, protected image delivery and approval HTTP c
     foreignCustomerBooking = await create(seed.secondCustomerId);
     png = await sharp({create:{width:30,height:24,channels:3,background:'#123456'}}).png().toBuffer();
     app = await createApp({database:database.db,logger:false,paymentEmails:false});
+    mail=app.get(NotificationsService);
+    originalSend=mail.send.bind(mail);
+    mail.send=async()=>{requestSends++;throw new Error('Payment requests must queue email instead of sending it inline.');};
     adminCookie = `${config.sessionCookie}=${await app.get(AuthService).createSession(seed.adminId)}`;
     customerCookie = `${config.sessionCookie}=${await app.get(AuthService).createSession(seed.customerUserId)}`;
     otherAdminCookie = `${config.sessionCookie}=${await app.get(AuthService).createSession(seed.otherAdminId)}`;
@@ -187,6 +198,9 @@ describe('payment multipart upload, protected image delivery and approval HTTP c
     const rejection = await http(`${endpoint(second)}/${payment.id}/reject`,json({reason:'Please provide the full transaction screenshot.'}));
     assert.equal(rejection.status,201,await rejection.clone().text());
     assert.equal((await rejection.json()).status,'rejected');
+    const replay=await http(`${endpoint(second)}/${payment.id}/reject`,json({reason:'Please provide the full transaction screenshot.'}));
+    assert.equal(replay.status,201);
+    assert.equal((await replay.json()).id,payment.id);
     const listing = await http(endpoint(second),{headers:{Cookie:customerCookie}});
     assert.equal((await listing.json()).items[0].rejection_reason,'Please provide the full transaction screenshot.');
     assert.equal((await http(`${endpoint(second)}/${payment.id}/approve`,json({}))).status,409);
@@ -228,5 +242,79 @@ describe('payment multipart upload, protected image delivery and approval HTTP c
     assert.equal((await http(endpoint(),{method:'POST',headers:authHeaders(),body:wrongField})).status,400);
     const jsonUpload = await http(endpoint(),json({amount:'25.00',payment_date:businessDate(),idempotency_key:randomUUID(),receipts:['data:image/png;fake']},customerCookie));
     assert.equal(jsonUpload.status,400);
+  });
+
+  it('queues receipt acknowledgements and decisions in HTTP requests, then delivers them once without stale review notices', async () => {
+    assert.equal(requestSends,0,'Payment requests must finish independently of the email provider.');
+    const path = `/api/organizations/${seed.orgId}/payment-email-status`;
+    assert.equal((await http(path)).status,401);
+    assert.equal((await http(path,{headers:{Cookie:customerCookie}})).status,403);
+    assert.equal((await http(path,{headers:{Cookie:otherAdminCookie}})).status,404);
+    const pending = await http(path,{headers:{Cookie:adminCookie}});
+    assert.equal(pending.status,200);
+    const pendingStatus=await pending.json();
+    assert.deepEqual(Object.keys(pendingStatus).sort(),['bounced','complained','delivered','failed','oldest_queued_at','queued','retrying','sent','suppressed']);
+    assert.equal(pendingStatus.queued,7,'Three booking confirmations, two acknowledgements, approval and rejection remain queued.');
+    assert.equal(pendingStatus.sent,0);
+    for(const key of ['bounced','complained','delivered','failed','suppressed'])assert.equal(pendingStatus[key],0);
+    const originalDirectory = config.mailDirectory;
+    const directory = await mkdtemp(join(tmpdir(),'ledger-payment-http-mail-'));
+    config.mailDirectory = directory;
+    mail.send=originalSend;
+    try {
+      const worker = app.get(PaymentEmailOutbox);
+      assert.equal(await worker.flush(),7);
+      assert.equal(await worker.flush(),0,'A completed delivery must not publish another email.');
+      const names = await readdir(directory);
+      assert.equal(names.length,7);
+      const messages = await Promise.all(names.map(async name => {
+        assert.match(name,/^payment-[a-f0-9]{64}\.eml$/);
+        assert.equal((await stat(join(directory,name))).mode & 0o777,0o600);
+        return (await readFile(join(directory,name),'utf8')).replaceAll('\r\n','\n');
+      }));
+      const review = messages.filter(message => message.includes('Subject: Payment receipt submitted\n'));
+      assert.equal(review.length,0,'Administrators should not receive stale review requests after decisions are recorded.');
+      for (const message of messages) {
+        assert.match(message,/Content-Type: text\/plain; charset=utf-8/);
+        assert.doesNotMatch(message,/Content-Type: image\//);
+        if(message.includes('Subject: Your booking confirmation and invoice\n')) {
+          assert.match(message,/^To: (customer|beacon)@example\.test\n/);
+          assert.match(message,/Content-Disposition: attachment/);
+          assert.match(message,/Content-Type: application\/pdf/);
+        } else {
+          assert.match(message,/^To: customer@example\.test\n/);
+          assert.match(message,/Amount: GBP 25\.00/);
+          assert.ok(message.includes(`${config.appUrl}/o/${seed.orgId}/users/${seed.customerId}/bookings/`));
+        }
+      }
+      const approved = messages.filter(message => message.includes('Subject: Your payment has been approved\n'));
+      assert.equal(approved.length,1);
+      assert.match(approved[0],/^To: customer@example\.test\n/);
+      assert.match(approved[0],/credited to your account/);
+      assert.match(approved[0],/Content-Disposition: attachment/);
+      assert.match(approved[0],/Content-Type: application\/pdf/);
+      assert.ok(approved[0].includes(`${config.appUrl}/o/${seed.orgId}/users/${seed.customerId}/bookings/${first}`));
+      const rejected=messages.filter(message=>message.includes('Subject: Your payment was not approved\n'));
+      assert.equal(rejected.length,1);
+      assert.match(rejected[0],/Please provide the full transaction screenshot\./);
+      assert.ok(rejected[0].includes(`${config.appUrl}/o/${seed.orgId}/users/${seed.customerId}/bookings/${second}`));
+      const acknowledged=messages.filter(message=>message.includes('Subject: Your payment receipt has been received\n'));
+      assert.equal(acknowledged.length,2);
+      for(const message of acknowledged) {
+        assert.match(message,/receiv|receipt/i);assert.match(message,/verify|review/i);
+      }
+      assert.ok(acknowledged.some(message=>message.includes(`${config.appUrl}/o/${seed.orgId}/users/${seed.customerId}/bookings/${first}`)));
+      assert.ok(acknowledged.some(message=>message.includes(`${config.appUrl}/o/${seed.orgId}/users/${seed.customerId}/bookings/${second}`)));
+      const completed = await http(path,{headers:{Cookie:adminCookie}});
+      assert.deepEqual(await completed.json(),{queued:0,retrying:0,sent:7,delivered:0,bounced:0,complained:0,failed:0,suppressed:0,oldest_queued_at:null});
+      const other = await http(`/api/organizations/${seed.otherOrgId}/payment-email-status`,{headers:{Cookie:otherAdminCookie}});
+      assert.deepEqual(await other.json(),{queued:0,retrying:0,sent:0,delivered:0,bounced:0,complained:0,failed:0,suppressed:0,oldest_queued_at:null});
+      await database.db.query('UPDATE memberships SET is_active=false WHERE id=$1',[seed.admin.id]);
+      try { assert.equal((await http(path,{headers:{Cookie:adminCookie}})).status,404); }
+      finally { await database.db.query('UPDATE memberships SET is_active=true WHERE id=$1',[seed.admin.id]); }
+    } finally {
+      config.mailDirectory = originalDirectory;
+      await rm(directory,{recursive:true,force:true});
+    }
   });
 });

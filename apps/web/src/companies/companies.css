@@ -1,0 +1,50 @@
+.companies-page { min-width: 0; }
+.companies-panel { overflow: hidden; }
+.companies-notice { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.companies-notice > span { overflow-wrap: anywhere; }
+.companies-filters .record-filter-search { flex-basis: 260px; }
+.companies-state { padding: 10px 16px 20px; }
+.companies-scroll-hint { margin: 0; padding: 9px 16px; font-size: 11px; color: var(--muted); border-bottom: 1px solid var(--line); }
+.companies-table-scroll { position: relative; }
+.companies-table { min-width: 1900px; }
+.companies-table th, .companies-table td { vertical-align: top; }
+.companies-table thead th:first-child,
+.companies-table tbody th { position: sticky; left: 0; z-index: 1; min-width: 180px; width: 210px; max-width: 240px; border-right: 1px solid var(--line); }
+.companies-table tbody th { background: var(--surface); padding: 12px 16px; border-bottom: 1px solid var(--line); white-space: normal; text-transform: none; letter-spacing: normal; }
+.companies-table tbody th strong { color: var(--text); font-size: 13px; font-weight: 600; line-height: 1.5; overflow-wrap: anywhere; }
+.companies-table tbody tr:last-child th { border-bottom: 0; }
+.companies-table tbody tr:hover th { background: var(--surface-hover); }
+.companies-table thead th:last-child,
+.companies-table tbody td:last-child { position: sticky; right: 0; z-index: 1; width: 98px; min-width: 98px; border-left: 1px solid var(--line); }
+.companies-table thead th:last-child { background: var(--surface-subtle); }
+.companies-table tbody td:last-child { background: var(--surface); }
+.companies-table tbody tr:hover td:last-child { background: var(--surface-hover); }
+.companies-table .companies-text { min-width: 145px; max-width: 230px; overflow-wrap: anywhere; }
+.companies-table .companies-date { white-space: nowrap; min-width: 125px; }
+.companies-table .companies-remarks { min-width: 240px; max-width: 360px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.companies-row-actions { display: flex; align-items: center; gap: 7px; }
+.companies-table-footer { display: flex; align-items: center; border-top: 1px solid var(--line); }
+.companies-table-footer > label { display: flex; align-items: center; gap: 8px; padding-left: 16px; color: var(--muted); font-size: 12px; }
+.companies-table-footer select { color: var(--text); background: var(--surface); border: 1px solid var(--line-strong); border-radius: 6px; padding: 6px 8px; }
+.companies-table-footer .pagination { flex: 1; min-width: 0; border-top: 0; }
+.company-dialog { width: min(760px, calc(100vw - 32px)); max-width: calc(100vw - 32px); max-height: calc(100dvh - 32px); overflow-y: auto; }
+.company-dialog-compact { width: min(500px, calc(100vw - 32px)); }
+.company-dialog-description { font-size: 13px; line-height: 1.6; color: var(--muted); margin: 0 0 22px; overflow-wrap: anywhere; }
+.company-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 17px; }
+.company-form-grid label, .company-dialog .stack-form > label { min-width: 0; }
+.company-dialog input, .company-dialog textarea { min-width: 0; width: 100%; }
+.company-money-fields { min-width: 0; border: 0; border-top: 1px solid var(--line); padding: 16px 0 0; margin: 2px 0 0; }
+.company-money-fields legend { padding: 0 12px 0 0; font-size: 13px; font-weight: 600; color: var(--text); }
+.company-money-fields > p { margin: 0 0 14px; font-size: 12px; color: var(--muted); line-height: 1.6; }
+.company-conflict p { margin: 0 0 12px; }
+.company-dialog .form-actions { margin-top: 4px; }
+@media (max-width: 620px) {
+  .companies-table-footer { flex-direction: column; align-items: stretch; }
+  .companies-table-footer > label { padding: 12px 12px 0; }
+  .companies-table-footer .pagination { padding: 12px; gap: 8px; flex-wrap: wrap; }
+  .companies-table-footer .pagination > div { gap: 8px; }
+  .companies-table thead th:first-child, .companies-table tbody th { min-width: 145px; max-width: 170px; }
+  .companies-table thead th:last-child, .companies-table tbody td:last-child { min-width: 90px; width: 90px; padding-inline: 10px; }
+  .company-form-grid { grid-template-columns: minmax(0, 1fr); gap: 17px; }
+  .company-dialog { padding: 20px; }
+}

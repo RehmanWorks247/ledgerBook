@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { after, before, describe, it } from 'node:test';
 import { AccessService } from '../apps/api/src/access/access.service';
 import { AuthService } from '../apps/api/src/auth/auth.service';
-import { hashPassword, opaqueToken, tokenHash, verifyPassword } from '../apps/api/src/auth/crypto';
+import { hashPassword, opaqueToken, tokenHash, validatePassword, verifyPassword } from '../apps/api/src/auth/crypto';
 import { RateLimitService } from '../apps/api/src/auth/rate-limit.service';
 import { config } from '../apps/api/src/config';
 import { InvitationService } from '../apps/api/src/invitations/invitation.service';
@@ -55,6 +55,15 @@ describe('Authentication, invitations, recovery and abuse controls', () => {
     return id;
   }
 
+  it('accepts eight characters without composition rules and preserves the length bounds', () => {
+    for (const password of ['abcdefgh', '12345678', 'ABCDEFGH', '!!!!!!!!', 'password1234', 'admin@example.test', 'a'.repeat(128)]) {
+      assert.doesNotThrow(() => validatePassword(password));
+    }
+    for (const password of ['', 'abcdefg', 'a'.repeat(129), null, 123456]) {
+      assert.throws(() => validatePassword(password));
+    }
+  });
+
   it('uses salted scrypt and rejects incorrect passwords without storing plaintext', async () => {
     const first = await hashPassword(testPassword);
     const second = await hashPassword(testPassword);
@@ -89,10 +98,12 @@ describe('Authentication, invitations, recovery and abuse controls', () => {
     assert.deepEqual(await invitations.inspect(token), { status: 'valid', email, name: 'Invitation test', organizationName: 'North Trading', existingUser: false, provider: 'local' });
     const stored = await context.db.query('SELECT token_hash FROM invitations WHERE id=$1', [invitation.id]);
     assert.equal(stored.rows[0].token_hash, tokenHash(token));
-    const accepted = await invitations.accept(token, undefined, testPassword);
+    await assert.rejects(invitations.accept(token, undefined, 'abcdefg'), /at least 8 characters/);
+    const accepted = await invitations.accept(token, undefined, 'abcdefgh');
     assert.equal(accepted.user.email, email);
     assert.ok(accepted.token);
     assert.equal((await auth.authenticate(accepted.token))?.id, accepted.user.id);
+    assert.equal((await auth.login(email, 'abcdefgh')).user.id, accepted.user.id);
     const membership = await access.membership(accepted.user.id, seed.orgId);
     assert.equal(membership.customer_id, customerId);
     assert.equal(membership.role, 'customer');
@@ -229,7 +240,8 @@ describe('Authentication, invitations, recovery and abuse controls', () => {
     auth.forgotPassword('admin@example.test');
     await auth.drainRecovery();
     const latest = notifications.token();
-    const nextPassword = 'New secure password for admin 69!';
+    const nextPassword = '12345678';
+    await assert.rejects(auth.resetPassword(latest, '1234567'), /at least 8 characters/);
     await assert.rejects(auth.resetPassword(old, nextPassword), /invalid or has expired/);
     await auth.resetPassword(latest, nextPassword);
     await assert.rejects(auth.resetPassword(latest, nextPassword), /invalid or has expired/);

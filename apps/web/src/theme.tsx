@@ -12,7 +12,7 @@ type ThemeContextValue = ThemeSnapshot & {
 const ThemeContext = createContext<ThemeContextValue>({
   theme: "light",
   preference: "system",
-  accent: "green",
+  accent: "gold",
   setPreference: () => {},
   setAccent: () => {},
   toggle: () => {},

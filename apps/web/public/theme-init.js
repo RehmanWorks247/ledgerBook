@@ -15,7 +15,7 @@
     : window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
   document.documentElement.dataset.theme = theme;
   document.documentElement.dataset.accent =
-    ["green", "blue", "violet", "amber", "rose", "neutral"].indexOf(accent) !== -1 ? accent : "green";
+    ["gold", "green", "blue", "violet", "amber", "rose", "neutral"].indexOf(accent) !== -1 ? accent : "gold";
   document.documentElement.style.colorScheme = theme;
   document.querySelector('meta[name="theme-color"]').setAttribute(
     "content", theme === "dark" ? "#0a0a0a" : "#fafafa"

@@ -4,6 +4,7 @@ import { resolve } from 'node:path';
 import { z } from 'zod';
 import type { DatabaseService } from '../apps/api/src/database/database.service';
 import { hashPassword, verifyPassword } from '../apps/api/src/auth/crypto';
+import { passwordSchema } from '../apps/api/src/auth/password-policy';
 
 const currencies:Record<string,number>={USD:2,EUR:2,GBP:2,PKR:2,AED:2,SAR:2,CAD:2,AUD:2,INR:2,JPY:0,KWD:3,BHD:3,OMR:3};
 const identitySchema=z.object({
@@ -12,7 +13,7 @@ const identitySchema=z.object({
   currency:z.string().refine(value=>currencies[value]!==undefined,'Unsupported currency.'),
 });
 const credentialSchema=identitySchema.extend({
-  userId:z.uuid(),organizationId:z.uuid(),password:z.string().min(24).max(128),createdAt:z.iso.datetime(),
+  userId:z.uuid(),organizationId:z.uuid(),password:passwordSchema,createdAt:z.iso.datetime(),
 }).strict();
 type Credentials=z.infer<typeof credentialSchema>;
 export type LocalAccount={email?:string;organizationId?:string;password?:string;created:boolean;credentialsPath?:string};

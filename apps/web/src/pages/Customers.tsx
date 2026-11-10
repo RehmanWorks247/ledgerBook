@@ -39,6 +39,7 @@ import {
   Empty,
   ErrorNotice,
   Loading,
+  TableSkeleton,
   PageHeading,
   Pagination,
 } from "../components";
@@ -55,7 +56,7 @@ export function CustomerList() {
   const member = useOrganization();
   const { search, setSearch, status, setStatus, dates, setDate, setPage, params, clear, invalidDates, filtered } = useDirectoryFilters();
   const { data, error, loading, refresh } = useResource<CustomerListData>(
-    `/organizations/${member.organization_id}/customers?${params}`,
+    `/organizations/${member.organization_id}/customers?${params}`, { cache: true },
   );
   if (member.role !== "admin")
     return <Navigate to={`/o/${member.organization_id}`} replace />;
@@ -92,19 +93,19 @@ export function CustomerList() {
         </div>
         <div className="record-filter-summary"><p role="status">{loading ? "Searching…" : data ? `${data.total} customer${data.total === 1 ? "" : "s"}${data.time_zone ? ` · Dates in ${data.time_zone}` : ""}` : "Customers"}</p>{filtered && <button type="button" className="text-link" onClick={clear}>Clear filters</button>}</div>
         {invalidDates ? <div className="record-filter-error"><ErrorNotice message="Added from must be on or before added to." /></div> : error ? <div className="record-filter-summary"><button type="button" className="text-link" onClick={refresh}>Try again</button></div> : loading && !data ? (
-          <Loading />
+          <TableSkeleton columns={["Customer", "Status", "Invitation", "Outstanding balance", "Actions"]} label="Loading customers" />
         ) : (
           data && (
             <>
               {data.items.length ? (
-                <div className="table-scroll">
+                <div className="table-scroll" aria-busy={loading}>
                   <table className="compact-record-table">
                     <thead>
                       <tr>
                         <th>Customer</th>
                         <th>Status</th>
                         <th>Invitation</th>
-                        <th className="align-right">Balance</th>
+                        <th className="align-right">Outstanding balance</th>
                         <th>
                           <span className="sr-only">View</span>
                         </th>
@@ -144,7 +145,7 @@ export function CustomerList() {
                             )}
                           </td>
                           <td
-                            className={`align-right amount ${amountTone(customer.balance_minor)}`}
+                            className="align-right amount money-charge"
                           >
                             {money(
                               customer.balance_minor,
@@ -488,6 +489,7 @@ export function CustomerDetail({ recordPayment = false }: { recordPayment?: bool
           All customers
         </Link>
       )}
+      {!admin && <Link className="back-link" to={`/o/${member.organization_id}`}><ChevronLeft size={16} />My account</Link>}
       <PageHeading
         eyebrow={data?.customer.customer_code}
         title={
@@ -502,7 +504,7 @@ export function CustomerDetail({ recordPayment = false }: { recordPayment?: bool
                 to={`/o/${member.organization_id}/users/${data.customer.id}`}
               >
                 <FolderOpen size={16} />
-                {admin ? "Profile, bookings & documents" : "My bookings & files"}
+                {admin ? "Profile, bookings & documents" : "My bookings"}
               </Link>
             )}
             {admin && data && (
@@ -535,8 +537,8 @@ export function CustomerDetail({ recordPayment = false }: { recordPayment?: bool
           <>
             <div className="account-summary">
               <div className="balance-card">
-                <span className="eyebrow">CURRENT BALANCE</span>
-                <strong className={amountTone(data.current_balance_minor)}>
+                <span className="eyebrow">Outstanding balance</span>
+                <strong className="money-charge">
                   {money(
                     data.current_balance_minor,
                     data.currency,

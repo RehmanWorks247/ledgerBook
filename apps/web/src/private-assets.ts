@@ -19,7 +19,7 @@ export async function loadPrivateAsset(path: string, signal?: AbortSignal) {
 }
 
 export function usePrivateAsset(path?: string, file?: File) {
-  const [asset, setAsset] = useState<{ path?: string; file?: File; url: string; error: string }>();
+  const [asset, setAsset] = useState<{ path?: string; file?: File; blob?: Blob; url: string; error: string }>();
   useEffect(() => {
     const controller = new AbortController();
     let url = "";
@@ -28,7 +28,7 @@ export function usePrivateAsset(path?: string, file?: File) {
       void load.then(blob => {
         if (controller.signal.aborted) return;
         url = URL.createObjectURL(blob);
-        setAsset({ path, file, url, error: "" });
+        setAsset({ path, file, blob, url, error: "" });
       }).catch(cause => {
         if (!controller.signal.aborted) setAsset({ path, file, url: "", error: errorMessage(cause) });
       });

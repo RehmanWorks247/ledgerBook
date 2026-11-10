@@ -8,6 +8,8 @@ import { parseMoney, UUID_PATTERN, validDate } from '../ledger/money';
 import { config } from '../config';
 import { DocumentStorage, type StoredDocument } from './document-storage';
 import { documentExtension, documentMimeType } from './document-files';
+import { issueBookingInvoice } from '../invoices/invoices.service';
+import { queueBookingCreatedEmail } from '../payments/payment-emails';
 
 export const SERVICE_KEYS = ['flight','makkah','madinah','transfers','visas','extras'] as const;
 export const MAX_DOCUMENT_BYTES = 10 * 1024 * 1024;
@@ -24,6 +26,9 @@ const bookingSchema = z.object({
 }).strict();
 const folderSchema = z.object({parent_id:z.uuid().nullable(),name:nameSchema,idempotency_key:z.uuid()}).strict();
 const moveSchema = z.object({parent_id:z.uuid().nullable()}).strict();
+const renameSchema = z.object({name:nameSchema}).strict();
+const uploadSchema = z.object({name:nameSchema,size:z.number().int().min(1).max(MAX_DOCUMENT_BYTES),
+  sha256:z.string().regex(/^[0-9a-f]{64}$/),idempotency_key:z.uuid()}).strict();
 const issueSchema = z.object({issued:z.boolean()}).strict();
 function parse<T>(schema:z.ZodType<T>, value:unknown):T {
   const parsed = schema.safeParse(value);
@@ -37,10 +42,10 @@ function uuid(value:string, label:string) {
 type Node = QueryResultRow & {
   id:string; organization_id:string; customer_id:string; booking_id:string; parent_id:string|null;
   name:string; kind:'file'|'folder'; size:number; updated_at:Date|string; service_key:string|null;
-  default_folder:boolean; issued_at:Date|null; request_hash:string; content?:Buffer; mime_type:string;
+  default_folder:boolean; issued_at:Date|null; request_hash:string; content?:Buffer; mime_type:string; content_version:number;
 };
-const nodeColumns = 'id,organization_id,customer_id,booking_id,parent_id,name,kind,size,updated_at,service_key,default_folder,issued_at,request_hash,mime_type';
-const bookingColumns = 'b.*,b.total_minor::text AS total_minor,(SELECT c.customer_code FROM customers c WHERE c.id=b.customer_id AND c.organization_id=b.organization_id) AS customer_code';
+const nodeColumns = 'id,organization_id,customer_id,booking_id,parent_id,name,kind,size,updated_at,service_key,default_folder,issued_at,request_hash,mime_type,content_version';
+const bookingColumns = 'b.*,b.total_minor::text AS total_minor,(SELECT e.effective_date::text FROM ledger_entries e WHERE e.id=b.charge_entry_id) AS effective_date,(SELECT c.customer_code FROM customers c WHERE c.id=b.customer_id AND c.organization_id=b.organization_id) AS customer_code';
 
 @Injectable()
 export class BookingsService {
@@ -53,14 +58,14 @@ export class BookingsService {
     return {id:node.id,parentId:node.parent_id,name:node.name,kind:node.kind,size:node.size,
       modifiedAt:new Date(node.updated_at).getTime(),serviceKey:node.service_key,
       defaultFolder:node.default_folder,issuedAt:node.issued_at,
-      ...(node.kind === 'file' ? {mimeType:node.mime_type,url:base,openUrl:base,downloadUrl:`${base}?download=1`} : {})};
+      ...(node.kind === 'file' ? {version:node.content_version,mimeType:node.mime_type,url:base,openUrl:base,downloadUrl:`${base}?download=1`} : {})};
   }
   private async context(client:PoolClient, member:Membership, customerId:string, bookingId:string, write=false) {
     uuid(bookingId,'booking');
     const active = await this.access.membership(member.user_id,member.organization_id,write,client);
     const customer = await this.access.customer(active,customerId,client,write);
     const result = await client.query(`SELECT ${bookingColumns} FROM bookings b
-      WHERE b.organization_id=$1 AND b.customer_id=$2 AND b.id=$3 ${write ? 'FOR UPDATE' : ''}`,
+      WHERE b.organization_id=$1 AND b.customer_id=$2 AND b.id=$3 AND b.deleted_at IS NULL ${write ? 'FOR UPDATE' : ''}`,
       [active.organization_id,customerId,bookingId]);
     if (!result.rows[0]) throw new NotFoundException('Booking was not found for this customer.');
     if (write && customer.status !== 'active') throw new ConflictException('Restore this customer before managing booking documents.');
@@ -84,12 +89,12 @@ export class BookingsService {
       VALUES($1,$2,$3,$4,$5::jsonb)`,[member.organization_id,member.user_id,action,objectId,JSON.stringify(metadata)]);
   }
 
-  async list(member:Membership, customerId:string) {
+  async list(member:Membership, customerId:string, includeCancelled=false) {
     return this.db.transaction(async client => {
       const active = await this.access.membership(member.user_id,member.organization_id,false,client);
       await this.access.customer(active,customerId,client);
       const result = await client.query(`SELECT ${bookingColumns} FROM bookings b
-        WHERE b.organization_id=$1 AND b.customer_id=$2 ORDER BY b.departure_at DESC,b.id`,[active.organization_id,customerId]);
+        WHERE b.organization_id=$1 AND b.customer_id=$2 AND ($3::boolean OR b.deleted_at IS NULL) ORDER BY b.departure_at DESC,b.id`,[active.organization_id,customerId,includeCancelled]);
       return {time_zone:config.businessTimeZone,items:result.rows.map(({request_hash:_hash,idempotency_key:_key,...booking}) => ({...booking,currency_exponent:2}))};
     });
   }
@@ -118,8 +123,9 @@ export class BookingsService {
       if (active.currency !== 'GBP' || active.currency_exponent !== 2) {
         throw new ConflictException('Booking charges require a GBP accounting workspace. Existing transactions cannot be relabelled as GBP.');
       }
-      const previous = await client.query('SELECT id,request_hash FROM bookings WHERE organization_id=$1 AND idempotency_key=$2',[active.organization_id,data.idempotency_key]);
+      const previous = await client.query('SELECT id,request_hash,deleted_at FROM bookings WHERE organization_id=$1 AND idempotency_key=$2',[active.organization_id,data.idempotency_key]);
       if (previous.rows[0]) {
+        if (previous.rows[0].deleted_at) throw new ConflictException('This booking was cancelled. Use a new submission key to create another booking.');
         if (previous.rows[0].request_hash !== fingerprint) throw new ConflictException('This submission key was used for a different booking.');
         await client.query('SELECT ensure_booking_folders($1)',[previous.rows[0].id]);
         return previous.rows[0].id as string;
@@ -136,6 +142,10 @@ export class BookingsService {
       await client.query('SELECT ensure_booking_folders($1)',[id]);
       await this.audit(client,active,'booking.created',id,{customer_id:customerId,booking_id:id,reference:data.reference,entry_id:charge.rows[0].id});
       await this.audit(client,active,'ledger.posted',charge.rows[0].id,{customer_id:customerId,kind:'charge',booking_id:id});
+      const invoice=await issueBookingInvoice(client,{organizationId:active.organization_id,customerId,bookingId:id,
+        actorId:active.user_id,reason:'booking_created',eventKey:`booking-created:${id}`});
+      await queueBookingCreatedEmail(client,{organizationId:active.organization_id,organizationName:active.organization_name!,
+        customerId,customerName:customer.name,recipient:customer.email,bookingId:id,bookingReference:data.reference,invoiceId:invoice.id});
       return id;
     });
     return this.get(member,customerId,bookingId);
@@ -148,6 +158,9 @@ export class BookingsService {
         WHERE organization_id=$1 AND customer_id=$2 AND booking_id=$3 ORDER BY created_at,id`,[active.organization_id,customerId,bookingId]);
       // Ordinary listings are read-only; repair legacy/incomplete bookings only when needed.
       if(result.rows.filter(node=>node.default_folder).length!==SERVICE_KEYS.length) {
+        // Repair writes nodes and their report revision. Match all document
+        // writers' customer-before-booking order, including legacy read repair.
+        await this.access.customer(active,customerId,client,true);
         await client.query('SELECT id FROM bookings WHERE id=$1 FOR UPDATE',[bookingId]);
         await client.query('SELECT ensure_booking_folders($1)',[bookingId]);
         result=await client.query<Node>(`SELECT ${nodeColumns} FROM booking_nodes
@@ -185,6 +198,78 @@ export class BookingsService {
   }
 
   async upload(member:Membership, customerId:string, bookingId:string, folderId:string, name:unknown, key:unknown, content:unknown) {
+    return this.persistUpload(member,customerId,bookingId,folderId,name,key,content);
+  }
+
+  async beginUpload(member:Membership, customerId:string, bookingId:string, folderId:string, raw:unknown) {
+    const data=parse(uploadSchema,raw);
+    const fingerprint=hash({customerId,bookingId,folderId,filename:data.name,checksum:data.sha256});
+    const prepared=await this.db.transaction(async client=>{
+      const {active}=await this.context(client,member,customerId,bookingId,true);
+      const folder=await this.destination(client,active.organization_id,customerId,bookingId,folderId);
+      if(!folder?.service_key) throw new BadRequestException('Select the destination service folder for this booking before uploading.');
+      const prior=await client.query<Node>(`SELECT ${nodeColumns} FROM booking_nodes WHERE organization_id=$1 AND idempotency_key=$2`,[active.organization_id,data.idempotency_key]);
+      if(prior.rows[0]) {
+        if(prior.rows[0].request_hash!==fingerprint || prior.rows[0].size!==data.size) throw new ConflictException('This submission key was used for a different upload.');
+        if(prior.rows[0].parent_id!==folderId) throw new ConflictException('This document has moved. Refresh the booking before uploading another copy.');
+        return {document:this.serialize(prior.rows[0])};
+      }
+      if(!this.storage.direct) return {};
+      const existing=await client.query<StoredDocument & {request_hash:string;expires_at:Date;created_by:string;state:string}>(`SELECT o.id,o.bucket,o.object_key,o.checksum,o.size,o.state,u.request_hash,u.expires_at,u.created_by
+        FROM document_uploads u JOIN document_objects o ON o.id=u.id WHERE u.organization_id=$1 AND u.idempotency_key=$2`,[active.organization_id,data.idempotency_key]);
+      const attempt=existing.rows[0];
+      if(attempt) {
+        if(attempt.request_hash!==fingerprint || attempt.size!==data.size || attempt.created_by!==active.user_id) throw new ConflictException('This submission key was used for a different upload.');
+        if(attempt.state==='pending' && new Date(attempt.expires_at).getTime()>Date.now()+5000) return {object:attempt,expiresAt:new Date(attempt.expires_at)};
+        await client.query('DELETE FROM document_uploads WHERE id=$1',[attempt.id]);
+      }
+      const id=randomUUID(),expiresAt=new Date(Date.now()+10*60*1000);
+      const object:StoredDocument={id,bucket:this.storage.options.bucket!,object_key:`documents/${active.organization_id}/${customerId}/${bookingId}/${id}`,checksum:data.sha256,size:data.size};
+      await client.query(`INSERT INTO document_objects(id,organization_id,customer_id,booking_id,bucket,object_key,checksum,size)
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8)`,[id,active.organization_id,customerId,bookingId,object.bucket,object.object_key,object.checksum,object.size]);
+      await client.query(`INSERT INTO document_uploads(id,organization_id,customer_id,booking_id,folder_id,created_by,filename,idempotency_key,request_hash,expires_at)
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,[id,active.organization_id,customerId,bookingId,folderId,active.user_id,data.name,data.idempotency_key,fingerprint,expiresAt]);
+      return {object,expiresAt};
+    });
+    if(prepared.document) return {transport:'complete' as const,document:prepared.document};
+    if(!prepared.object || !prepared.expiresAt) return {transport:'proxy' as const};
+    const signed=await this.storage.signUpload(prepared.object,documentMimeType(data.name),Math.max(1,Math.floor((prepared.expiresAt.getTime()-Date.now())/1000)));
+    return {transport:'direct' as const,uploadId:prepared.object.id,...signed,expiresAt:prepared.expiresAt.toISOString()};
+  }
+
+  async completeUpload(member:Membership, customerId:string, bookingId:string, folderId:string, uploadId:string) {
+    uuid(uploadId,'upload');
+    const prepared=await this.db.transaction(async client=>{
+      const {active}=await this.context(client,member,customerId,bookingId,true);
+      const rows=await client.query<StoredDocument & {filename:string;idempotency_key:string;request_hash:string;expires_at:Date;state:string}>(`SELECT o.id,o.bucket,o.object_key,o.checksum,o.size,o.state,u.filename,u.idempotency_key,u.request_hash,u.expires_at
+        FROM document_uploads u JOIN document_objects o ON o.id=u.id WHERE u.id=$1 AND u.organization_id=$2 AND u.customer_id=$3 AND u.booking_id=$4 AND u.folder_id=$5 AND u.created_by=$6`,
+      [uploadId,active.organization_id,customerId,bookingId,folderId,active.user_id]);
+      const upload=rows.rows[0];
+      if(!upload) throw new NotFoundException('This upload was not found. Select the file and retry.');
+      const prior=await client.query<Node>(`SELECT ${nodeColumns} FROM booking_nodes WHERE organization_id=$1 AND idempotency_key=$2`,[active.organization_id,upload.idempotency_key]);
+      if(prior.rows[0]) {
+        if(prior.rows[0].request_hash!==upload.request_hash || prior.rows[0].parent_id!==folderId) throw new ConflictException('This document changed. Refresh the booking before retrying.');
+        return {document:this.serialize(prior.rows[0])};
+      }
+      if(upload.state!=='pending' || new Date(upload.expires_at).getTime()<=Date.now()) throw new ConflictException('This upload expired. Select the file and retry.');
+      const folder=await this.destination(client,active.organization_id,customerId,bookingId,folderId);
+      if(!folder?.service_key) throw new BadRequestException('Select the destination service folder for this booking before uploading.');
+      return {upload};
+    });
+    if(prepared.document) return prepared.document;
+    const upload=prepared.upload!;
+    try {
+      const bytes=await this.storage.get(upload,true);
+      // persistUpload rechecks live membership and the destination after the
+      // provider call. The signed create-only PUT prevents validation/overwrite races.
+      return await this.persistUpload(member,customerId,bookingId,folderId,upload.filename,upload.idempotency_key,bytes,upload);
+    } catch(error) {
+      if(error instanceof BadRequestException) await this.db.query('DELETE FROM document_uploads WHERE id=$1',[upload.id]);
+      throw error;
+    }
+  }
+
+  private async persistUpload(member:Membership, customerId:string, bookingId:string, folderId:string, name:unknown, key:unknown, content:unknown,verifiedObject?:StoredDocument) {
     const filename = parse(nameSchema,name);
     const idempotencyKey = parse(z.uuid(),key);
     if (!Buffer.isBuffer(content) || content.length === 0 || content.length > MAX_DOCUMENT_BYTES) {
@@ -232,6 +317,7 @@ export class BookingsService {
       await this.audit(client,active,'document.uploaded',result.rows[0].id,{customer_id:customerId,booking_id:bookingId,service_key:folder.service_key,name:uniqueName});
       return this.serialize(result.rows[0]);
     };
+    if(verifiedObject) return this.db.transaction(client=>persist(client,verifiedObject));
     if(!this.storage.cloud) return this.db.transaction(client=>persist(client));
     const prepared=await this.db.transaction(async client=>{
       const {active,prior}=await prepare(client);
@@ -251,6 +337,7 @@ export class BookingsService {
   }
 
   async move(member:Membership, customerId:string, bookingId:string, nodeId:string, raw:unknown) {
+    if(typeof raw==='object' && raw!==null && 'name' in raw) return this.rename(member,customerId,bookingId,nodeId,raw);
     const data = parse(moveSchema,raw);
     return this.db.transaction(async client => {
       const {active} = await this.context(client,member,customerId,bookingId,true);
@@ -267,6 +354,41 @@ export class BookingsService {
       await client.query('UPDATE booking_nodes SET service_key=$1,updated_at=now() WHERE id=ANY($2::uuid[])',[destination?.service_key ?? null,descendants.rows.map(item => item.id)]);
       const result = await client.query<Node>(`UPDATE booking_nodes SET parent_id=$1,updated_at=now() WHERE id=$2 RETURNING ${nodeColumns}`,[data.parent_id,nodeId]);
       return this.serialize(result.rows[0]);
+    });
+  }
+
+  private async rename(member:Membership, customerId:string, bookingId:string, nodeId:string, raw:unknown) {
+    const {name}=parse(renameSchema,raw);
+    return this.db.transaction(async client=>{
+      const {active}=await this.context(client,member,customerId,bookingId,true);
+      const node=await this.node(client,active.organization_id,customerId,bookingId,nodeId);
+      if(node.default_folder) throw new BadRequestException('Default service folders cannot be renamed.');
+      if(node.kind==='file' && documentExtension(node.name).toLowerCase()!==documentExtension(name).toLowerCase()) {
+        throw new BadRequestException('Keep the original file extension when renaming this document.');
+      }
+      if(node.name===name) return this.serialize(node);
+      const duplicate=await client.query('SELECT id FROM booking_nodes WHERE booking_id=$1 AND parent_id IS NOT DISTINCT FROM $2::uuid AND lower(name)=lower($3) AND id<>$4',[bookingId,node.parent_id,name,node.id]);
+      if(duplicate.rows[0]) throw new ConflictException('A file or folder with that name already exists here.');
+      const result=await client.query<Node>(`UPDATE booking_nodes SET name=$1,updated_at=now() WHERE id=$2 RETURNING ${nodeColumns}`,[name,node.id]);
+      await this.audit(client,active,'document.renamed',node.id,{customer_id:customerId,booking_id:bookingId,previous_name:node.name,name});
+      return this.serialize(result.rows[0]);
+    });
+  }
+
+  async remove(member:Membership, customerId:string, bookingId:string, nodeId:string) {
+    return this.db.transaction(async client=>{
+      const {active}=await this.context(client,member,customerId,bookingId,true);
+      const node=await this.node(client,active.organization_id,customerId,bookingId,nodeId);
+      if(node.default_folder) throw new BadRequestException('Default service folders cannot be deleted.');
+      const children=await client.query('SELECT id FROM booking_nodes WHERE booking_id=$1 AND parent_id=$2 LIMIT 1',[bookingId,nodeId]);
+      if(children.rows[0]) throw new ConflictException('This folder is not empty. Move or delete its contents first.');
+      const objects=await client.query<StoredDocument>(`SELECT o.id,o.bucket,o.object_key,o.checksum,o.size FROM document_objects o JOIN booking_nodes n ON n.storage_object_id=o.id WHERE n.id=$1`,[node.id]);
+      // Retain only private object coordinates until cloud deletion succeeds.
+      for(const object of objects.rows) await client.query(`INSERT INTO document_purge_outbox(id,bucket,object_key,checksum,size) VALUES($1,$2,$3,$4,$5)`,[object.id,object.bucket,object.object_key,object.checksum,object.size]);
+      await client.query('DELETE FROM booking_nodes WHERE id=$1',[node.id]);
+      for(const object of objects.rows) await client.query('DELETE FROM document_objects WHERE id=$1',[object.id]);
+      await this.audit(client,active,'document.deleted',node.id,{customer_id:customerId,booking_id:bookingId,name:node.name,kind:node.kind});
+      return {deleted:true};
     });
   }
 

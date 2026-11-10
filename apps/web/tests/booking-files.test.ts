@@ -5,6 +5,20 @@ import { BookingFileStore, bookingFilesPath, uploadDocument } from "../src/user-
 import { entriesFromFiles, readDroppedEntries, type FileNode } from "../src/user-files/model";
 import { businessDate, departureInstant } from "../src/pages/booking-model";
 
+// Keep database-fallback coverage while exercising the new upload handshake.
+function proxyUploads(handler: typeof fetch): typeof fetch {
+  return async (input, options = {}) => {
+    if (String(input).endsWith("/uploads")) {
+      assert.equal(options.method, "POST");
+      assert.equal(new Headers(options.headers).get("X-CSRF-Protection"), "1");
+      const body = JSON.parse(options.body as string);
+      assert.match(body.sha256, /^[a-f0-9]{64}$/);
+      return Response.json({ transport: "proxy" });
+    }
+    return handler(input, options);
+  };
+}
+
 const context = {
   organizationId: "11111111-1111-4111-8111-111111111111",
   customerId: "22222222-2222-4222-8222-222222222222",
@@ -21,7 +35,7 @@ test("selected files and dropped PDFs use the booking destination and retry a lo
   const uploads = new Map<string, string>();
   const requests: { url: string; options: RequestInit }[] = [];
   let loseResponse = true;
-  globalThis.fetch = async (input, options = {}) => {
+  globalThis.fetch = proxyUploads(async (input, options = {}) => {
     const url = String(input);
     requests.push({ url, options });
     if (options.method === "POST") {
@@ -42,7 +56,7 @@ test("selected files and dropped PDFs use the booking destination and retry a lo
     }
     assert.equal(url, `/api${bookingFilesPath(context)}/files`);
     return Response.json({ items: nodes });
-  };
+  });
   try {
     const store = new BookingFileStore(context);
     await store.load();
@@ -72,10 +86,10 @@ test("missing customer/booking or a foreign service folder is rejected before an
 test("bad PDFs are rejected before writing a selection and a revoked list clears previously loaded files", async () => {
   const originalFetch = globalThis.fetch;
   let allowed = true;
-  globalThis.fetch = async (_input, options = {}) => {
+  globalThis.fetch = proxyUploads(async (_input, options = {}) => {
     assert.equal(options.method, undefined, "No invalid file may be posted");
     return allowed ? Response.json({ items: [folder] }) : Response.json({ message: "Document access is unavailable." }, { status: 404 });
-  };
+  });
   try {
     const store = new BookingFileStore(context);
     await store.load();
@@ -91,14 +105,14 @@ test("bad PDFs are rejected before writing a selection and a revoked list clears
 test("mixed file selections and folder drops accept all types up to 10 MiB and reject larger or empty files before posting", async () => {
   const originalFetch = globalThis.fetch;
   const uploaded: string[] = [];
-  globalThis.fetch = async (_input, options = {}) => {
+  globalThis.fetch = proxyUploads(async (_input, options = {}) => {
     if (!options.method) return Response.json({ items: [folder] });
     const headers = new Headers(options.headers);
     assert.equal(headers.get("Content-Type"), "application/octet-stream");
     const name = decodeURIComponent(headers.get("X-File-Name")!);
     uploaded.push(name);
     return Response.json({ id: crypto.randomUUID(), parentId: folder.id, kind: "file", name, size: (options.body as File).size, modifiedAt: 0 });
-  };
+  });
   try {
     const store = new BookingFileStore(context);
     await store.load();
@@ -129,11 +143,11 @@ test("refresh failures do not mask upload errors or misreport a committed docume
   const originalFetch = globalThis.fetch;
   let initialLoad = true;
   let saveSucceeds = false;
-  globalThis.fetch = async (_input, options = {}) => {
+  globalThis.fetch = proxyUploads(async (_input, options = {}) => {
     if (options.method === "POST") return saveSucceeds ? Response.json({ id: "saved", parentId: folder.id, kind: "file", name: "Voucher.pdf", size: 14, modifiedAt: 0 }) : Response.json({ message: "Upload was rejected." }, { status: 400 });
     if (initialLoad) { initialLoad = false; return Response.json({ items: [folder] }); }
     return Response.json({ message: "File list is unavailable." }, { status: 503 });
-  };
+  });
   try {
     const entries = entriesFromFiles([new File(["%PDF-1.7\n%%EOF"], "Voucher.pdf")]);
     const store = new BookingFileStore(context);
@@ -174,7 +188,7 @@ test("a partial batch stays bounded and retries only failed files with their ori
   const originalFetch = globalThis.fetch;
   let active = 0, peak = 0, rejectOne = true;
   const requests: { name: string; key: string }[] = [];
-  globalThis.fetch = async (_input, options = {}) => {
+  globalThis.fetch = proxyUploads(async (_input, options = {}) => {
     if (!options.method) return Response.json({ items: [folder] });
     const headers = new Headers(options.headers);
     const name = decodeURIComponent(headers.get("X-File-Name")!);
@@ -185,7 +199,7 @@ test("a partial batch stays bounded and retries only failed files with their ori
     --active;
     if (name === "2.pdf" && rejectOne) return Response.json({ message: "Storage temporarily unavailable." }, { status: 503 });
     return Response.json({ id: key, parentId: folder.id, kind: "file", name, size: 14, modifiedAt: 0 });
-  };
+  });
   try {
     const store = new BookingFileStore(context);
     await store.load();
@@ -207,7 +221,7 @@ test("stopping a batch aborts active requests and preserves queued files for saf
   let allow = false, started = 0;
   let ready!: () => void;
   const firstWave = new Promise<void>((resolve) => { ready = resolve; });
-  globalThis.fetch = async (_input, options = {}) => {
+  globalThis.fetch = proxyUploads(async (_input, options = {}) => {
     if (!options.method) return Response.json({ items: [folder] });
     const headers = new Headers(options.headers);
     ++started;
@@ -216,7 +230,7 @@ test("stopping a batch aborts active requests and preserves queued files for saf
       options.signal!.addEventListener("abort", () => reject(new DOMException("Stopped", "AbortError")), { once: true });
       if (started === 3) ready();
     });
-  };
+  });
   try {
     const store = new BookingFileStore(context);
     await store.load();
@@ -232,6 +246,8 @@ test("stopping a batch aborts active requests and preserves queued files for saf
 
 test("browser upload progress waits for the committed response and preserves the request security headers", async () => {
   const original = globalThis.XMLHttpRequest;
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = proxyUploads(async () => { throw new Error("Unexpected request"); });
   class FakeRequest {
     static latest: FakeRequest;
     upload: { onprogress?: (event: { loaded: number }) => void } = {};
@@ -252,7 +268,7 @@ test("browser upload progress waits for the committed response and preserves the
   try {
     const progress: number[] = [];
     let settled = false;
-    const promise = uploadDocument("/documents", new File(["%PDF-1.7\n%%EOF"], "Test.pdf"), "Test.pdf", "stable-key", new AbortController().signal, (loaded) => progress.push(loaded));
+    const promise = uploadDocument("/documents", new File(["%PDF-1.7\n%%EOF"], "Test.pdf"), "Test.pdf", "stable-key", new AbortController().signal, (loaded) => progress.push(loaded), "a".repeat(64));
     await new Promise(resolve => setImmediate(resolve));
     const request = FakeRequest.latest;
     void promise.then(() => { settled = true; });
@@ -265,5 +281,184 @@ test("browser upload progress waits for the committed response and preserves the
     assert.equal(request.headers.get("idempotency-key"), "stable-key");
     request.onload?.();
     assert.equal((await promise).id, "saved");
-  } finally { globalThis.XMLHttpRequest = original; setTokenProvider(async () => null); }
+  } finally { globalThis.XMLHttpRequest = original; globalThis.fetch = originalFetch; setTokenProvider(async () => null); }
+});
+
+test("admin file mutations keep confirmed responses without a follow-up list request and retain rejected deletions", async () => {
+  const originalFetch = globalThis.fetch;
+  const node: FileNode = { id: "saved", parentId: folder.id, name: "Voucher.pdf", kind: "file", size: 14, modifiedAt: 0 };
+  let rejectDelete = true, reads = 0;
+  globalThis.fetch = async (input, options = {}) => {
+    if (!options.method) { reads++; return Response.json({ items: [folder, node] }); }
+    assert.equal(input, `/api${bookingFilesPath(context)}/files/saved`);
+    assert.equal(new Headers(options.headers).get("X-CSRF-Protection"), "1");
+    if (options.method === "PATCH") return Response.json({ ...node, ...JSON.parse(options.body as string) });
+    assert.equal(options.method, "DELETE");
+    return rejectDelete ? Response.json({ message: "Only administrators can change documents." }, { status: 403 }) : Response.json({ deleted: true });
+  };
+  try {
+    const store = new BookingFileStore(context);
+    await store.load();
+    await store.rename(node.id, "Hotel voucher.pdf");
+    assert.equal(store.getSnapshot().find(item => item.id === node.id)?.name, "Hotel voucher.pdf");
+    assert.equal(reads, 1, "A transient list failure cannot misreport a confirmed rename as failed");
+    await assert.rejects(store.remove(node.id), /Only administrators/);
+    assert.ok(store.getSnapshot().some(item => item.id === node.id));
+    rejectDelete = false;
+    await store.remove(node.id);
+    assert.equal(store.getSnapshot().some(item => item.id === node.id), false);
+    assert.ok(store.getSnapshot().some(item => item.id === folder.id));
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test("moving a folder updates the service of its whole subtree from the confirmed response", async () => {
+  const originalFetch = globalThis.fetch;
+  const custom: FileNode = { ...folder, id: "custom", parentId: folder.id, defaultFolder: false };
+  const nested: FileNode = { ...custom, id: "nested", parentId: custom.id };
+  const document: FileNode = { ...nested, id: "document", parentId: nested.id, kind: "file", name: "Voucher.pdf", size: 14 };
+  let reads = 0;
+  globalThis.fetch = async (_input, options = {}) => {
+    if (!options.method) { reads++; return Response.json({ items: [folder, custom, nested, document] }); }
+    assert.deepEqual(JSON.parse(options.body as string), { parent_id: "new-service" });
+    return Response.json({ ...custom, parentId: "new-service", serviceKey: "transport", modifiedAt: 123 });
+  };
+  try {
+    const store = new BookingFileStore(context);
+    await store.load();
+    await store.move(custom.id, "new-service");
+    assert.equal(reads, 1);
+    for (const id of [custom.id, nested.id, document.id]) assert.equal(store.getSnapshot().find(node => node.id === id)?.serviceKey, "transport");
+    assert.equal(store.getSnapshot().find(node => node.id === folder.id)?.serviceKey, folder.serviceKey);
+    assert.equal(store.getSnapshot().find(node => node.id === document.id)?.parentId, nested.id);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test("confirmed folder creations release their retry key so a renamed or moved folder does not reserve its old name", async () => {
+  const originalFetch = globalThis.fetch;
+  const secondService: FileNode = { ...folder, id: crypto.randomUUID(), name: "Flight Tickets", serviceKey: "flight" };
+  const nodes: FileNode[] = [folder, secondService];
+  const attempts = new Map<string, FileNode>();
+  const keys: string[] = [];
+  globalThis.fetch = async (input, options = {}) => {
+    if (!options.method) return Response.json({ items: nodes });
+    const body = JSON.parse(options.body as string);
+    if (options.method === "POST") {
+      keys.push(body.idempotency_key);
+      let node = attempts.get(body.idempotency_key);
+      if (!node) {
+        node = { id: crypto.randomUUID(), parentId: body.parent_id, name: body.name, kind: "folder", size: 0, modifiedAt: 0, serviceKey: "makkah" };
+        attempts.set(body.idempotency_key, node);
+        nodes.push(node);
+      }
+      return Response.json(node);
+    }
+    const node = nodes.find(item => String(input).endsWith(`/files/${item.id}`))!;
+    assert.ok(node);
+    if ("name" in body) node.name = body.name;
+    if ("parent_id" in body) { node.parentId = body.parent_id; node.serviceKey = "flight"; }
+    return Response.json(node);
+  };
+  try {
+    const store = new BookingFileStore(context);
+    await store.load();
+    await store.createFolder(folder.id, "Original");
+    const first = store.getSnapshot().find(node => node.name === "Original")!;
+    await store.rename(first.id, "Renamed");
+    await store.createFolder(folder.id, "Original");
+    const second = store.getSnapshot().find(node => node.name === "Original")!;
+    assert.ok(second, "Creating the old name after rename must create a new folder.");
+    assert.notEqual(second.id, first.id);
+    await store.move(second.id, secondService.id);
+    await store.createFolder(folder.id, "Original");
+    const third = store.getSnapshot().find(node => node.name === "Original" && node.parentId === folder.id)!;
+    assert.ok(third, "Moving a folder away must leave its former name available.");
+    assert.notEqual(third.id, second.id);
+    assert.equal(new Set(keys).size, 3);
+    assert.equal(store.getSnapshot().filter(node => !node.defaultFolder).length, 3);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test("lost folder creation responses retry the same attempt and repeated tree imports reuse confirmed folders", async () => {
+  const originalFetch = globalThis.fetch;
+  const nodes: FileNode[] = [folder];
+  const attempts = new Map<string, FileNode>();
+  const keys: string[] = [];
+  let loseResponse = true;
+  globalThis.fetch = async (_input, options = {}) => {
+    if (!options.method) return Response.json({ items: nodes });
+    const body = JSON.parse(options.body as string);
+    keys.push(body.idempotency_key);
+    let node = attempts.get(body.idempotency_key);
+    if (!node) {
+      node = { id: crypto.randomUUID(), parentId: body.parent_id, name: body.name, kind: "folder", size: 0, modifiedAt: 0, serviceKey: "makkah" };
+      attempts.set(body.idempotency_key, node);
+      nodes.push(node);
+    }
+    if (loseResponse) { loseResponse = false; throw new Error("Connection interrupted after commit"); }
+    return Response.json(node);
+  };
+  try {
+    const store = new BookingFileStore(context);
+    await store.load();
+    await assert.rejects(store.createFolder(folder.id, "Retry folder"), /Connection interrupted/);
+    await store.createFolder(folder.id, "Retry folder");
+    assert.equal(keys[0], keys[1], "An uncertain creation must safely retry without duplicates.");
+    assert.equal(attempts.size, 1);
+    const entries = [{ kind: "folder" as const, name: "Imported", children: [{ kind: "folder" as const, name: "Nested", children: [] }] }];
+    await store.importEntries(folder.id, entries);
+    const created = keys.length;
+    await store.importEntries(folder.id, entries);
+    assert.equal(keys.length, created, "Re-importing a confirmed tree must reuse its actual folders.");
+    assert.equal(store.getSnapshot().filter(node => !node.defaultFolder).length, 3);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test("document replacements use create-only direct uploads, preserve auth isolation and commit only after verification", async () => {
+  const originalFetch=globalThis.fetch;
+  const old:FileNode={id:'55555555-5555-4555-8555-555555555555',parentId:folder.id,name:'notes.txt',kind:'file',size:3,modifiedAt:0,version:1};
+  const store=new BookingFileStore(context);const requests:string[]=[];let attempts=0;let key='';
+  setTokenProvider(async()=> 'private-session-token');
+  globalThis.fetch=async(input,options={})=>{
+    const url=String(input);requests.push(url);
+    if(url.endsWith('/files'))return Response.json({items:[folder,old]});
+    if(url.endsWith('/uploads')){
+      const body=JSON.parse(options.body as string);assert.equal(body.expected_version,1);assert.equal(body.name,'notes.txt');
+      assert.equal(new Headers(options.headers).get('Authorization'),'Bearer private-session-token');
+      if(key)assert.equal(body.idempotency_key,key);else key=body.idempotency_key;
+      return Response.json({transport:'direct',uploadId:'new-object',url:'https://storage.example.test/object',headers:{'Content-Type':'text/plain','If-None-Match':'*'}});
+    }
+    if(url.startsWith('https://storage.')) {
+      assert.equal(options.credentials,'omit');assert.equal(new Headers(options.headers).has('Authorization'),false);assert.equal(new Headers(options.headers).has('X-CSRF-Protection'),false);
+      assert.equal(new Headers(options.headers).get('If-None-Match'),'*');return new Response(null,{status:++attempts===1?200:412});
+    }
+    assert.ok(url.endsWith('/uploads/new-object/complete'));assert.equal(store.getSnapshot().find(node=>node.id===old.id)?.version,1);
+    if(attempts===1)throw Error('Final response interrupted');
+    return Response.json({...old,size:7,version:2});
+  };
+  try {
+    await store.load();const file=new File(['changed'],'notes.txt');const messages:string[]=[];
+    await assert.rejects(store.replace(old,file,message=>messages.push(message)),/interrupted/);assert.equal(store.getSnapshot().find(node=>node.id===old.id)?.version,1);
+    await store.replace(old,file,message=>messages.push(message));assert.equal(store.getSnapshot().find(node=>node.id===old.id)?.version,2);
+    assert.ok(messages.includes('Verifying & saving…'));assert.equal(requests.filter(url=>url.startsWith('https://storage.')).length,2);
+  }finally{globalThis.fetch=originalFetch;setTokenProvider(async()=>null);}
+});
+
+test("document proxy edits carry optimistic version guards and rejected saves preserve the local snapshot",async()=>{
+  const originalFetch=globalThis.fetch;const old:FileNode={id:'text',parentId:folder.id,name:'guide.md',kind:'file',size:3,modifiedAt:0,version:4};const store=new BookingFileStore(context);let fail=true;
+  globalThis.fetch=async(input,options={})=>{
+    const url=String(input);if(url.endsWith('/files'))return Response.json({items:[folder,old]});
+    if(url.endsWith('/uploads')){assert.equal(JSON.parse(options.body as string).expected_version,4);return Response.json({transport:'proxy'});}
+    assert.ok(url.endsWith('/content'));assert.equal(new Headers(options.headers).get('X-Document-Version'),'4');assert.equal(options.credentials,'include');
+    return fail?Response.json({message:'This file has a newer version.'},{status:409}):Response.json({...old,version:5,size:7});
+  };
+  try{await store.load();const file=new File(['changed'],'guide.md');await assert.rejects(store.replace(old,file),/newer version/);assert.equal(store.getSnapshot().at(-1)?.version,4);fail=false;await store.replace(old,file);assert.equal(store.getSnapshot().at(-1)?.version,5);}finally{globalThis.fetch=originalFetch;}
+});
+
+test("version restoration submits the selected history and current version before publishing",async()=>{
+  const originalFetch=globalThis.fetch;const old:FileNode={id:'file',parentId:folder.id,name:'guide.md',kind:'file',size:3,modifiedAt:0,version:4};const store=new BookingFileStore(context);
+  globalThis.fetch=async(input,options={})=>{
+    if(String(input).endsWith('/files'))return Response.json({items:[folder,old]});
+    assert.ok(String(input).endsWith('/documents/file/versions/2/restore'));assert.deepEqual(JSON.parse(options.body as string),{expected_version:4});return Response.json({...old,version:5});
+  };
+  try{await store.load();await store.restore('file',2,4);assert.equal(store.getSnapshot().at(-1)?.version,5);}finally{globalThis.fetch=originalFetch;}
 });

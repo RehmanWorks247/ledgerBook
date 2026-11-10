@@ -1,7 +1,9 @@
+import { setResourceCacheScope } from "./resource-cache";
+import { loadWorkspace, loadDashboard, loadCustomers, loadUsers, loadUserRecord, loadAccess, loadCompanies, loadSettings, loadPaymentReviews } from "./route-loaders";
 import { captureInvitationLink } from "./invitation";
 import { subscribeToNavigation } from "./history";
-import { useCallback, useContext, useEffect, useRef, useState } from "react";
-import { Link, Navigate, Outlet, Route, Routes } from "./router";
+import { lazy, Suspense, useCallback, useContext, useEffect, useRef, useState } from "react";
+import { Link, Navigate, Outlet, Route, Routes, useParams } from "./router";
 import {
   api,
   ApiError,
@@ -10,24 +12,29 @@ import {
   type Session,
 } from "./api";
 import { AuthContext } from "./state";
-import { Empty, ErrorNotice, Loading } from "./components";
+import { Brand, Empty, ErrorNotice, Loading } from "./components";
 import { ThemeToggle } from "./theme";
-import { AuthPage, InvitationPage } from "./pages/Authentication";
-import { OrganizationPicker, Overview, Shell } from "./pages/Workspace";
-import { UserDirectory } from "./pages/Users";
-import { UserRecord } from "./pages/UserRecord";
-import { Settings } from "./pages/Settings";
-import { CustomerLedger, PaymentPicker } from "./pages/Dashboard";
-import { BookingEditor, BookingPage } from "./pages/Bookings";
-import { PaymentReviewPage } from "./payments/BookingPayments";
+const PaymentReviewPage = lazy(() => loadPaymentReviews().then(module => ({ default: module.PaymentReviewPage })));
 import { clearUserFileStores } from "./user-files/model";
-import {
-  CustomerDetail,
-  CustomerEditor,
-  CustomerList,
-} from "./pages/Customers";
 import { useAuth, useClerk, useUser } from "@clerk/react";
-import { AccountPage, UsersPage } from "./pages/Access";
+const AuthPage = lazy(() => import("./pages/Authentication").then(module => ({ default: module.AuthPage })));
+const InvitationPage = lazy(() => import("./pages/Authentication").then(module => ({ default: module.InvitationPage })));
+const OrganizationPicker = lazy(() => loadWorkspace().then(module => ({ default: module.OrganizationPicker })));
+const Overview = lazy(() => loadWorkspace().then(module => ({ default: module.Overview })));
+const Shell = lazy(() => loadWorkspace().then(module => ({ default: module.Shell })));
+const UserDirectory = lazy(() => loadUsers().then(module => ({ default: module.UserDirectory })));
+const UserRecord = lazy(() => loadUserRecord().then(module => ({ default: module.UserRecord })));
+const Settings = lazy(() => loadSettings().then(module => ({ default: module.Settings })));
+const CustomerLedger = lazy(() => loadDashboard().then(module => ({ default: module.CustomerLedger })));
+const PaymentPicker = lazy(() => loadDashboard().then(module => ({ default: module.PaymentPicker })));
+const BookingEditor = lazy(() => import("./pages/Bookings").then(module => ({ default: module.BookingEditor })));
+const BookingPage = lazy(() => import("./pages/Bookings").then(module => ({ default: module.BookingPage })));
+const BookingInvoicePage = lazy(() => import("./pages/Bookings").then(module => ({ default: module.BookingInvoicePage })));
+const UsersPage = lazy(() => loadAccess().then(module => ({ default: module.UsersPage })));
+const CustomerDetail = lazy(() => loadCustomers().then(module => ({ default: module.CustomerDetail })));
+const CustomerEditor = lazy(() => loadCustomers().then(module => ({ default: module.CustomerEditor })));
+const CustomerList = lazy(() => loadCustomers().then(module => ({ default: module.CustomerList })));
+const CompaniesPage = lazy(() => loadCompanies().then(module => ({ default: module.CompaniesPage })));
 export function App() {
   const clerk = useClerk();
   const { isLoaded, isSignedIn, sessionId } = useAuth();
@@ -57,24 +64,40 @@ export function App() {
   }, []);
   const generation = useRef(0);
   const viewerId = useRef<string | undefined>(undefined);
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (options?: { preserveSession?: boolean }) => {
     const current = ++generation.current;
     const requestedSessionId = clerk.session?.id || null;
     const stillCurrent = () =>
       current === generation.current &&
       requestedSessionId === (clerk.session?.id || null);
+    const interruptedRefresh = () => new Error("Account access refresh was interrupted. Refresh to continue.");
     setError("");
     try {
       const result = await api<Session>("/auth/session");
+      if (!stillCurrent() && options?.preserveSession) throw interruptedRefresh();
       if (stillCurrent()) {
         if (viewerId.current !== result.user.id) clearUserFileStores();
+        setResourceCacheScope(JSON.stringify([requestedSessionId, result.user.id,
+          result.memberships.map(member => [member.id, member.organization_id, member.role, member.customer_id]).sort(),
+        ]));
         viewerId.current = result.user.id;
         setSession(result);
         setSessionForId(requestedSessionId);
       }
     } catch (cause) {
-      if (!stillCurrent()) return;
+      if (!stillCurrent()) {
+        // Mutation callers navigate only after their refreshed membership has
+        // actually been installed. A focus refresh can supersede this request;
+        // keep the completed mutation's explicit refresh/retry state instead.
+        if (options?.preserveSession) throw interruptedRefresh();
+        return;
+      }
+      // A successful workspace mutation must not disappear behind a sign-in
+      // screen merely because its subsequent session refresh lost connectivity.
+      if (options?.preserveSession && viewerId.current &&
+          !(cause instanceof ApiError && (cause.status === 401 || cause.status === 403))) throw cause;
       clearUserFileStores();
+      setResourceCacheScope(null);
       viewerId.current = undefined;
       setSession(null);
       setSessionForId(requestedSessionId);
@@ -93,6 +116,7 @@ export function App() {
     if (!isSignedIn) {
       generation.current++;
       clearUserFileStores();
+      setResourceCacheScope(null);
       viewerId.current = undefined;
       setSession(null);
       setSessionForId(null);
@@ -115,7 +139,7 @@ export function App() {
   useEffect(() => {
     if (!isSignedIn) return;
     const reload = () => {
-      if (document.visibilityState === "visible") void refresh();
+      if (document.visibilityState === "visible") void refresh({ preserveSession: true }).catch(() => undefined);
     };
     window.addEventListener("focus", reload);
     document.addEventListener("visibilitychange", reload);
@@ -138,6 +162,7 @@ export function App() {
         refresh,
       }}
     >
+      <Suspense fallback={<Loading full />}>
       <Routes>
         <Route path="/login" element={<AuthPage mode="login" />} />
         <Route path="/forgot-password" element={<AuthPage mode="forgot" />} />
@@ -145,15 +170,19 @@ export function App() {
         <Route path="/invite" element={<InvitationPage key={invitationVersion} />} />
         <Route element={<Protected />}>
           <Route path="/" element={<OrganizationPicker />} />
-          <Route path="/account" element={<AccountPage />} />
+          <Route path="/workspaces" element={<OrganizationPicker managed />} />
+          <Route path="/account" element={<AccountRedirect />} />
+          <Route path="/settings" element={<Settings standalone />} />
           <Route path="/o/:orgId" element={<Shell />}>
             <Route index element={<Overview />} />
             <Route path="access" element={<UsersPage />} />
-            <Route path="account" element={<AccountPage embedded />} />
+            <Route path="account" element={<AccountRedirect />} />
             <Route path="settings" element={<Settings />} />
+            <Route path="companies" element={<CompaniesPage />} />
             <Route path="users" element={<UserDirectory />} />
             <Route path="users/:customerId" element={<UserRecord />} />
             <Route path="users/:customerId/bookings/:bookingId" element={<BookingPage />} />
+            <Route path="users/:customerId/bookings/:bookingId/invoices" element={<BookingInvoicePage />} />
             <Route path="bookings/new" element={<BookingEditor />} />
             <Route path="customers/:customerId/bookings/new" element={<BookingEditor />} />
             <Route path="customer-ledger" element={<CustomerLedger />} />
@@ -173,20 +202,27 @@ export function App() {
           path="*"
           element={
             <main className="standalone">
-              <ThemeToggle />
+              <div className="standalone-brand"><Brand /><ThemeToggle /></div>
               <Empty
                 title="Page not found"
                 detail="This page may have moved or the address may be incorrect."
               />
               <Link className="button" to="/">
-                Back to LedgerBook
+                Back to Umrah Packages UK
               </Link>
             </main>
           }
         />
       </Routes>
+      </Suspense>
     </AuthContext.Provider>
   );
+}
+
+function AccountRedirect() {
+  const { orgId } = useParams();
+  const settingsPath = orgId ? `/o/${encodeURIComponent(orgId)}/settings` : "/settings";
+  return <Navigate to={`${settingsPath}${window.location.search}${window.location.hash}`} replace />;
 }
 
 function Protected() {
@@ -197,7 +233,8 @@ function Protected() {
     <Loading full />
   ) : error && isSignedIn ? (
     <main className="standalone">
-      <h1>Unable to open your workspace</h1>
+      <Brand />
+      <h1>Unable to open your account</h1>
       <ErrorNotice message={error} />
       <p>Contact your business if your account has been disabled.</p>
       <div className="form-actions">

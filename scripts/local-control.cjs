@@ -70,6 +70,7 @@ async function main(){
       console.log(`LedgerBook is running at ${current.url}`);
       console.log(current.authProvider==='clerk'?'Sign in with your provisioned Clerk administrator.':'Administrator login details: .local/admin-login.txt');
       if(current.publicUrl&&current.publicUrl!==current.url) console.log(`Browser and invitation origin: ${current.publicUrl}`);
+      console.log(current.email==='resend'?'Notification email delivery: Resend (live email enabled).':'Notification email delivery: local files.');
       return;
     }
     if(current?.pid===child.pid&&current.state==='failed') throw new Error('Startup failed. Check .local/local.log.');

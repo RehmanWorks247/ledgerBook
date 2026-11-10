@@ -1,0 +1,420 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "LedgerBook booking invoices",
+    "version": "1.0.0",
+    "description": "Immutable per-booking financial snapshots and stored PDF downloads. Existing booking/payment mutation endpoints create versions transactionally."
+  },
+  "servers": [
+    {
+      "url": "/api"
+    }
+  ],
+  "security": [
+    {
+      "clerkBearer": []
+    },
+    {
+      "localSession": []
+    },
+    {
+      "productionSession": []
+    }
+  ],
+  "paths": {
+    "/organizations/{orgId}/customers/{customerId}/bookings/{bookingId}/invoices": {
+      "parameters": [
+        {
+          "name": "orgId",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        {
+          "name": "customerId",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        {
+          "name": "bookingId",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "listBookingInvoices",
+        "summary": "List saved invoice versions newest first",
+        "description": "Creates one present-day legacy snapshot only if the booking has no invoices. Includes cancelled booking history. Money contains only approved, non-reversed payments linked to this booking.",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 25
+            }
+          },
+          {
+            "name": "before_version",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 2147483647
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Version history; never returns PDF bytes or private snapshot JSON",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "invoices",
+                    "has_more",
+                    "next_before_version"
+                  ],
+                  "properties": {
+                    "invoices": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Invoice"
+                      }
+                    },
+                    "has_more": {
+                      "type": "boolean"
+                    },
+                    "next_before_version": {
+                      "type": [
+                        "integer",
+                        "null"
+                      ],
+                      "minimum": 1
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid path or pagination",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "message": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sign-in required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "message": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "message": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource unavailable to this membership",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "message": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/organizations/{orgId}/customers/{customerId}/bookings/{bookingId}/invoices/{invoiceId}/pdf": {
+      "parameters": [
+        {
+          "name": "orgId",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        {
+          "name": "customerId",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        {
+          "name": "bookingId",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        {
+          "name": "invoiceId",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "downloadBookingInvoice",
+        "summary": "Download the exact saved PDF for one invoice version",
+        "responses": {
+          "200": {
+            "description": "Private PDF attachment",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "private, no-store"
+                }
+              },
+              "Content-Disposition": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Content-Type-Options": {
+                "schema": {
+                  "type": "string",
+                  "const": "nosniff"
+                }
+              }
+            },
+            "content": {
+              "application/pdf": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid path or pagination",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "message": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sign-in required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "message": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Access forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "message": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource unavailable to this membership",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "message": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Download concurrency limit reached; retry after Retry-After"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "clerkBearer": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "description": "Required when AUTH_PROVIDER=clerk."
+      },
+      "localSession": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "ledgerbook_session",
+        "description": "Local-auth nonproduction session cookie."
+      },
+      "productionSession": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "__Host-ledgerbook",
+        "description": "Local-auth production session cookie."
+      }
+    },
+    "schemas": {
+      "Invoice": {
+        "type": "object",
+        "required": [
+          "id",
+          "invoice_number",
+          "version",
+          "reason",
+          "issued_at",
+          "currency",
+          "status",
+          "filename",
+          "total_minor",
+          "paid_minor",
+          "balance_minor"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "invoice_number": {
+            "type": "string"
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "booking_created",
+              "payment_approved",
+              "payment_reversed",
+              "booking_updated",
+              "booking_cancelled",
+              "charge_reversed",
+              "legacy_snapshot"
+            ]
+          },
+          "issued_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "currency": {
+            "type": "string",
+            "enum": [
+              "GBP"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "unpaid",
+              "partially_paid",
+              "paid",
+              "overpaid",
+              "cancelled"
+            ]
+          },
+          "filename": {
+            "type": "string"
+          },
+          "total_minor": {
+            "type": "string",
+            "pattern": "^-?[0-9]+$",
+            "description": "Integer minor units; GBP pennies. Negative balance denotes credit."
+          },
+          "paid_minor": {
+            "type": "string",
+            "pattern": "^-?[0-9]+$",
+            "description": "Integer minor units; GBP pennies. Negative balance denotes credit."
+          },
+          "balance_minor": {
+            "type": "string",
+            "pattern": "^-?[0-9]+$",
+            "description": "Integer minor units; GBP pennies. Negative balance denotes credit."
+          }
+        }
+      }
+    }
+  }
+}

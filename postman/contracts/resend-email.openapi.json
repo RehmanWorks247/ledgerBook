@@ -1,6 +1,100 @@
 {
   "openapi": "3.0.3",
-  "info": {"title":"Resend email contract subset", "version":"1.0.0", "description":"POST /emails subset used by LedgerBook. Source: https://resend.com/docs/api-reference/emails/send-email and https://resend.com/docs/dashboard/emails/idempotency-keys. No live provider credentials or messages."},
-  "servers":[{"url":"https://api.resend.com"}],
-  "paths":{"/emails":{"post":{"summary":"Send transactional email", "parameters":[{"name":"Idempotency-Key","in":"header","schema":{"type":"string"}}],"requestBody":{"required":true,"content":{"application/json":{"schema":{"type":"object","required":["from","to","subject","text"],"properties":{"from":{"type":"string"},"to":{"type":"array","items":{"type":"string"}},"subject":{"type":"string"},"text":{"type":"string"}}}}}},"responses":{"200":{"description":"Accepted","content":{"application/json":{"example":{"id":"mock-email-id"}}}},"429":{"description":"Rate limited"},"500":{"description":"Provider failure"}}}}}
+  "info": {
+    "title": "Resend email contract subset",
+    "version": "1.1.0",
+    "description": "POST /emails subset used by LedgerBook. Source: https://resend.com/docs/api-reference/emails/send-email and https://resend.com/docs/dashboard/emails/idempotency-keys. No live provider credentials or messages."
+  },
+  "servers": [
+    {
+      "url": "https://api.resend.com"
+    }
+  ],
+  "paths": {
+    "/emails": {
+      "post": {
+        "summary": "Send transactional email",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "from",
+                  "to",
+                  "subject",
+                  "text"
+                ],
+                "properties": {
+                  "from": {
+                    "type": "string"
+                  },
+                  "to": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "subject": {
+                    "type": "string"
+                  },
+                  "text": {
+                    "type": "string"
+                  },
+                  "attachments": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "filename",
+                        "content"
+                      ],
+                      "properties": {
+                        "filename": {
+                          "type": "string"
+                        },
+                        "content": {
+                          "type": "string",
+                          "format": "byte",
+                          "description": "Base64-encoded local attachment bytes; no public file URL required."
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Accepted",
+            "content": {
+              "application/json": {
+                "example": {
+                  "id": "mock-email-id"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited"
+          },
+          "500": {
+            "description": "Provider failure"
+          }
+        }
+      }
+    }
+  }
 }

@@ -31,3 +31,12 @@ it('allows explicit local development file delivery without weakening production
   assert.notEqual(production.status,0);
   assert.match(production.stderr,/Production requires AUTH_PROVIDER=clerk/);
 });
+
+it('rejects malformed or undersized delivery webhook signing keys at startup',()=>{
+  for(const secret of ['placeholder','whsec_YQ==']) {
+    const result=loadConfig({RESEND_WEBHOOK_SECRET:secret});
+    assert.notEqual(result.status,0);assert.match(result.stderr,/RESEND_WEBHOOK_SECRET is invalid/);
+  }
+  const result=loadConfig({RESEND_WEBHOOK_SECRET:`whsec_${Buffer.alloc(32,7).toString('base64')}`});
+  assert.equal(result.status,0,result.stderr);
+});

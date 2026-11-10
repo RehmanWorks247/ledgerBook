@@ -1,4 +1,10 @@
 .booking-list { margin-bottom: 24px; }
+.booking-editor { margin-bottom: 24px; }
+.booking-actions { display: flex; flex-wrap: wrap; gap: 10px; }
+.booking-issuance { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
+.booking-notice { padding: 12px 16px; color: var(--success); background: var(--success-soft); border-radius: var(--radius); }
+.booking-cancellation { border-color: var(--danger); }
+.booking-help, .booking-cancellation p { color: var(--muted); font-size: 13px; line-height: 1.6; margin: 0; }
 .booking-message, .booking-editor, .booking-customer { padding: 24px; }
 .booking-customer { margin-bottom: 24px; }
 .booking-summary { display: grid; grid-template-columns: minmax(150px, .6fr) 1.4fr; gap: 24px; padding: 22px 24px; margin-bottom: 24px; }
@@ -21,6 +27,26 @@
 }
 
 .booking-customer { padding: 0; max-width: 600px; margin-bottom: 20px; }
+
+.booking-invoices { margin-bottom: 24px; overflow: hidden; }
+.booking-invoices .panel-heading { gap: 18px; }
+.booking-invoices .panel-heading h2 { margin-bottom: 4px; }
+.booking-invoices .panel-heading p { margin: 0; max-width: 660px; color: var(--muted); font-size: 13px; line-height: 1.5; }
+.booking-invoices .panel-heading > button { flex-shrink: 0; }
+.invoice-message { padding: 0 24px 20px; margin: 0; font-size: 13px; }
+.invoice-message .notice { margin-bottom: 12px; }
+.invoice-table { min-width: 910px; }
+.invoice-table td:first-child { overflow-wrap: anywhere; }
+.invoice-table td.amount { white-space: nowrap; }
+.invoice-table-scroll { position: relative; }
+.invoice-table-scroll:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.invoice-download { white-space: nowrap; }
+.invoice-pagination { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; padding: 18px 24px; border-top: 1px solid var(--line); }
+.invoice-pagination > span { color: var(--muted); font-size: 12px; }
+@media (max-width: 620px) {
+  .invoice-message { padding: 0 16px 16px; }
+  .invoice-pagination { padding: 16px; }
+}
 
 .booking-payments { margin-bottom: 24px; overflow: hidden; }
 .booking-payments .panel-heading p { margin: 0; color: var(--muted); font-size: 13px; }

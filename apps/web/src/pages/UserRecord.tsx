@@ -9,8 +9,7 @@ import {
 } from "lucide-react";
 import { dateLabel, useResource, type Customer } from "../api";
 import { useLedgerMoney as useMoney } from '../currency';
-import { amountTone } from "../money-tone";
-import { Badge, ErrorNotice, Loading } from "../components";
+import { Badge, ErrorNotice, Loading, PageHeading } from "../components";
 import { Link, Navigate, useParams } from "../router";
 import { AuthContext, useOrganization } from "../state";
 import { UserFileExplorer } from "../user-files/UserFileExplorer";
@@ -41,7 +40,10 @@ export function UserRecord() {
       <Link className="record-back" to={admin ? `${root}/users` : root}>
         <ArrowLeft size={15} /> {admin ? "All user records" : "My account"}
       </Link>
-      {admin && customerId === sampleUser.id ? (
+      {!admin ? <>
+        <PageHeading title="My bookings" description="Choose a booking to see your trip details, documents, invoices and payment receipts." />
+        <CustomerBookings customerId={customerId} />
+      </> : customerId === sampleUser.id ? (
         <RecordContents
           customer={sampleUser}
           viewerId={session.user.id}
@@ -129,8 +131,8 @@ function RecordContents({
             </div>
           </div>
           <div className="record-balance">
-            <span className="record-kicker">Current balance</span>
-            <strong className={amountTone(customer.balance_minor)}>
+            <span className="record-kicker">Outstanding balance</span>
+            <strong className="money-charge">
               {money(
                 customer.balance_minor,
                 member.currency,

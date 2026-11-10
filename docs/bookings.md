@@ -11,6 +11,8 @@ customers can read only bookings belonging to their own customer account.
 | `GET /` | Lists this customer's bookings as `{items, time_zone}`. |
 | `POST /` | Creates a booking, its GBP ledger charge, instalments and six folders atomically. |
 | `GET /{bookingId}` | Returns a booking with its instalments and business `time_zone`. |
+| `PATCH /{bookingId}` | Administrator edits reference, departure, services, total and instalments with optimistic concurrency and an auditable reason. |
+| `DELETE /{bookingId}` | Administrator cancels a booking, reverses its current charge and revokes document access while retaining financial history. |
 | `GET /{bookingId}/files` | Returns `{items}` containing flat file/folder nodes. |
 | `POST /{bookingId}/folders` | Creates a folder with `{parent_id, name, idempotency_key}`. |
 | `PATCH /{bookingId}/files/{nodeId}` | Moves an item with `{parent_id}`. Cycles, cross-booking moves and moving documents outside a service folder are rejected. |
@@ -95,3 +97,47 @@ charges. The HTTP test compares the bytes returned by inline and attachment rout
 The default suite uses PGlite; set `TEST_DATABASE_URL` for production PostgreSQL
 connection/locking verification. Native desktop/mobile PDF viewer behaviour still
 requires a browser check on the deployment origin.
+
+## Editing and cancellation
+
+The booking page exposes **Edit booking**, **Cancel booking** and per-service
+**Mark issued / Mark not issued** controls to administrators. Customers see the
+current booking and issuance status without management controls. Editing uses the
+business time zone and exact penny amounts. Both lifecycle mutations require
+`expected_version` from the latest booking response, an `idempotency_key` UUID,
+a nonblank `reason` (at most 1,000 characters), and a valid `effective_date`.
+
+`PATCH /{bookingId}` accepts the same editable fields as creation: `reference`,
+`departure_at`, `required_services`, `amount`, and a nonempty `instalments` array.
+Amounts must be positive GBP decimal strings, with at most 100 instalments that
+sum exactly to the total. Changing the total atomically reverses the existing
+active charge and posts a replacement; the correction date cannot precede the
+current charge. The date is used only when a financial correction is needed.
+Previously posted entries and approved payments remain unchanged. Metadata-only
+changes do not post new financial entries. Before/after booking and schedule
+snapshots, reason and actor are retained in the audit. The response includes the
+new booking `version`, current charge `effective_date`, and updated schedule.
+
+`DELETE /{bookingId}` additionally requires `confirmation` equal to the current
+booking reference exactly. It hides the booking from active lists, dashboard
+calculations and document access; cancels pending file uploads; clears issuance;
+and rejects pending payment submissions with an audit reason. It reverses the
+current charge once, and preserves approved payments as customer credit. A charge
+already reversed manually is not reversed a second time. Receipts, documents,
+booking snapshots and the ledger remain stored for audit. Authorized payment
+history/receipt reads remain available, while submissions and reviews are blocked.
+The response is `{id,cancelled:true,version,reversal_entry_id,retained_payments_minor}`.
+Cancellation does not perform a refund or remove the entire customer account.
+
+Concurrent changes using the same old version return HTTP 409 without partial
+writes. A lost-response retry with the same key and body returns the exact original
+committed response, even after another edit; changing a reused key's input returns
+409. Stale forms must be refreshed before resubmission. Cross-customer and
+cross-organization paths return 404, and customer writes return 403. The existing
+CSRF and active administrator checks apply to both methods.
+
+Migration `013_booking_management.sql` introduces lifecycle version/cancellation
+fields, an operation replay journal, and a database guard preventing new or
+approved payments against cancelled bookings. `tests/booking-management.test.ts`
+verifies real HTTP boundaries, concurrent edits, transactional audit rollback,
+immutable ledger correction, exact retries, cancellation, and retained receipts.

@@ -45,6 +45,23 @@ transaction descriptions and references, type, currency, and effective dates in
 same entry fields and the selected account's identity; CSV exports use the same
 filters. Searching never changes the full running or current account balance.
 
+Customers land on My Account at `/o/:orgId`. Their name and visible account
+details come first, followed by three cards: Total amount, Amount paid, and
+Outstanding balance. My Bookings opens their booking list, where they can find
+documents, invoices, and submit payment receipts. The account statement remains
+available from My Account.
+
+`GET /api/organizations/:orgId/customers/:id/statement` also returns lifetime
+`total_amount_minor` and `total_paid_minor` as integer minor-unit strings.
+Total amount includes all booking charges, manual charges, and opening balances,
+net of their reversals. Amount paid includes recorded/approved payments, net of
+payment reversals; pending and rejected submissions are excluded. Cancelled and
+edited booking charges are offset by their posted reversals. These totals use
+the same authorized account and database snapshot as `current_balance_minor`,
+and are independent of search, date filters, and pagination. Total amount minus
+amount paid equals the current balance. Negative balances represent customer
+credit, and the overview explains that no payment is due.
+
 `GET /api/organizations/:orgId/customers` supports `search`,
 `status=all|active|archived`, `page`, `page_size`, and optional `start`/`end`
 inclusive date-added bounds. Search matches name, customer code, UUID, email,

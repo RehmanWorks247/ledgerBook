@@ -1,7 +1,7 @@
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { ImagePlus, RefreshCw, Upload, X } from "lucide-react";
 import { errorMessage, useResource } from "../api";
-import { Empty, ErrorNotice, Loading, Pagination } from "../components";
+import { Empty, ErrorNotice, TableSkeleton, Pagination } from "../components";
 import { Link } from "../router";
 import { useOrganization } from "../state";
 import { businessDate } from "../pages/booking-model";
@@ -71,17 +71,17 @@ export function ReceiptUploadForm({ organizationId, customerId, bookingId, timeZ
   </form>;
 }
 
-export function BookingPayments({ customerId, bookingId }: { customerId: string; bookingId: string }) {
+export function BookingPayments({ customerId, bookingId, onPaymentChanged }: { customerId: string; bookingId: string; onPaymentChanged?: () => void }) {
   const member = useOrganization();
   const resource = useResource<PaymentsResponse>(paymentsPath({ organizationId: member.organization_id, customerId, bookingId }));
   const [notice, setNotice] = useState("");
   const admin = member.role === "admin";
-  function reviewed(payment: Payment) { setNotice(payment.status === "approved" ? "Payment approved and recorded. We’ll email the customer their confirmation." : "Payment rejected. The review note is visible to the customer."); resource.refresh(); }
+  function reviewed(payment: Payment) { setNotice(payment.status === "approved" ? "Payment approved and recorded. We’ll email the customer their confirmation." : "Payment rejected. The review note is visible to the customer."); resource.refresh(); if (payment.status === "approved") onPaymentChanged?.(); }
   return <section className="panel booking-payments" aria-labelledby="booking-payments-heading">
     <div className="panel-heading"><div><h2 id="booking-payments-heading">Payments & receipts</h2><p>Track submitted payments and their approval.</p></div><div className="payment-actions">{admin && <Link className="text-link" to={`/o/${member.organization_id}/payment-reviews`}>All payment reviews</Link>}<button type="button" className="icon-button" onClick={resource.refresh} disabled={resource.loading} aria-label="Refresh payment submissions"><RefreshCw size={16} /></button></div></div>
     {notice && <div className="notice success payment-notice" role="status">{notice}</div>}
     {resource.error ? <div className="booking-message"><ErrorNotice message={resource.error} /><button className="button secondary" onClick={resource.refresh}>Try again</button></div>
-      : !resource.data ? <Loading /> : <>
+      : !resource.data ? <TableSkeleton columns={["Payment date", "Amount", "Status", "Receipts", "Actions"]} label="Loading payments" /> : <>
         {!admin && <ReceiptUploadForm organizationId={member.organization_id} customerId={customerId} bookingId={bookingId} timeZone={resource.data.time_zone} onSubmitted={() => { setNotice("Payment submitted for review. We’ll email you when it is approved."); resource.refresh(); }} />}
         {!resource.data.items.length ? <Empty title="No payment receipts yet" detail={admin ? "Customer submissions for this booking will appear here for your review." : "Upload your receipt after making a payment. Your balance updates after approval."} />
           : <BookingPaymentHistory payments={resource.data.items} organizationId={member.organization_id} timeZone={resource.data.time_zone} canReview={admin} onReviewed={reviewed} />}

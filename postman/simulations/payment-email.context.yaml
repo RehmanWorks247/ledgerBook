@@ -1,5 +1,5 @@
 purpose:
-  stands_in_for: Resend POST /emails acceptance, transient failure, and idempotent replay for payment notifications.
+  stands_in_for: Resend POST /emails acceptance, transient failure, and idempotent replay for booking invoice attachments, payment notifications and automatic payment reminders.
   unblocks: Real HTTP verification of LedgerBook's durable notification worker without sending customer email.
 assumptions:
   - id: same-email-key-within-24-hours
@@ -13,9 +13,9 @@ assumptions:
     status: supported
     claim: LedgerBook retains a notification after a simulated HTTP 500, retries with the same request key, and records acceptance without another modeled email on replay.
     reason: The real NotificationsService fetch adapter and PaymentEmailOutbox ran against the local Postman simulation using an isolated SQL database.
-    verification: On 2026-11-06 tests/payment-provider.simulation.ts passed. Simulation log showed POST /emails 500, 200, 200; state showed three calls and one accepted message. This tests caller behavior against the stand-in, not actual inbox delivery. Repeated successfully on 2026-11-06 after the Clerk/travel merge; observed the same request sequence and asserted modeled state (fingerprint clerk-travel-merge).
+    verification: On 2026-11-06 tests/payment-provider.simulation.ts passed. Simulation log showed POST /emails 500, 200, 200; state showed three calls and one accepted message. This tests caller behavior against the stand-in, not actual inbox delivery. Repeated successfully on 2026-11-06 after the Clerk/travel merge; observed the same request sequence and asserted modeled state (fingerprint clerk-travel-merge). Repeated successfully on 2026-11-09 with the isolated test environment and local Postman server; the real fetch adapter, durable worker and SQL state again produced 500, 200, 200 with three calls and one accepted modeled email (fingerprint launch-audit). Repeated on 2026-11-10 using tests/test-environment.cjs, a fresh PGlite database, synthetic sender/credentials and the existing loopback Postman mock at port 4017 with cloud history disabled; the script passed and the request log again showed 500, 200, 200 with three calls and one modeled acceptance (fingerprint notification-audit-2026-11-10). No real provider was contacted by this simulation.
     source: tests/payment-provider.simulation.ts; postman/mocks/resend-email/default.js; apps/api/src/payments/email-outbox.service.ts
-    updated_at: "2026-11-06"
+    updated_at: "2026-11-10"
   - id: actual-inbox-delivery
     status: unknown
     claim: The production sender is configured and approval emails arrive in customer inboxes.
@@ -23,7 +23,74 @@ assumptions:
     verification: Not verified; configure the existing production Resend credentials and verified sender, then perform a controlled delivery check before release.
     source: .env.example; docs/payment-receipts.md
     updated_at: "2026-11-06"
+  - id: payment-submission-and-review-events
+    status: supported
+    claim: Real payment submission and review calls create one durable notification intent per eligible recipient/event, including customer acknowledgment and rejection, and each tested message survives a provider error without a second modeled acceptance.
+    reason: The expanded simulation creates genuine image-backed payment submissions, repeats submission and review requests, and flushes the real payment outbox through NotificationsService against a loopback Postman contract stand-in.
+    verification: On 2026-11-10 tests/payment-provider.simulation.ts passed with an isolated PGlite database and synthetic identities. Two administrator alerts, two customer acknowledgments, one approval and one rejection each produced HTTP 500, 200, 200; the payment run produced 18 email calls and each reset scenario reported three calls with one accepted key. Assertions checked exact business event keys, intended recipients, acknowledgment wording, rejection reason and authenticated booking links. The reminder simulation then passed again with three additional email calls (500, 200, 200) and signed synthetic delivery-event correlation. This run did not exercise booking-cancellation rejection, real provider delivery or inbox placement (fingerprint payment-notification-completion-2026-11-10).
+    source: tests/payment-provider.simulation.ts; apps/api/src/payments/payment-emails.ts; apps/api/src/payments/payments.service.ts; apps/api/src/payments/email-outbox.service.ts; postman/mocks/resend-email/default.js
+    updated_at: "2026-11-10"
+  - id: reminder-retry-provider-correlation
+    status: supported
+    claim: LedgerBook retains an automatic reminder through a modeled HTTP 500, retries using the same body and key, saves the provider message ID, and correlates a valid signed delivery event to the accepted reminder.
+    reason: The real NotificationsService fetch adapter, ReminderService, EmailDeliveryService and isolated SQL database ran against the existing local Resend contract simulation; signed webhook receipt was synthetic and does not establish actual provider delivery.
+    verification: On 2026-11-09 tests/reminder-provider.simulation.ts passed. Postman request log showed POST /emails 500, 200, 200; control state reported three calls and one accepted modeled email. Provider ID was saved and a signed synthetic email.delivered event changed that reminder to delivered. The payment simulation also passed again with the same 500/200/200 sequence after receipt tracking was implemented. Repeated on 2026-11-10 against the existing loopback Postman mock with an isolated PGlite database; tests/reminder-provider.simulation.ts passed, the log again showed 500, 200, 200, and assertions verified one modeled accepted email plus correlation of its saved provider ID with a signed synthetic delivery event (fingerprint notification-audit-2026-11-10). This does not demonstrate real inbox delivery.
+    source: tests/reminder-provider.simulation.ts; tests/payment-provider.simulation.ts; apps/api/src/notifications/reminder.service.ts; apps/api/src/notifications/email-delivery.service.ts; https://resend.com/docs/webhooks/emails/delivered
+    updated_at: "2026-11-10"
+  - id: raw-webhook-verification-and-replay
+    status: supported
+    claim: The local receiver verifies the published Svix signature contract and preserves organization-specific delivery statuses under tested duplicate, early, delayed and forged requests.
+    reason: The implementation matched the official Svix signature test vector and was exercised over real HTTP with an isolated PostgreSQL schema; this tests receiver behavior, not production registration or inbox placement.
+    verification: On 2026-11-09 tests/reminder-delivery.test.ts and tests/notification-http.test.ts passed against PostgreSQL, including raw body tampering, timestamp limits, duplicate event IDs, CSRF exemption only after verification, early provider events, bounce suppression and cross-tenant denial. On 2026-11-10 tests/notification-http.test.ts passed all four cases over localhost HTTP with a fresh PGlite database and a captured email sender; it rechecked administrator-only settings/history, ordinary CSRF enforcement, own-account opt-out, forged/missing signatures, duplicate events, malformed/oversized bodies, supported HTTP methods and bounce suppression (fingerprint notification-audit-2026-11-10). No production webhook registration or provider delivery was exercised.
+    source: tests/reminder-delivery.test.ts; tests/notification-http.test.ts; https://docs.svix.com/receiving/verifying-payloads/how-manual; https://resend.com/docs/webhooks/verify-webhooks-requests
+    updated_at: "2026-11-10"
+  - id: invoice-attachment-request-contract
+    status: supported
+    claim: Resend POST /emails accepts local attachments as filename plus base64-encoded content, without a public attachment URL.
+    reason: The official attachment documentation explicitly describes local file base64 content and the Send Email API lists attachment filename/content fields.
+    verification: On 2026-11-10 read the official Send Email and Attachments documentation. The provider documents a 40 MB total encoded email limit; LedgerBook invoice PDFs are independently capped at 2 MiB. No live provider request was sent.
+    source: https://resend.com/docs/dashboard/emails/attachments; https://resend.com/docs/api-reference/emails/send-email; postman/contracts/resend-email.openapi.json
+    updated_at: "2026-11-10"
+  - id: invoice-attachment-immutable-retry
+    status: supported
+    claim: Booking confirmation and payment approval emails retain the exact persisted invoice bytes and filename across tested provider failures and replays, including when a later payment issues a new invoice before the confirmation retry.
+    reason: The real booking/payment transactions, SQL outbox worker and NotificationsService fetch adapter ran against the existing local Postman Resend contract stand-in; the mock independently decoded base64 and exposed only attachment SHA-256 hashes for verification.
+    verification: On 2026-11-10 tests/invoice-email.simulation.ts passed against a fresh PGlite database and loopback Postman server at port 4029 with synthetic credentials and cloud history disabled. The request log showed POST /emails 500, 200, 200 for each of booking-created and payment-approved; each scenario asserted three calls, one accepted key, the correct customer recipient, filename and SHA-256 equal to the selected persisted PDF. Replayed booking creation and payment approval produced exactly two invoice versions. tests/invoice-email.test.ts also passed all seven cases for MIME serialization, immutable local replay, no-login customer delivery, archived/changed/unrelated recipients and access revocation. The existing tests/payment-provider.simulation.ts then passed all six notification scenarios against the updated mock at port 4017; its 18 email calls again followed 500, 200, 200 per event, including replay of the approval attachment. These tests establish caller behavior against the contract stand-in, not inbox delivery (fingerprint invoice-email-2026-11-10).
+    source: tests/invoice-email.simulation.ts; tests/invoice-email.test.ts; postman/mocks/resend-email/default.js; apps/api/src/payments/email-outbox.service.ts; apps/api/src/notifications/notifications.service.ts
+    updated_at: "2026-11-10"
+  - id: localhost-email-verification
+    status: supported
+    claim: The current localhost email adapter and outbox preserve payment, reminder and invoice sends through the modeled failure/retry/replay sequence with one modeled acceptance per message.
+    reason: The real adapters and isolated PGlite databases ran against the committed Postman Resend contract stand-in, using synthetic credentials and loopback endpoints.
+    verification: On 2026-11-11 the payment and reminder simulations passed with 21 POST /emails requests, and the invoice simulation passed with 6 more. Logs showed 500, 200, 200 per message; assertions checked stable keys, intended recipients, localhost booking links, exact invoice attachment bytes and synthetic delivery-event correlation. Targeted email, webhook and configuration suites passed 53 cases with one PostgreSQL-only concurrency case skipped on PGlite. The diagnostic command and local-control regression checks also passed. These simulation results do not establish real-provider behavior (fingerprint localhost-email-2026-11-11).
+    source: tests/payment-provider.simulation.ts; tests/reminder-provider.simulation.ts; tests/invoice-email.simulation.ts; tests/test-email.test.ts; .local/localhost-email-verification/provider.ndjson; .local/localhost-email-verification/invoice.ndjson
+    updated_at: "2026-11-11"
+  - id: live-localhost-diagnostic-delivery
+    status: supported
+    claim: One real diagnostic email sent from localhost with the existing verified CRM sender was accepted by Resend and reported Delivered in the provider console.
+    reason: The user selected the existing CRM sender, its saved sending credential was loaded into the private local email configuration, and the real NotificationsService sent a diagnostic message to the authorized test inbox.
+    verification: On 2026-11-11 npm run email:test completed successfully. The Resend console showed Sent and Delivered for that message, with the configured http://localhost:3001 app link visible in its body. Local startup status then showed running with email=resend and all four startup checks passed over TCP. Provider Delivered means recipient-server acceptance; actual inbox placement was not observed, and no local delivery webhook was configured. The test contained no customer or financial records (fingerprint localhost-email-2026-11-11).
+    source: scripts/test-email.ts; scripts/local-email.ts; .local/localhost-email-verification/delivered.png; .local/local-status.json
+    updated_at: "2026-11-11"
+  - id: localhost-auth-and-dev-config
+    status: supported
+    claim: Localhost invitations retain the application token and Clerk ticket through the live redirect, and both development API launchers can use the same private Resend configuration.
+    reason: A synthetic customer invitation was created through the running local application using the configured Clerk development instance. The real provider link was followed to the localhost invitation form. The split API startup now applies the private email override before importing application configuration.
+    verification: On 2026-11-11 Clerk accepted the invitation, and its link opened the correct synthetic customer and workspace at http://localhost:3001/invite. The existing administrator recovery request reached the verification-code screen. These checks did not change any password or establish invitation/recovery inbox placement. Authentication, invitation lifecycle and HTTP customer workflow tests passed 35 cases. After the configuration change, gateway/configuration/diagnostic tests passed 12 cases and frontend auth/invitation tests passed 7 cases, including localhost ports 3001 and 5173. Type checking and targeted lint passed. Existing live Resend delivery and payment/invoice/reminder simulations are recorded separately above (fingerprint localhost-email-2026-11-11).
+    source: scripts/dev-api.ts; scripts/local-email.ts; tests/clerk-gateway.test.ts; tests/local-email.test.ts; apps/web/tests/auth.test.ts; .local/localhost-email-verification/invitation-form.png; .local/localhost-email-verification/recovery-code-request.png
+    updated_at: "2026-11-11"
+  - id: company-sender-name
+    status: supported
+    claim: The application email configuration and real HTTP adapter preserve the existing sender address while using Umrah Packages Ltd as its display name.
+    reason: The private local configuration was checked and the actual NotificationsService request body was asserted before forwarding to the committed local Postman Resend stand-in with synthetic credentials.
+    verification: On 2026-11-11 the sender check passed against port 4027. Postman logged POST /emails 500, 200, 200; control state reported three calls and one modeled acceptance. Nine existing local-email and diagnostic tests passed, and the API build passed. The running local app was restarted successfully. No new real email was sent; this does not establish inbox placement (fingerprint company-sender-2026-11-11).
+    source: apps/api/src/config.ts; apps/api/src/notifications/notifications.service.ts; scripts/local-email.ts; tests/local-email.test.ts; postman/mocks/resend-email/default.js
+    updated_at: "2026-11-11"
 fingerprints:
+  - id: company-sender-2026-11-11
+    date: "2026-11-11"
+    commit: 7e605e0904269adb33c435dba564b060116495df (dirty working tree with existing application work and company sender configuration)
+    cli: "1.75.0"
   - id: local-payment-implementation
     date: "2026-11-06"
     commit: 67288b9d3f14e66ed8f3bcf1172b92a669682068 (dirty working tree with payment implementation)
@@ -31,4 +98,28 @@ fingerprints:
   - id: clerk-travel-merge
     date: "2026-11-06"
     commit: 89c0e4af0774c129d7065f21ff14d57ff3941e18 (dirty working tree merging saved Clerk authentication with travel features)
+    cli: "1.75.0"
+  - id: launch-audit
+    date: "2026-11-09"
+    commit: 7e605e0904269adb33c435dba564b060116495df (dirty working tree with direct document upload work and launch audit tests)
+    cli: "1.75.0"
+  - id: reminder-delivery-implementation
+    date: "2026-11-09"
+    commit: 7e605e0904269adb33c435dba564b060116495df (dirty working tree with automatic reminder and delivery webhook implementation)
+    cli: "1.75.0"
+  - id: notification-audit-2026-11-10
+    date: "2026-11-10"
+    commit: 7e605e0904269adb33c435dba564b060116495df (dirty working tree with file-preview implementation and notification audit)
+    cli: "1.75.0"
+  - id: payment-notification-completion-2026-11-10
+    date: "2026-11-10"
+    commit: 7e605e0904269adb33c435dba564b060116495df (dirty working tree with customer receipt acknowledgment, rejection notifications and queue index migration 017)
+    cli: "1.75.0"
+  - id: invoice-email-2026-11-10
+    date: "2026-11-10"
+    commit: 7e605e0904269adb33c435dba564b060116495df (dirty working tree with immutable invoice snapshots and email attachments)
+    cli: "1.75.0"
+  - id: localhost-email-2026-11-11
+    date: "2026-11-11"
+    commit: 7e605e0904269adb33c435dba564b060116495df (dirty working tree with localhost email diagnostic, live local configuration and existing invoice work)
     cli: "1.75.0"

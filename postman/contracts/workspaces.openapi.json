@@ -1,0 +1,436 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "LedgerBook workspaces",
+    "version": "1.0.0",
+    "description": "Workspace lifecycle contract. APIs retain the internal organization naming. Session membership determines tenant access; new workspaces use GBP. Deletion permanently erases tenant database records and queues private cloud objects for retryable removal after the existing 24-hour upload safety grace."
+  },
+  "servers": [
+    {
+      "url": "http://127.0.0.1:3000/api",
+      "description": "Replace with your application's API origin."
+    }
+  ],
+  "security": [
+    {
+      "sessionCookie": []
+    },
+    {
+      "clerkBearer": []
+    }
+  ],
+  "paths": {
+    "/organizations": {
+      "post": {
+        "operationId": "createWorkspace",
+        "summary": "Create a workspace and its administrator membership",
+        "description": "Requires an active administrator membership or a durable workspace-creator entitlement from a previous workspace deletion. Actor-scoped UUID idempotency keys replay the original creation result. A reused key with changed input or after deletion returns 409. Limited to 20/hour/user.",
+        "parameters": [
+          {
+            "name": "X-CSRF-Protection",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "1"
+              ]
+            }
+          },
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uri"
+            },
+            "description": "The configured application origin."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "name",
+                  "idempotency_key"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 160
+                  },
+                  "description": {
+                    "type": "string",
+                    "maxLength": 1000
+                  },
+                  "color": {
+                    "type": "string",
+                    "pattern": "^#[0-9a-fA-F]{6}$"
+                  },
+                  "idempotency_key": {
+                    "type": "string",
+                    "format": "uuid"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Workspace created, or a previously committed creation replayed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Workspace"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input or deletion name mismatch."
+          },
+          "401": {
+            "description": "Authentication required."
+          },
+          "403": {
+            "description": "Administrator access or valid CSRF headers required."
+          },
+          "404": {
+            "description": "Workspace does not exist or is not accessible to this user."
+          },
+          "409": {
+            "description": "Stale version, conflicting submission key, or retry for a deleted workspace."
+          },
+          "429": {
+            "description": "Rate limit exceeded. Retry after the server-specified delay."
+          }
+        }
+      }
+    },
+    "/organizations/{orgId}": {
+      "parameters": [
+        {
+          "name": "orgId",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "getWorkspace",
+        "summary": "Read a workspace profile",
+        "description": "Any active member. Limited to 240/minute/user.",
+        "responses": {
+          "200": {
+            "description": "Current profile.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Workspace"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input or deletion name mismatch."
+          },
+          "401": {
+            "description": "Authentication required."
+          },
+          "403": {
+            "description": "Administrator access or valid CSRF headers required."
+          },
+          "404": {
+            "description": "Workspace does not exist or is not accessible to this user."
+          },
+          "409": {
+            "description": "Stale version, conflicting submission key, or retry for a deleted workspace."
+          },
+          "429": {
+            "description": "Rate limit exceeded. Retry after the server-specified delay."
+          }
+        }
+      },
+      "patch": {
+        "operationId": "updateWorkspace",
+        "summary": "Edit name, description or color",
+        "description": "Administrator only. Send at least one editable field plus the current expected_version. Concurrent changes return 409. No-op writes preserve the version. Limited to 60/minute/user.",
+        "parameters": [
+          {
+            "name": "X-CSRF-Protection",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "1"
+              ]
+            }
+          },
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uri"
+            },
+            "description": "The configured application origin."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "expected_version"
+                ],
+                "minProperties": 2,
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 160
+                  },
+                  "description": {
+                    "type": "string",
+                    "maxLength": 1000
+                  },
+                  "color": {
+                    "type": "string",
+                    "pattern": "^#[0-9a-fA-F]{6}$"
+                  },
+                  "expected_version": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 2147483646
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Saved profile.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Workspace"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input or deletion name mismatch."
+          },
+          "401": {
+            "description": "Authentication required."
+          },
+          "403": {
+            "description": "Administrator access or valid CSRF headers required."
+          },
+          "404": {
+            "description": "Workspace does not exist or is not accessible to this user."
+          },
+          "409": {
+            "description": "Stale version, conflicting submission key, or retry for a deleted workspace."
+          },
+          "429": {
+            "description": "Rate limit exceeded. Retry after the server-specified delay."
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteWorkspace",
+        "summary": "Permanently erase a workspace",
+        "description": "Administrator only. Requires the exact current name and version. Erases all tenant business records in one transaction, preserving global sign-in identities and other workspaces. File removal is durable and asynchronous. An identical retry by the deleting user returns the same receipt. Limited to 20/hour/user.",
+        "parameters": [
+          {
+            "name": "X-CSRF-Protection",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "1"
+              ]
+            }
+          },
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uri"
+            },
+            "description": "The configured application origin."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "confirmation_name",
+                  "expected_version"
+                ],
+                "properties": {
+                  "confirmation_name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 160
+                  },
+                  "expected_version": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 2147483646
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Database deletion committed. files_pending is the original count queued for cloud cleanup, not a live progress counter.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "id",
+                    "deleted",
+                    "files_pending"
+                  ],
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "deleted": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "files_pending": {
+                      "type": "integer",
+                      "minimum": 0
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input or deletion name mismatch."
+          },
+          "401": {
+            "description": "Authentication required."
+          },
+          "403": {
+            "description": "Administrator access or valid CSRF headers required."
+          },
+          "404": {
+            "description": "Workspace does not exist or is not accessible to this user."
+          },
+          "409": {
+            "description": "Stale version, conflicting submission key, or retry for a deleted workspace."
+          },
+          "429": {
+            "description": "Rate limit exceeded. Retry after the server-specified delay."
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "sessionCookie": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "ledgerbook_session",
+        "description": "Legacy local-development session cookie. Production legacy sessions use __Host-ledgerbook; the production browser uses Clerk bearer authentication."
+      },
+      "clerkBearer": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT"
+      }
+    },
+    "schemas": {
+      "Workspace": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "name",
+          "description",
+          "color",
+          "currency",
+          "currency_exponent",
+          "version",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 1000
+          },
+          "color": {
+            "type": "string",
+            "pattern": "^#[0-9a-f]{6}$"
+          },
+          "currency": {
+            "type": "string",
+            "pattern": "^[A-Z]{3}$"
+          },
+          "currency_exponent": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 4
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      }
+    }
+  }
+}

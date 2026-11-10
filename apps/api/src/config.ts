@@ -33,6 +33,8 @@ if (process.env.EMAIL_MODE && !['file','resend'].includes(process.env.EMAIL_MODE
 if (production && (!process.env.DATABASE_URL || process.env.EMAIL_MODE !== 'resend' || !process.env.EMAIL_FROM || !process.env.RESEND_API_KEY)) {
   throw new Error('Production requires DATABASE_URL, EMAIL_MODE=resend, EMAIL_FROM and RESEND_API_KEY for payment notifications.');
 }
+if (process.env.RESEND_WEBHOOK_SECRET && (!/^whsec_[A-Za-z0-9+/]+={0,2}$/.test(process.env.RESEND_WEBHOOK_SECRET)
+  || Buffer.from(process.env.RESEND_WEBHOOK_SECRET.slice(6),'base64').length<16)) throw new Error('RESEND_WEBHOOK_SECRET is invalid.');
 export const config = {
   nodeEnv: process.env.NODE_ENV ?? 'development', production, appUrl, businessTimeZone,
   authProvider, clerkSecretKey, clerkPublishableKey, clerkFrontendOrigin,
@@ -49,7 +51,8 @@ export const config = {
   sessionTtlSeconds: integer('SESSION_TTL_SECONDS',43200,300,604800),
   invitationTtlHours: integer('INVITATION_TTL_HOURS',72,1,168),
   emailMode: process.env.EMAIL_MODE ?? 'file',
-  emailFrom: process.env.EMAIL_FROM ?? 'LedgerBook <noreply@localhost>',
+  emailFrom: process.env.EMAIL_FROM ?? 'Umrah Packages Ltd <noreply@localhost>',
   resendApiKey: process.env.RESEND_API_KEY,
+  resendWebhookSecret: process.env.RESEND_WEBHOOK_SECRET,
   mailDirectory: resolve(process.env.MAIL_DIRECTORY ?? '.local/mail'),
 };

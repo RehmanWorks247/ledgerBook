@@ -1,6 +1,6 @@
 export type Theme = "light" | "dark";
 export type ThemePreference = Theme | "system";
-export type AccentTheme = "green" | "blue" | "violet" | "amber" | "rose" | "neutral";
+export type AccentTheme = "gold" | "green" | "blue" | "violet" | "amber" | "rose" | "neutral";
 
 export type ThemeSnapshot = Readonly<{
   theme: Theme;
@@ -16,11 +16,11 @@ function asPreference(value: string | null): ThemePreference {
 }
 
 function asAccent(value: string | null): AccentTheme {
-  return value === "blue" || value === "violet" || value === "amber" ||
-    value === "rose" || value === "neutral" ? value : "green";
+  return value === "gold" || value === "green" || value === "blue" || value === "violet" || value === "amber" ||
+    value === "rose" || value === "neutral" ? value : "gold";
 }
 
-const serverSnapshot: ThemeSnapshot = { theme: "light", preference: "system", accent: "green" };
+const serverSnapshot: ThemeSnapshot = { theme: "light", preference: "system", accent: "gold" };
 
 /** Keep choices for this session even when browser storage is blocked. */
 export function createThemeStore(browser: Window | null) {

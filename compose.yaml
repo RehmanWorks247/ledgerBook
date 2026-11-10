@@ -15,6 +15,8 @@ services:
     restart: unless-stopped
   db:
     image: postgres:17-alpine
+    # Concurrent reporting queries exceed Docker's default 64 MB shared memory.
+    shm_size: 256mb
     environment:
       POSTGRES_DB: ledgerbook
       POSTGRES_USER: ledgerbook

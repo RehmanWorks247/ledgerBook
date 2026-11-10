@@ -14,14 +14,16 @@ export class CurrencyService {
   async settings(member: Membership) {
     const current = await this.access.membership(member.user_id, member.organization_id);
     const snapshot = await this.rates.get(current.currency!);
+    // Concurrent workspaces share the provider request, never their overrides.
+    const rates = { ...snapshot.rates };
     const overrides = await this.db.query('SELECT currency,rate::text,updated_at FROM exchange_rate_overrides WHERE organization_id=$1', [current.organization_id]);
-    for (const row of overrides.rows) snapshot.rates[row.currency] = {
+    for (const row of overrides.rows) rates[row.currency] = {
       rate: row.rate.replace(/(\.\d*?)0+$/, '$1').replace(/\.$/, ''), date: new Date(row.updated_at).toISOString().slice(0,10), source: 'manual', stale: false,
     };
     const currencies = [...new Set<string>([current.currency!, ...CURRENCIES])].map(code => ({
       code, name: new Intl.DisplayNames(['en'], { type: 'currency' }).of(code) ?? code,
       exponent: code === current.currency ? current.currency_exponent! : currencyExponent(code),
-      ...snapshot.rates[code], available: Boolean(snapshot.rates[code]),
+      ...rates[code], available: Boolean(rates[code]),
     }));
     return { base_currency: current.currency!, base_exponent: current.currency_exponent!,
       display_currency: (current.display_currency as string | null) ?? current.currency!,

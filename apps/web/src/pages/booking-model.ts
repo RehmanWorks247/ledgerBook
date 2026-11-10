@@ -20,6 +20,15 @@ export function businessDate(timeZone: string, now = new Date()) {
   return dateParts(now, timeZone).slice(0, 10);
 }
 
+export function departureLocal(value: string, timeZone: string) {
+  return dateParts(new Date(value), timeZone);
+}
+
+export function bookingAmountInput(minor: string) {
+  const amount = BigInt(minor);
+  return `${amount / 100n}.${String(amount % 100n).padStart(2, "0")}`;
+}
+
 export function departureInstant(localDateTime: string, timeZone: string) {
   const target = Date.parse(`${localDateTime}:00Z`);
   if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(localDateTime) || !Number.isFinite(target) || new Date(target).toISOString().slice(0, 16) !== localDateTime)

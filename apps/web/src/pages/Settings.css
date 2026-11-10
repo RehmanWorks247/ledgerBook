@@ -1,5 +1,9 @@
-.appearance-settings {
+.appearance-settings,
+.profile-settings {
   max-width: 980px;
+}
+.profile-settings {
+  margin-bottom: 28px;
 }
 .appearance-settings-heading {
   padding: 26px 28px;
@@ -81,7 +85,7 @@
   border: 1px solid var(--line-strong);
   border-radius: 50%;
   background: var(--surface);
-  color: var(--on-accent);
+  color: var(--on-primary);
 }
 .appearance-mode:has(input:checked),
 .theme-option:has(input:checked) {
@@ -93,8 +97,8 @@
 }
 .appearance-mode:has(input:checked) .appearance-check,
 .theme-option:has(input:checked) .appearance-check {
-  border-color: var(--accent);
-  background: var(--accent);
+  border-color: var(--primary);
+  background: var(--primary);
 }
 .appearance-mode:hover,
 .theme-option:hover {
@@ -131,7 +135,7 @@
   height: 11px;
   border-radius: 3px;
   margin-bottom: 7px;
-  background: var(--accent);
+  background: var(--primary);
 }
 .theme-preview-nav {
   height: 4px;
@@ -166,7 +170,7 @@
   width: 23%;
   height: 10px;
   border-radius: 3px;
-  background: var(--accent);
+  background: var(--primary);
 }
 .theme-preview-stats {
   display: grid;
@@ -214,7 +218,7 @@
   height: 10px;
   flex-shrink: 0;
   border-radius: 50%;
-  background: var(--accent);
+  background: var(--primary);
 }
 .appearance-settings-footer {
   display: flex;

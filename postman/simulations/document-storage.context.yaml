@@ -1,6 +1,6 @@
 purpose:
-  stands_in_for: General-purpose unversioned S3 PUT, GET and DELETE for private files, with checksum enforcement and transient or persistent 503 responses.
-  unblocks: Real AWS SDK serialization, encryption/checksum headers, retries and sanitized outage handling without accessing AWS or customer files.
+  stands_in_for: General-purpose unversioned S3 and Cloudflare R2 PUT, GET and DELETE for private files, with provider-specific checksum headers and transient or persistent 503 responses.
+  unblocks: Real AWS SDK serialization, provider-compatible encryption/checksum headers, retries, corrupted-download rejection, deletion recovery and snapshot-bound document backup/create-only restore without accessing AWS, R2 or customer files.
 assumptions:
   - id: documented-object-operations
     status: supported
@@ -13,9 +13,9 @@ assumptions:
     status: supported
     claim: The real DocumentStorage adapter preserves the tested ASCII-PDF bytes through PUT and GET, deletes the modeled object, retries two transient 503s, and returns a sanitized 503 after three failed attempts during a persistent outage.
     reason: The production AWS SDK adapter ran against the local Postman member, whose handler validates the checksum, encryption, content type and cache headers.
-    verification: On 2026-11-06 tests/document-storage.simulation.ts passed. Observed request log PUT200, GET200, DELETE204, GET404, PUT503/503/200, GET200, then PUT503/503/503. Final modeled state was seven PUTs, three GETs, one DELETE and one stored object. Repeated successfully on 2026-11-06 after the Clerk/travel merge; observed the same request sequence and asserted modeled state (fingerprint clerk-travel-merge).
+    verification: On 2026-11-06 tests/document-storage.simulation.ts passed. Observed request log PUT200, GET200, DELETE204, GET404, PUT503/503/200, GET200, then PUT503/503/503. Final modeled state was seven PUTs, three GETs, one DELETE and one stored object. Repeated successfully on 2026-11-06 after the Clerk/travel merge; observed the same request sequence and asserted modeled state (fingerprint clerk-travel-merge). Repeated on 2026-11-09 for launch-workflow-audit with the same passing assertions and observed dependency request sequence, using the existing local mock with no published history or live cloud calls.
     source: tests/document-storage.simulation.ts; postman/mocks/s3-documents/default.js; apps/api/src/bookings/document-storage.ts
-    updated_at: "2026-11-06"
+    updated_at: "2026-11-09"
   - id: postman-binary-body-preservation
     status: contradicted
     claim: Postman CLI 1.75 simulation request interception preserves arbitrary PDF binary bytes.
@@ -37,6 +37,55 @@ assumptions:
     verification: Not verified against AWS. Owner mock discovery was skipped because this CLI installation does not support postman status. The local contract subset was built from official AWS documentation; no mock was published or deployed.
     source: postman/mocks/s3-documents/contract.openapi.json; .env.example
     updated_at: "2026-11-06"
+  - id: r2-put-contract
+    status: supported
+    claim: R2 PutObject supports Content-MD5 and rejects the AWS x-amz-server-side-encryption request feature; R2 encrypts stored objects and metadata at rest automatically.
+    reason: Cloudflare's S3 compatibility table marks Content-MD5 implemented and the AWS SSE header unimplemented, while its data security contract documents automatic encryption at rest.
+    verification: Read the official Cloudflare S3 compatibility and data security pages on 2026-11-09. This is provider contract evidence, not a live account check. The checksum-type matrix must not be read as a ban on SHA256 for single PutObject; Cloudflare's release notes explicitly document SHA256 and SHA1 support from 2023-06-16.
+    source: https://developers.cloudflare.com/r2/api/s3/api/; https://developers.cloudflare.com/r2/reference/data-security/; https://developers.cloudflare.com/r2/platform/release-notes/#2023-06-16
+    updated_at: "2026-11-09"
+  - id: r2-adapter-failure-recovery
+    status: supported
+    claim: The R2 adapter sends valid Content-MD5 without the unsupported SSE header, preserves the tested ASCII-PDF bytes, retries two transient upload failures, rejects corrupted downloads, retains an object after failed deletion and deletes it after recovery, and sanitizes a persistent upload outage.
+    reason: The actual DocumentStorage R2 adapter and AWS SDK ran against the local Postman member configured to enforce the R2-compatible request shape. Assertions checked exact returned bytes, status/message and remaining modeled objects; request logs confirmed all dependency paths ran.
+    verification: On 2026-11-09 tests/document-storage.simulation.ts passed against Postman CLI 1.75.0, fingerprint r2-booking-uploads. After switching the member to R2 mode the log showed PUT200, GET200, PUT503/503/200, GET200, corrupt GET200 rejected by the caller, DELETE503/503/503 with the object retained, DELETE204, GET404, and PUT503/503/503. Final state was seven PUTs, four GETs, four DELETEs and zero stored objects. The pre-existing S3 scenarios also passed. Repeated for launch-workflow-audit on the same date with exit code zero; the complete S3, one-byte file and R2 run observed 45 control and storage requests, including ten PUT503 responses and three DELETE503 responses. Binary transport and direct-presigned behavior are outside this Postman run's scope.
+    source: tests/document-storage.simulation.ts; postman/mocks/s3-documents/default.js; apps/api/src/bookings/document-storage.ts
+    updated_at: "2026-11-09"
+  - id: r2-presigned-conditional-contract
+    status: supported
+    claim: R2 presigned URLs are reusable bearer capabilities until expiry, and PutObject with If-None-Match star atomically rejects replacing an existing object.
+    reason: Official R2 documentation explicitly specifies both capability reuse and atomic conditional writes; therefore signing the condition is required to preserve already-verified bytes with direct uploads.
+    verification: Read the official presigned URL and S3 compatibility documentation on 2026-11-09. This Postman adapter run does not verify signature enforcement or conditional write behavior; the direct-upload HTTP tests and live R2 checks must establish the actual client wiring separately.
+    source: https://developers.cloudflare.com/r2/api/s3/presigned-urls/; https://developers.cloudflare.com/r2/api/s3/api/; apps/api/src/bookings/document-storage.ts
+    updated_at: "2026-11-09"
+  - id: r2-live-browser-permissions
+    status: unknown
+    claim: The development and production R2 buckets have separate scoped credentials, private access, working browser CORS, and accepted signed upload headers.
+    reason: A local stand-in cannot establish account permissions, signature validity, environment isolation or browser CORS. It is intentionally not a simulation of Cloudflare account management.
+    verification: Not established by this local simulation. On 2026-11-09 postman status was still unsupported, so owner mock discovery was skipped and the existing local contract subset was extended from Cloudflare's official documentation. No mock was published or deployed. CORS must allow the application's origin and upload headers; expired R2 URLs can omit CORS response headers and therefore appear as browser network errors.
+    source: https://developers.cloudflare.com/r2/buckets/cors/; postman/mocks/s3-documents/default.js; .env.example
+    updated_at: "2026-11-09"
+  - id: document-version-service-recovery
+    status: supported
+    claim: The actual booking and version services retain the current document after a provider outage, safely retry and commit one replacement, preserve historical bytes, restore a previous version, reject stale restores and remove every historical object after cleanup recovery.
+    reason: The service implementation and real production AWS SDK ran against the existing Postman S3 HTTP contract with synthetic ASCII documents and a fresh isolated database. Mock path matching was extended to the application's existing organization/customer/booking object-key hierarchy.
+    verification: On 2026-11-09 tests/document-versions.simulation.ts passed with exit code zero. Observed seven PUTs (including five 503 failures), four GET200 reads, six failed DELETE503 attempts then two successful DELETE204 operations; state had zero objects afterward. tests/document-versions.test.ts separately passed eight integration cases including direct R2 signed uploads, byte-exact non-UTF8 binaries, replay rejection, stale edit, auth revocation, HTTP access controls, rollback and account purge.
+    source: tests/document-versions.simulation.ts; tests/document-versions.test.ts; apps/api/src/bookings/document-versions.service.ts; postman/mocks/s3-documents/default.js
+    updated_at: "2026-11-09"
+  - id: snapshot-document-backup-restore
+    status: supported
+    claim: The real operations utility copies only snapshot-referenced current and historical objects, verifies saved bytes, restores exact keys with create-only writes, accepts identical existing objects and refuses conflicting objects without overwriting them.
+    reason: The production DocumentStorage adapter and AWS SDK ran for both S3 and R2 against the existing Postman HTTP member using private synthetic snapshot files. Conditional PUT follows the documented If-None-Match star contract. Mock request handlers serialize state updates so concurrent backup GETs cannot lose recorded counters.
+    verification: On 2026-11-09 tests/document-backup.simulation.ts passed for each provider. Each run observed eight PUTs, eight GETs and four DELETEs, with three PUT412 responses covering identical replay and conflicting destinations; zero synthetic objects remained. All ten tests/document-backup.test.ts cases separately passed against a raw HTTP stand-in with non-UTF8 bytes, corruption, partial backup recovery, private file permissions, invalid manifests and symlink rejection. This does not establish live provider permissions or production disaster recovery.
+    source: scripts/document-backup.ts; tests/document-backup.simulation.ts; tests/document-backup.test.ts; apps/api/src/bookings/document-storage.ts; https://docs.aws.amazon.com/AmazonS3/latest/userguide/conditional-writes.html; https://developers.cloudflare.com/r2/api/s3/api/
+    updated_at: "2026-11-09"
+  - id: permanent-workspace-cloud-purge
+    status: supported
+    claim: The real permanent-workspace deletion path reconciles current, historical and pending R2 object bytes after its 24-hour grace period in the modeled failure and recovery scenarios, without deleting another workspace's file.
+    reason: The actual workspace purge function, booking/version services, DocumentStorage R2 adapter and cleanupDocumentObjects ran against disposable PostgreSQL and the existing local Postman HTTP member. No storage SDK or deletion callback was stubbed. This establishes caller behavior against the stand-in, not live R2 permissions or bucket configuration.
+    verification: On 2026-11-10 tests/workspace-purge.simulation.ts passed using fingerprint workspace-cloud-purge. Three target objects were journaled while workspace rows, current/history metadata and pending uploads were erased; access was denied immediately. Cleanup issued no DELETE before 24 hours, including at 23 hours 59 minutes. A pending provider write completed again after workspace deletion. After aging the journal to 25 hours, nine observed DELETE503 attempts left all three journals and bytes intact. Recovery issued three DELETE204 operations and three subsequent GET404 checks confirmed removal; the other workspace remained readable. Its synthetic fixture was then removed through normal services. Observed object requests totaled five PUT200, eight GET200, three GET404, nine DELETE503 and four DELETE204, with zero modeled objects and purge journals remaining. ASCII fixtures preserve the documented Postman binary limitation; no live provider was called or mock published.
+    source: tests/workspace-purge.simulation.ts; apps/api/src/database/migrations/019_workspace_purge.sql; apps/api/src/bookings/document-storage.ts; postman/mocks/s3-documents/default.js
+    updated_at: "2026-11-10"
 fingerprints:
   - id: local-storage-implementation
     date: "2026-11-06"
@@ -49,4 +98,24 @@ fingerprints:
   - id: booking-file-types
     date: "2026-11-07"
     commit: ca4565ca2f8887bc62dbfa1076b47c7750b96479 (dirty working tree with booking file type support)
+    cli: "1.75.0"
+  - id: r2-booking-uploads
+    date: "2026-11-09"
+    commit: 7e605e0904269adb33c435dba564b060116495df (dirty working tree implementing R2 booking uploads)
+    cli: "1.75.0"
+  - id: launch-workflow-audit
+    date: "2026-11-09"
+    commit: 7e605e0904269adb33c435dba564b060116495df (dirty working tree with existing direct R2 upload work and customer HTTP lifecycle regression coverage)
+    cli: "1.75.0"
+  - id: document-version-workflows
+    date: "2026-11-09"
+    commit: working tree with migration014 and document version service
+    cli: "1.75.0"
+  - id: snapshot-cloud-backup
+    date: "2026-11-09"
+    commit: working tree with snapshot-bound database manifest and document backup/restore utility
+    cli: "1.75.0"
+  - id: workspace-cloud-purge
+    date: "2026-11-10"
+    commit: 7e605e0904269adb33c435dba564b060116495df (dirty working tree with workspace management, migration019 and permanent workspace purge simulation)
     cli: "1.75.0"

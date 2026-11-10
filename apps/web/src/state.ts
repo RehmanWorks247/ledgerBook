@@ -4,7 +4,7 @@ export const AuthContext = createContext<{
   session: Session | null;
   loading: boolean;
   error: string;
-  refresh: () => Promise<void>;
+  refresh: (options?: { preserveSession?: boolean }) => Promise<void>;
 }>({ session: null, loading: true, error: "", refresh: async () => undefined });
 export const OrganizationContext = createContext<Membership>(null!);
 export const useOrganization = () => useContext(OrganizationContext);

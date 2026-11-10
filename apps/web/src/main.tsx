@@ -12,6 +12,7 @@ import "./pages/ListFilters.css";
 import "./pages/Users.css";
 import "./pages/UserRecord.css";
 import "./user-files/explorer.css";
+import "./file-preview/preview.css";
 import "./theme-palettes.css";
 import "./pages/Settings.css";
 import "./currency.css";
@@ -63,9 +64,33 @@ function Bootstrap() {
       routerReplace={(to) => navigateTo(to, { replace: true })}
       appearance={{
         variables: {
-          colorPrimary: "#176c56",
+          colorPrimary: "var(--primary)",
+          colorPrimaryForeground: "var(--on-primary)",
+          colorNeutral: "var(--text)",
+          colorForeground: "var(--text)",
+          colorMuted: "var(--surface-subtle)",
+          colorMutedForeground: "var(--muted)",
+          colorBackground: "var(--surface)",
+          colorInput: "var(--surface)",
+          colorInputForeground: "var(--text)",
+          colorBorder: "var(--line-strong)",
+          colorRing: "var(--accent)",
+          colorDanger: "var(--danger)",
+          colorSuccess: "var(--success)",
+          colorWarning: "var(--warning)",
+          colorModalBackdrop: "var(--overlay)",
           fontFamily: "inherit",
-          borderRadius: "0.75rem",
+          fontFamilyButtons: "inherit",
+          borderRadius: "var(--radius)",
+        },
+        elements: {
+          formButtonPrimary: {
+            backgroundColor: "var(--primary)",
+            color: "var(--on-primary)",
+            "&:hover": { backgroundColor: "var(--primary-hover)" },
+          },
+          profileSectionPrimaryButton: { color: "var(--accent)" },
+          footerActionLink: { color: "var(--accent)" },
         },
       }}
     >

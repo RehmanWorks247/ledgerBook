@@ -48,14 +48,24 @@ export function parseLocalEmailConfig(source:string):LocalEmailConfig {
   return {mode:'resend',from,apiKey};
 }
 
-export async function loadLocalEmailConfig(localDirectory:string):Promise<LocalEmailConfig> {
+async function loadLocalEmailOverride(localDirectory:string):Promise<LocalEmailConfig|undefined> {
   let source:string;
   try { source=await readFile(resolve(localDirectory,'email.env'),'utf8'); }
   catch(error) {
-    if((error as NodeJS.ErrnoException).code==='ENOENT') return {mode:'file'};
+    if((error as NodeJS.ErrnoException).code==='ENOENT') return undefined;
     throw new LocalEmailConfigError();
   }
   return parseLocalEmailConfig(source);
+}
+
+export async function loadLocalEmailConfig(localDirectory:string):Promise<LocalEmailConfig> {
+  return await loadLocalEmailOverride(localDirectory)??{mode:'file'};
+}
+
+/** The split dev server honors the same private opt-in, falling back to .env if absent. */
+export async function applyDevelopmentEmailConfig(localDirectory:string,environment:NodeJS.ProcessEnv=process.env):Promise<void> {
+  const local=await loadLocalEmailOverride(localDirectory);
+  if(local) applyLocalEmailConfig(local,environment);
 }
 
 /** Overwrite inherited email settings; loading this file can never enable a production database. */

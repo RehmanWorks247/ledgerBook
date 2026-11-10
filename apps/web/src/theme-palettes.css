@@ -1,10 +1,24 @@
 /* Accent palettes share the same neutral surfaces in both appearances.
    Each option declares its own colors so settings previews remain independent. */
 
+/* Text accents stay readable on neutral surfaces; primary fills can use brighter brand colors. */
 /* Light appearance */
 :root,
+:root[data-accent="gold"],
+.theme-option[data-accent="gold"] {
+  --primary: #dbaa3a;
+  --primary-hover: #c9972d;
+  --on-primary: #20190e;
+  --accent: #806019;
+  --accent-hover: #674a10;
+  --accent-soft: #fbf3df;
+  --on-accent: #ffffff;
+}
 :root[data-accent="green"],
 .theme-option[data-accent="green"] {
+  --primary: var(--accent);
+  --primary-hover: var(--accent-hover);
+  --on-primary: var(--on-accent);
   --accent: #13795b;
   --accent-hover: #0c6248;
   --accent-soft: #e9f4ef;
@@ -12,6 +26,9 @@
 }
 :root[data-accent="blue"],
 .theme-option[data-accent="blue"] {
+  --primary: var(--accent);
+  --primary-hover: var(--accent-hover);
+  --on-primary: var(--on-accent);
   --accent: #285bb1;
   --accent-hover: #214b91;
   --accent-soft: #ecf2fc;
@@ -19,6 +36,9 @@
 }
 :root[data-accent="violet"],
 .theme-option[data-accent="violet"] {
+  --primary: var(--accent);
+  --primary-hover: var(--accent-hover);
+  --on-primary: var(--on-accent);
   --accent: #7050a2;
   --accent-hover: #5b3f87;
   --accent-soft: #f1ecf8;
@@ -26,6 +46,9 @@
 }
 :root[data-accent="amber"],
 .theme-option[data-accent="amber"] {
+  --primary: var(--accent);
+  --primary-hover: var(--accent-hover);
+  --on-primary: var(--on-accent);
   --accent: #89601b;
   --accent-hover: #6d4c14;
   --accent-soft: #fbf3e4;
@@ -33,6 +56,9 @@
 }
 :root[data-accent="rose"],
 .theme-option[data-accent="rose"] {
+  --primary: var(--accent);
+  --primary-hover: var(--accent-hover);
+  --on-primary: var(--on-accent);
   --accent: #ad4764;
   --accent-hover: #92384f;
   --accent-soft: #faedf1;
@@ -40,6 +66,9 @@
 }
 :root[data-accent="neutral"],
 .theme-option[data-accent="neutral"] {
+  --primary: var(--accent);
+  --primary-hover: var(--accent-hover);
+  --on-primary: var(--on-accent);
   --accent: #171717;
   --accent-hover: #404040;
   --accent-soft: #eeeeee;
@@ -48,8 +77,21 @@
 
 /* Dark appearance */
 :root[data-theme="dark"],
+:root[data-theme="dark"][data-accent="gold"],
+:root[data-theme="dark"] .theme-option[data-accent="gold"] {
+  --primary: #dbaa3a;
+  --primary-hover: #c9972d;
+  --on-primary: #20190e;
+  --accent: #dfb34f;
+  --accent-hover: #edc76a;
+  --accent-soft: #342b19;
+  --on-accent: #1c180e;
+}
 :root[data-theme="dark"][data-accent="green"],
 :root[data-theme="dark"] .theme-option[data-accent="green"] {
+  --primary: var(--accent);
+  --primary-hover: var(--accent-hover);
+  --on-primary: var(--on-accent);
   --accent: #70d2ad;
   --accent-hover: #92e1c1;
   --accent-soft: #183329;
@@ -57,6 +99,9 @@
 }
 :root[data-theme="dark"][data-accent="blue"],
 :root[data-theme="dark"] .theme-option[data-accent="blue"] {
+  --primary: var(--accent);
+  --primary-hover: var(--accent-hover);
+  --on-primary: var(--on-accent);
   --accent: #8cb8f3;
   --accent-hover: #a9ccfa;
   --accent-soft: #1b2d46;
@@ -64,6 +109,9 @@
 }
 :root[data-theme="dark"][data-accent="violet"],
 :root[data-theme="dark"] .theme-option[data-accent="violet"] {
+  --primary: var(--accent);
+  --primary-hover: var(--accent-hover);
+  --on-primary: var(--on-accent);
   --accent: #bca0e7;
   --accent-hover: #cfb8f0;
   --accent-soft: #30243f;
@@ -71,6 +119,9 @@
 }
 :root[data-theme="dark"][data-accent="amber"],
 :root[data-theme="dark"] .theme-option[data-accent="amber"] {
+  --primary: var(--accent);
+  --primary-hover: var(--accent-hover);
+  --on-primary: var(--on-accent);
   --accent: #dfba77;
   --accent-hover: #edcc95;
   --accent-soft: #362b1b;
@@ -78,6 +129,9 @@
 }
 :root[data-theme="dark"][data-accent="rose"],
 :root[data-theme="dark"] .theme-option[data-accent="rose"] {
+  --primary: var(--accent);
+  --primary-hover: var(--accent-hover);
+  --on-primary: var(--on-accent);
   --accent: #e6a0b4;
   --accent-hover: #f0bbca;
   --accent-soft: #3c242c;
@@ -85,6 +139,9 @@
 }
 :root[data-theme="dark"][data-accent="neutral"],
 :root[data-theme="dark"] .theme-option[data-accent="neutral"] {
+  --primary: var(--accent);
+  --primary-hover: var(--accent-hover);
+  --on-primary: var(--on-accent);
   --accent: #fafafa;
   --accent-hover: #d4d4d4;
   --accent-soft: #262626;

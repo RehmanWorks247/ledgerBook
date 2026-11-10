@@ -1,4 +1,4 @@
-import { BadRequestException, Body, Controller, Get, Headers, Inject, Param, ParseUUIDPipe, Patch, Post, Query, Req, Res, UseGuards, UseInterceptors } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Delete, Get, Headers, Inject, Param, ParseUUIDPipe, Patch, Post, Query, Req, Res, UseGuards, UseInterceptors } from '@nestjs/common';
 import type { Request, Response } from 'express';
 import { AccessService } from '../access/access.service';
 import { SessionGuard } from '../auth/session.guard';
@@ -17,8 +17,9 @@ export class BookingsController {
     @Inject(RateLimitService) private readonly rate:RateLimitService) {}
 
   @Get()
-  async list(@Req() req:AuthRequest,@Param('orgId',ParseUUIDPipe) orgId:string,@Param('customerId',ParseUUIDPipe) customerId:string) {
-    return this.bookings.list(await this.access.membership(req.user.id,orgId),customerId);
+  async list(@Req() req:AuthRequest,@Param('orgId',ParseUUIDPipe) orgId:string,@Param('customerId',ParseUUIDPipe) customerId:string,@Query('include_cancelled') includeCancelled:string|undefined) {
+    if(includeCancelled!==undefined && includeCancelled!=='1') throw new BadRequestException('Unsupported booking history option.');
+    return this.bookings.list(await this.access.membership(req.user.id,orgId),customerId,includeCancelled==='1');
   }
   @Post()
   async create(@Req() req:AuthRequest,@Param('orgId',ParseUUIDPipe) orgId:string,@Param('customerId',ParseUUIDPipe) customerId:string,@Body() body:unknown) {
@@ -41,9 +42,26 @@ export class BookingsController {
   async move(@Req() req:AuthRequest,@Param('orgId',ParseUUIDPipe) orgId:string,@Param('customerId',ParseUUIDPipe) customerId:string,@Param('bookingId',ParseUUIDPipe) bookingId:string,@Param('nodeId',ParseUUIDPipe) nodeId:string,@Body() body:unknown) {
     return this.bookings.move(await this.access.membership(req.user.id,orgId,true),customerId,bookingId,nodeId,body);
   }
+  @Delete(':bookingId/files/:nodeId')
+  async remove(@Req() req:AuthRequest,@Param('orgId',ParseUUIDPipe) orgId:string,@Param('customerId',ParseUUIDPipe) customerId:string,@Param('bookingId',ParseUUIDPipe) bookingId:string,@Param('nodeId',ParseUUIDPipe) nodeId:string) {
+    return this.bookings.remove(await this.access.membership(req.user.id,orgId,true),customerId,bookingId,nodeId);
+  }
   @Patch(':bookingId/services/:serviceKey')
   async issuance(@Req() req:AuthRequest,@Param('orgId',ParseUUIDPipe) orgId:string,@Param('customerId',ParseUUIDPipe) customerId:string,@Param('bookingId',ParseUUIDPipe) bookingId:string,@Param('serviceKey') serviceKey:string,@Body() body:unknown) {
     return this.bookings.issuance(await this.access.membership(req.user.id,orgId,true),customerId,bookingId,serviceKey,body);
+  }
+  @Post(':bookingId/folders/:folderId/uploads')
+  async beginUpload(@Req() req:AuthRequest,@Param('orgId',ParseUUIDPipe) orgId:string,@Param('customerId',ParseUUIDPipe) customerId:string,@Param('bookingId',ParseUUIDPipe) bookingId:string,@Param('folderId',ParseUUIDPipe) folderId:string,@Body() body:unknown) {
+    const member=await this.access.membership(req.user.id,orgId,true);
+    await this.rate.consume('document-upload-prepare',req.user.id,120,3600);
+    return this.bookings.beginUpload(member,customerId,bookingId,folderId,body);
+  }
+  @Post(':bookingId/folders/:folderId/uploads/:uploadId/complete')
+  @UseInterceptors(DocumentDownloadInterceptor)
+  async completeUpload(@Req() req:AuthRequest,@Param('orgId',ParseUUIDPipe) orgId:string,@Param('customerId',ParseUUIDPipe) customerId:string,@Param('bookingId',ParseUUIDPipe) bookingId:string,@Param('folderId',ParseUUIDPipe) folderId:string,@Param('uploadId',ParseUUIDPipe) uploadId:string) {
+    const member=await this.access.membership(req.user.id,orgId,true);
+    await this.rate.consume('document-upload-complete',req.user.id,240,3600);
+    return this.bookings.completeUpload(member,customerId,bookingId,folderId,uploadId);
   }
   @Post(':bookingId/folders/:folderId/documents')
   @UseInterceptors(DocumentUploadInterceptor)

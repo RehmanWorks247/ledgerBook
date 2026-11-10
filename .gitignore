@@ -7,3 +7,4 @@ dist/
 coverage/
 *.log
 *.zip
+.DS_Store
