@@ -65,7 +65,7 @@ describe('booking folders, transactional PDF storage and document access', () =>
     assert.equal(one.instalments.length,2);
     assert.equal((await bookings.files(seed.admin,seed.customerId,one.id as string)).items.length,6);
     assert.equal((await database.db.query('SELECT count(*)::int AS n FROM ledger_entries WHERE reference=$1',[request.reference])).rows[0].n,1);
-    await assert.rejects(bookings.create(seed.admin,seed.customerId,{...request,amount:'101'}),/Instalments/);
+    await assert.rejects(bookings.create(seed.admin,seed.customerId,{...request,amount:'101'}),/submission key/);
     await assert.rejects(bookings.create(seed.admin,seed.customerId,{...request,reference:'CHANGED'}),/submission key/);
     const beforeCount = (await database.db.query('SELECT count(*)::int AS n FROM ledger_entries')).rows[0].n;
     await assert.rejects(bookings.create(seed.admin,seed.customerId,input('TRIP-ONE')));

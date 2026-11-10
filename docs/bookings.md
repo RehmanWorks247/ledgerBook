@@ -38,7 +38,11 @@ Booking creation accepts:
 }
 ```
 
-Instalments must total the booking amount. An omitted or empty schedule creates
+The combined instalment total may be up to £5.00 (500 pennies) above or below
+the booking amount, inclusive. A difference of £5.01 is rejected. This is one
+tolerance for the whole schedule, not for each instalment. Entered instalment
+amounts are preserved; the booking total and ledger charge are not adjusted.
+An omitted or empty schedule creates
 one instalment for the full total on the effective date. Amounts are decimal
 strings converted to integer pennies with the existing money parser. Booking
 charges require a GBP accounting workspace; existing foreign-currency history
@@ -110,7 +114,8 @@ a nonblank `reason` (at most 1,000 characters), and a valid `effective_date`.
 `PATCH /{bookingId}` accepts the same editable fields as creation: `reference`,
 `departure_at`, `required_services`, `amount`, and a nonempty `instalments` array.
 Amounts must be positive GBP decimal strings, with at most 100 instalments that
-sum exactly to the total. Changing the total atomically reverses the existing
+sum to within £5.00 above or below the total, using the same inclusive tolerance
+as creation. Changing the total atomically reverses the existing
 active charge and posts a replacement; the correction date cannot precede the
 current charge. The date is used only when a financial correction is needed.
 Previously posted entries and approved payments remain unchanged. Metadata-only

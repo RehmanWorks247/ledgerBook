@@ -10,6 +10,7 @@ import { DocumentStorage, type StoredDocument } from './document-storage';
 import { documentExtension, documentMimeType } from './document-files';
 import { issueBookingInvoice } from '../invoices/invoices.service';
 import { queueBookingCreatedEmail } from '../payments/payment-emails';
+import { validateInstalmentTotal } from './instalment-total';
 
 export const SERVICE_KEYS = ['flight','makkah','madinah','transfers','visas','extras'] as const;
 export const MAX_DOCUMENT_BYTES = 10 * 1024 * 1024;
@@ -112,9 +113,7 @@ export class BookingsService {
     const amount = parseMoney(data.amount,2);
     const instalments = (data.instalments.length ? data.instalments : [{due_date:data.effective_date,amount:data.amount}])
       .map(item => ({due_date:item.due_date,amount_minor:parseMoney(item.amount,2).toString()}));
-    if (instalments.reduce((sum,item) => sum + BigInt(item.amount_minor),0n) !== amount) {
-      throw new BadRequestException('Instalments must add up to the booking total.');
-    }
+    validateInstalmentTotal(amount,instalments);
     const required = [...new Set(data.required_services)].sort();
     const fingerprint = hash({...data,required_services:required,amount:amount.toString(),instalments,customerId,userId:member.user_id});
     const bookingId = await this.db.transaction(async client => {

@@ -9,6 +9,7 @@ import { config } from '../config';
 import { SERVICE_KEYS } from './bookings.service';
 import { cancelUnsentPaymentReviewEmails, queueCustomerPaymentEmail } from '../payments/payment-emails';
 import { ensureBookingInvoice, issueBookingInvoice } from '../invoices/invoices.service';
+import { validateInstalmentTotal } from './instalment-total';
 
 const date = z.string().refine(validDate, 'Use a valid date in YYYY-MM-DD format.');
 const operation = {expected_version:z.number().int().min(1),reason:z.string().trim().min(1).max(1000),effective_date:date,idempotency_key:z.uuid()};
@@ -91,7 +92,7 @@ export class BookingManagementService {
   async update(member:Membership,customerId:string,bookingId:string,raw:unknown) {
     const data=parse(editSchema,raw),amount=parseMoney(data.amount,2);
     const instalments=data.instalments.map(item=>({due_date:item.due_date,amount_minor:parseMoney(item.amount,2).toString()}));
-    if(instalments.reduce((sum,item)=>sum+BigInt(item.amount_minor),0n)!==amount) throw new BadRequestException('Instalments must add up to the booking total.');
+    validateInstalmentTotal(amount,instalments);
     const required=[...new Set(data.required_services)].sort();
     const fingerprint=digest({...data,amount:amount.toString(),instalments,required_services:required,customerId,bookingId,userId:member.user_id,action:'updated'});
     return this.db.transaction(async client=>{

@@ -72,7 +72,7 @@ describe('booking edits and cancellations preserve financial history', () => {
     const another=await create(),invalid=editInput(another.reference);
     await assert.rejects(management.update(seed.admin,seed.customerId,another.id as string,{...invalid,effective_date:'2025-12-31'}),/before the current booking charge/);
     await assert.rejects(management.update(seed.admin,seed.customerId,another.id as string,{...invalid,reason:' '}),BadRequestException);
-    await assert.rejects(management.update(seed.admin,seed.customerId,another.id as string,{...invalid,instalments:[{due_date:'2026-11-01',amount:'119'}]}),/add up/);
+    await assert.rejects(management.update(seed.admin,seed.customerId,another.id as string,{...invalid,instalments:[{due_date:'2026-11-01',amount:'114.99'}]}),/within £5.00/);
     assert.equal((await bookings.get(seed.admin,seed.customerId,another.id as string)).version,1);
     assert.equal((await database.db.query('SELECT count(*)::int AS n FROM ledger_entries WHERE reversal_of=$1',[another.charge_entry_id])).rows[0].n,0);
   });
