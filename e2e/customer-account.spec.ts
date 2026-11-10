@@ -1,3 +1,4 @@
+import { authenticateFixture } from './session-fixture';
 import { test, expect, type BrowserContext } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
@@ -9,10 +10,7 @@ let seed: { orgId: string; customerId: string };
 test.beforeAll(async () => { seed = JSON.parse(await readFile('.local/e2e/seed.json', 'utf8')); });
 
 async function authenticate(context: BrowserContext, email: string) {
-  const response = await context.request.post(`${origin}/api/auth/login`, {
-    headers, data: { email, password: 'Test-only password 47!' },
-  });
-  expect(response.status(), await response.text()).toBe(200);
+  await authenticateFixture(context, email);
   await context.addInitScript(value => localStorage.setItem('e2e-email', value), email);
   await context.route('**/api/auth/config', route => route.fulfill({ json: { provider: 'clerk', publishableKey: 'isolated-test-only' } }));
 }

@@ -1,3 +1,4 @@
+import { fixtureSessionCookies } from './session-fixture';
 import { test, expect, type BrowserContext, type Page } from '@playwright/test';
 import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
@@ -11,22 +12,10 @@ let customerCookies: Awaited<ReturnType<BrowserContext['cookies']>>;
 const fixtures = new WeakMap<BrowserContext, Set<string>>();
 const pageErrors = new WeakMap<Page, string[]>();
 
-test.beforeAll(async ({ playwright }) => {
+test.beforeAll(async () => {
   seed = JSON.parse(await readFile('.local/e2e/seed.json', 'utf8'));
-  for (const email of ['admin@example.test', 'customer@example.test']) {
-    // Signing in replaces the session in that cookie jar, so each identity
-    // needs its own request context before its cookies are reused by tests.
-    const request = await playwright.request.newContext();
-    try {
-      const response = await request.post(`${origin}/api/auth/login`, {
-        headers: writeHeaders, data: { email, password: 'Test-only password 47!' },
-      });
-      expect(response.status(), await response.text()).toBe(200);
-      const cookies = (await request.storageState()).cookies;
-      if (email === 'admin@example.test') adminCookies = cookies;
-      else customerCookies = cookies;
-    } finally { await request.dispose(); }
-  }
+  adminCookies = await fixtureSessionCookies('admin@example.test');
+  customerCookies = await fixtureSessionCookies('customer@example.test');
 });
 
 test.beforeEach(({ context, page }) => {

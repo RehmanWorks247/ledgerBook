@@ -1,3 +1,4 @@
+import { authenticateFixture } from './session-fixture';
 import { test, expect, type Page } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
 
@@ -5,11 +6,7 @@ let orgId: string;
 const errors = new WeakMap<Page, string[]>();
 test.beforeAll(async () => { ({ orgId } = JSON.parse(await readFile('.local/e2e/seed.json', 'utf8'))); });
 test.beforeEach(async ({ page, context }) => {
-  const response = await context.request.post('/api/auth/login', {
-    headers: { Origin: 'http://127.0.0.1:4312', 'X-CSRF-Protection': '1' },
-    data: { email: 'admin@example.test', password: 'Test-only password 47!' },
-  });
-  expect(response.status()).toBe(200);
+  await authenticateFixture(context, 'admin@example.test');
   await context.addInitScript(() => { localStorage.setItem('e2e-email', 'admin@example.test'); });
   await context.route('**/api/auth/config', route => route.fulfill({ json: { provider: 'clerk', publishableKey: 'isolated-test-only' } }));
   const list: string[] = []; errors.set(page, list); page.on('pageerror', error => list.push(error.message));

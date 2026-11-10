@@ -1,3 +1,4 @@
+import { fixtureSessionCookies } from './session-fixture';
 import { test, expect, type BrowserContext, type Locator, type Page } from '@playwright/test';
 import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
@@ -8,13 +9,9 @@ const origin = 'http://127.0.0.1:4312';
 const writeHeaders = { Origin: origin, 'X-CSRF-Protection': '1' };
 let orgId: string;
 let adminCookies: Awaited<ReturnType<BrowserContext['cookies']>>;
-test.beforeAll(async ({ request }) => {
+test.beforeAll(async () => {
   ({ orgId } = JSON.parse(await readFile('.local/e2e/seed.json', 'utf8')));
-  const login = await request.post(`${origin}/api/auth/login`, {
-    headers: writeHeaders, data: { email: 'admin@example.test', password: 'Test-only password 47!' },
-  });
-  expect(login.status(), await login.text()).toBe(200);
-  adminCookies = (await request.storageState()).cookies;
+  adminCookies = await fixtureSessionCookies('admin@example.test');
 });
 const pageErrors = new WeakMap<Page, string[]>();
 test.beforeEach(({ page }) => {

@@ -1,16 +1,12 @@
+import { authenticateFixture } from './session-fixture';
 import { test, expect, type BrowserContext } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
 
-const origin = 'http://127.0.0.1:4312';
 let orgId: string;
 test.beforeAll(async () => { ({ orgId } = JSON.parse(await readFile('.local/e2e/seed.json', 'utf8'))); });
 
 async function authenticate(context: BrowserContext) {
-  const response = await context.request.post(`${origin}/api/auth/login`, {
-    headers: { Origin: origin, 'X-CSRF-Protection': '1' },
-    data: { email: 'admin@example.test', password: 'Test-only password 47!' },
-  });
-  expect(response.status()).toBe(200);
+  await authenticateFixture(context, 'admin@example.test');
   await context.addInitScript(() => localStorage.setItem('e2e-email', 'admin@example.test'));
   await context.route('**/api/auth/config', route => route.fulfill({ json: { provider: 'clerk', publishableKey: 'isolated-test-only' } }));
 }

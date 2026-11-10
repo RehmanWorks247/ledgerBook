@@ -1,6 +1,7 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { pdfPreviewAssets } from '../apps/web/pdf-preview-assets';
+import { request } from '@playwright/test';
 
 async function main() {
   if (process.env.NODE_ENV !== 'test' || process.env.AUTH_PROVIDER !== 'local'
@@ -34,7 +35,6 @@ async function main() {
   const seed = await database.seed();
   await database.db.query("UPDATE organizations SET currency='GBP'");
   await mkdir('.local/e2e', { recursive: true, mode: 0o700 });
-  await writeFile('.local/e2e/seed.json', JSON.stringify({ orgId: seed.orgId, customerId: seed.customerId, secondCustomerId: seed.secondCustomerId }), { mode: 0o600 });
   app = await createApp({ database: database.db, logger: false });
   app.get(RatesService).get = async () => ({ fetched_at: new Date().toISOString(), unavailable: false, rates: {
     GBP: { rate: '1', date: '2026-11-09', source: 'identity', stale: false },
@@ -42,6 +42,21 @@ async function main() {
     PKR: { rate: '360', date: '2026-11-09', source: 'Frankfurter', stale: false },
   } });
   await app.listen(4311, '127.0.0.1');
+  // Authenticate each fixture identity once through the actual HTTP boundary.
+  // Repeated feature tests must not exhaust the unchanged login rate limits.
+  const sessions: Record<string, Awaited<ReturnType<import('@playwright/test').BrowserContext['cookies']>>> = {};
+  for (const email of ['admin@example.test', 'customer@example.test']) {
+    const client = await request.newContext();
+    try {
+      const login = await client.post('http://127.0.0.1:4311/api/auth/login', {
+        headers: { Origin: process.env.PUBLIC_APP_URL, 'X-CSRF-Protection': '1' },
+        data: { email, password: 'Test-only password 47!' },
+      });
+      if (login.status() !== 200) throw new Error(`Browser fixture login failed: ${login.status()}`);
+      sessions[email] = (await client.storageState()).cookies;
+    } finally { await client.dispose(); }
+  }
+  await writeFile('.local/e2e/seed.json', JSON.stringify({ orgId: seed.orgId, customerId: seed.customerId, secondCustomerId: seed.secondCustomerId, sessions }), { mode: 0o600 });
   vite = await createServer({
     configFile: false, root: resolve('apps/web'), envDir: false,
     plugins: [react(), pdfPreviewAssets()],
