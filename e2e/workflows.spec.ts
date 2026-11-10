@@ -299,6 +299,7 @@ test('booking corrections, issuance, text editing, binary replacement, version r
   const form=page.getByRole('form',{name:'Edit booking',exact:true});
   await form.getByLabel('Booking reference',{exact:true}).fill('EDIT-E2E-002');
   await form.getByLabel('Booking total (GBP)',{exact:true}).fill('650.00');
+  await form.getByLabel('Instalment calculation total (GBP)',{exact:true}).fill('650.00');
   await form.getByLabel('Amount (GBP)',{exact:true}).fill('650.00');
   await form.getByLabel('Reason for change').fill('Add upgraded hotel room');
   await form.getByRole('button',{name:'Save booking',exact:true}).click();
