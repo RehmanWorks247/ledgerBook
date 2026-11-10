@@ -1,13 +1,22 @@
 import { test, expect, type Page } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
 import { authenticateFixture } from './session-fixture';
 
 let seed: { orgId: string; customerId: string; secondCustomerId: string };
+let draftCustomerId: string;
 test.beforeAll(async () => { seed = JSON.parse(await readFile('.local/e2e/seed.json', 'utf8')); });
 test.beforeEach(async ({ context }) => {
   await authenticateFixture(context);
   await context.addInitScript(() => localStorage.setItem('e2e-email', 'admin@example.test'));
   await context.route('**/api/auth/config', route => route.fulfill({ json: { provider: 'clerk', publishableKey: 'isolated-test-only' } }));
+  // Draft submissions must not change balances used by the shared customer workflows.
+  const customer = await context.request.post(`/api/organizations/${seed.orgId}/customers`, {
+    headers: { Origin: 'http://127.0.0.1:4312', 'X-CSRF-Protection': '1' },
+    data: { name: 'Booking draft browser fixture', email: `draft-${randomUUID()}@example.test`, idempotency_key: randomUUID() },
+  });
+  expect(customer.status(), await customer.text()).toBe(201);
+  draftCustomerId = (await customer.json()).id;
 });
 const createPath = (customerId: string) => `/o/${seed.orgId}/customers/${customerId}/bookings/new`;
 async function fillBooking(page: Page, reference: string) {
@@ -18,11 +27,11 @@ async function fillBooking(page: Page, reference: string) {
 }
 
 test('booking drafts survive refresh and navigation, keep the customer, and clear on discard or successful creation', async ({ page, context }) => {
-  const account = await (await context.request.get(`/api/organizations/${seed.orgId}/customers/${seed.customerId}`)).json();
+  const account = await (await context.request.get(`/api/organizations/${seed.orgId}/customers/${draftCustomerId}`)).json();
   await page.goto(`/o/${seed.orgId}/bookings/new`);
   await page.getByRole('combobox', { name: 'Customer name or ID' }).fill(account.customer_code);
   await page.getByRole('option').filter({ hasText: account.customer_code }).click();
-  await expect(page).toHaveURL(createPath(seed.customerId));
+  await expect(page).toHaveURL(createPath(draftCustomerId));
   await fillBooking(page, 'REFRESH-DRAFT');
   await page.getByRole('checkbox', { name: 'Flight Tickets', exact: true }).check();
   await page.getByRole('checkbox', { name: 'Makkah Hotel', exact: true }).check();
@@ -47,7 +56,7 @@ test('booking drafts survive refresh and navigation, keep the customer, and clea
   await page.goto(createPath(seed.secondCustomerId));
   await expect(page.getByLabel('Booking reference', { exact: true })).toHaveValue('');
   await expect(page.getByLabel('Amount (GBP)', { exact: true })).toHaveCount(0);
-  await page.goto(createPath(seed.customerId));
+  await page.goto(createPath(draftCustomerId));
   await expect(page.getByLabel('Booking reference', { exact: true })).toHaveValue('REFRESH-DRAFT');
   await page.getByRole('button', { name: 'Discard draft', exact: true }).click();
   await page.reload();
@@ -57,15 +66,15 @@ test('booking drafts survive refresh and navigation, keep the customer, and clea
   await fillBooking(page, 'SAVED-DRAFT');
   await page.getByRole('button', { name: 'Create booking', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'SAVED-DRAFT', exact: true })).toBeVisible();
-  await page.goto(createPath(seed.customerId));
+  await page.goto(createPath(draftCustomerId));
   await expect(page.getByLabel('Booking reference', { exact: true })).toHaveValue('');
   await expect(page.getByLabel('Booking total (GBP)', { exact: true })).toHaveValue('');
 });
 
 test('a refreshed draft retries a lost successful response without creating a duplicate booking', async ({ page, context }) => {
-  await page.goto(createPath(seed.customerId));
+  await page.goto(createPath(draftCustomerId));
   await fillBooking(page, 'LOST-RESPONSE-DRAFT');
-  const endpoint = `/api/organizations/${seed.orgId}/customers/${seed.customerId}/bookings`;
+  const endpoint = `/api/organizations/${seed.orgId}/customers/${draftCustomerId}/bookings`;
   let committedId = '';
   await page.route(`**${endpoint}`, async route => {
     const response = await route.fetch();
