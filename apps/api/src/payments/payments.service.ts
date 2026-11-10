@@ -18,7 +18,7 @@ export const MAX_PENDING_PAYMENTS = 10;
 export const MAX_BOOKING_PAYMENTS = 100;
 export const MAX_BOOKING_RECEIPT_BYTES = 100 * 1024 * 1024;
 export type PaymentUpload = { originalname:string; mimetype:string; buffer:Buffer; size:number };
-type Receipt = {name:string;content:Buffer;originalSha256:string;originalName:string;originalMime:string};
+type Receipt = {name:string;content:Buffer;mimeType:'image/webp'|'application/pdf';originalSha256:string;originalName:string;originalMime:string};
 type PaymentRow = QueryResultRow & {id:string;organization_id:string;customer_id:string;booking_id:string;
   amount_minor:string;currency:string;payment_date:string;note:string;status:'pending'|'approved'|'rejected';
   submitted_at:Date|string;reviewed_at:Date|string|null;reviewed_by:string|null;rejection_reason:string|null;
@@ -111,18 +111,26 @@ export class PaymentsService {
   }
 
   private async normalizeFiles(files:PaymentUpload[]):Promise<Receipt[]> {
-    if(!Array.isArray(files) || files.length<1 || files.length>MAX_RECEIPTS) throw new BadRequestException('Attach between one and five receipt images.');
+    if(!Array.isArray(files) || files.length<1 || files.length>MAX_RECEIPTS) throw new BadRequestException('Attach between one and five receipt files.');
     const receipts:Receipt[]=[];
     const hashes=new Set<string>();
     // Decode sequentially so one request never expands five large images at once.
     for(const file of files) {
       const originalName=parse(filenameSchema,file.originalname);
       if(!Buffer.isBuffer(file.buffer) || file.buffer.length===0 || file.buffer.length>MAX_RECEIPT_BYTES || file.size!==file.buffer.length)
-        throw new BadRequestException('Each receipt must be an image of at most 5 MB.');
-      if(!['image/jpeg','image/png','image/webp'].includes(file.mimetype)) throw new BadRequestException('Receipts must be JPEG, PNG, or WebP images.');
+        throw new BadRequestException('Each receipt must be a nonempty file of at most 5 MB.');
+      if(!['image/jpeg','image/png','image/webp','application/pdf'].includes(file.mimetype)) throw new BadRequestException('Receipts must be PDF, JPEG, PNG, or WebP files.');
       const originalSha256=digest(file.buffer);
-      if(hashes.has(originalSha256)) throw new BadRequestException('The same receipt image was attached more than once.');
+      if(hashes.has(originalSha256)) throw new BadRequestException('The same receipt file was attached more than once.');
       hashes.add(originalSha256);
+      if(file.mimetype==='application/pdf') {
+        // Match booking-document PDF validation, while preserving the original
+        // receipt bytes for review and download rather than rasterizing pages.
+        if(!/\.pdf$/i.test(originalName) || file.buffer.length<12 || !file.buffer.subarray(0,8).toString('ascii').startsWith('%PDF-')
+          || !file.buffer.subarray(-1024).includes(Buffer.from('%%EOF'))) throw new BadRequestException('Choose a valid PDF receipt of at most 5 MB.');
+        receipts.push({name:originalName,content:file.buffer,mimeType:'application/pdf',originalSha256,originalName,originalMime:file.mimetype});
+        continue;
+      }
       let content:Buffer;
       try {
         const image=sharp(file.buffer,{limitInputPixels:MAX_RECEIPT_PIXELS,failOn:'warning',animated:false});
@@ -136,7 +144,7 @@ export class PaymentsService {
         if(content.length>MAX_RECEIPT_BYTES) throw new Error('Normalized image too large');
       } catch {throw new BadRequestException('A receipt is invalid, animated, or too large to process. Use a still JPEG, PNG, or WebP up to 20 megapixels and 5 MB.');}
       const stem=originalName.replace(/\.[^.]*$/,'').slice(0,235)||'receipt';
-      receipts.push({name:`${stem}.webp`,content,originalSha256,originalName,originalMime:file.mimetype});
+      receipts.push({name:`${stem}.webp`,content,mimeType:'image/webp',originalSha256,originalName,originalMime:file.mimetype});
     }
     return receipts;
   }
@@ -255,8 +263,8 @@ export class PaymentsService {
       const id=randomUUID();
       const inserted=await client.query<{submitted_at:Date}>(`INSERT INTO booking_payments(id,organization_id,customer_id,booking_id,amount_minor,payment_date,note,submitted_by,idempotency_key,request_hash)
         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING submitted_at`,[id,active.organization_id,customerId,bookingId,amount.toString(),data.payment_date,data.note,active.user_id,data.idempotency_key,fingerprint]);
-      for(const receipt of receipts) await client.query(`INSERT INTO booking_payment_receipts(id,organization_id,customer_id,booking_id,payment_id,name,size,content,original_sha256)
-        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)`,[randomUUID(),active.organization_id,customerId,bookingId,id,receipt.name,receipt.content.length,receipt.content,receipt.originalSha256]);
+      for(const receipt of receipts) await client.query(`INSERT INTO booking_payment_receipts(id,organization_id,customer_id,booking_id,payment_id,name,size,content,original_sha256,mime_type)
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,[randomUUID(),active.organization_id,customerId,bookingId,id,receipt.name,receipt.content.length,receipt.content,receipt.originalSha256,receipt.mimeType]);
       await this.audit(client,active,'payment.submitted',id,{customer_id:customerId,booking_id:bookingId,amount_minor:amount.toString(),receipt_count:receipts.length});
       const submittedAt=new Date(inserted.rows[0].submitted_at).toISOString();
       const link=`${config.appUrl}/o/${active.organization_id}/users/${customerId}/bookings/${bookingId}`;
@@ -265,7 +273,7 @@ export class PaymentsService {
         SELECT m.organization_id,u.email,$2,$3,$4||u.email FROM memberships m JOIN users u ON u.id=m.user_id
         WHERE m.organization_id=$1 AND m.role='admin' AND m.is_active AND m.deleted_at IS NULL
         ON CONFLICT (dedupe_key) DO NOTHING`,[active.organization_id,'Payment receipt submitted',
-        `${customer.name} uploaded ${receipts.length} payment receipt image(s).\n\nBooking: ${booking.reference}\nAmount: GBP ${formatMoney(amount,2)}\nPayment date: ${data.payment_date}\nUploaded at: ${submittedAt}\n\nOpen the booking to check the current review status. If still pending, verify the payment before approving:\n${link}`,`payment-submitted:${id}:`]);
+        `${customer.name} uploaded ${receipts.length} payment receipt file(s).\n\nBooking: ${booking.reference}\nAmount: GBP ${formatMoney(amount,2)}\nPayment date: ${data.payment_date}\nUploaded at: ${submittedAt}\n\nOpen the booking to check the current review status. If still pending, verify the payment before approving:\n${link}`,`payment-submitted:${id}:`]);
       await queueCustomerPaymentEmail(client,{kind:'received',organizationId:active.organization_id,organizationName:active.organization_name!,
         customerId,customerName:customer.name,recipient:customer.email,bookingId,bookingReference:booking.reference,
         paymentId:id,submittedBy:active.user_id,amountMinor:amount.toString(),currency:booking.currency,paymentDate:data.payment_date,receiptCount:receipts.length});

@@ -2,6 +2,7 @@ import { authenticateFixture } from './session-fixture';
 import { test, expect, type BrowserContext, type Page } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
 import sharp from 'sharp';
+import { receiptPdf } from '../tests/pdf-fixture';
 
 const origin = 'http://127.0.0.1:4312';
 type Seed = { orgId: string; customerId: string; secondCustomerId: string };
@@ -120,6 +121,7 @@ test('customer receipts, administrator approval and rejection, customer balance 
   await authenticate(context);
   const bookingPath = await createBooking(page, seed.customerId, 'PAYMENT-E2E-001');
   const customerContext = await browser.newContext({ baseURL: origin });
+  const pdfReceipt = await receiptPdf('Browser bank receipt');
   try {
     await authenticate(customerContext, 'customer@example.test');
     const customer = await customerContext.newPage();
@@ -129,20 +131,34 @@ test('customer receipts, administrator approval and rejection, customer balance 
       const receipt = await sharp({ create: { width: 30, height: 30, channels: 3, background: amount === '120.00' ? '#118833' : '#225599' } }).png().toBuffer();
       await customer.getByLabel('Amount paid (GBP)').fill(amount);
       await customer.getByLabel('Payment note').fill(note);
-      await customer.getByLabel('Choose receipt images', { exact: true }).setInputFiles({ name: 'receipt.png', mimeType: 'image/png', buffer: receipt });
+      await customer.getByLabel('Choose receipt files', { exact: true }).setInputFiles([
+        { name: 'receipt.png', mimeType: 'image/png', buffer: receipt },
+        ...(amount === '120.00' ? [{ name: 'bank-receipt.pdf', mimeType: 'application/pdf', buffer: pdfReceipt }] : []),
+      ]);
       await customer.getByRole('button', { name: 'Submit payment for review', exact: true }).click();
       await expect(customer.getByText('Payment submitted for review.', { exact: false })).toBeVisible();
     }
     await submitReceipt('120.00', 'Bank transfer verified by browser workflow');
     await page.reload();
     await page.getByRole('button', { name: /^Review payment / }).click();
-    const receiptPreview = page.getByRole('button', { name: 'Preview receipt 1: receipt.webp', exact: true });
+    const receiptPreview = page.getByRole('button', { name: /^Preview receipt \d+: receipt\.webp$/ });
     await receiptPreview.focus();
     await receiptPreview.press('Enter');
     await expect(page.getByRole('dialog', { name: 'receipt.webp' }).getByRole('img', { name: 'receipt.webp', exact: true })).toBeVisible();
     await page.keyboard.press('Escape');
     await expect(page.getByRole('dialog', { name: 'receipt.webp' })).toHaveCount(0);
     await expect(receiptPreview).toBeFocused();
+    await page.getByRole('button', { name: /^Preview receipt \d+: bank-receipt\.pdf$/ }).click();
+    const pdfDialog = page.getByRole('dialog', { name: 'bank-receipt.pdf', exact: true });
+    await expect(pdfDialog.locator('.textLayer')).toContainText('Browser bank receipt');
+    await pdfDialog.getByRole('button', { name: 'Next page', exact: true }).click();
+    await expect(pdfDialog.locator('.textLayer')).toContainText('Bank confirmation details');
+    const downloaded = page.waitForEvent('download');
+    await pdfDialog.getByRole('link', { name: 'Download copy', exact: true }).click();
+    const pdfDownload = await downloaded;
+    expect(pdfDownload.suggestedFilename()).toBe('bank-receipt.pdf');
+    expect(await readFile((await pdfDownload.path())!)).toEqual(pdfReceipt);
+    await page.keyboard.press('Escape');
     await page.getByRole('button', { name: 'Approve payment', exact: true }).click();
     await expect(page.getByRole('button', { name: 'Confirm approval' })).toBeDisabled();
     await page.getByLabel('I have checked the receipts and verified that the money was received.').check();

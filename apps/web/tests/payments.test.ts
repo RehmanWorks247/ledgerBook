@@ -97,14 +97,16 @@ test("invalid receipt batches and payment dates fail before any network write", 
   } finally { globalThis.fetch = originalFetch; }
 });
 
-test("money validation uses exact minor units at limits and accepts supported image types", () => {
+test("money validation uses exact minor units at limits and accepts PDF and supported image types", () => {
   assert.doesNotThrow(() => validatePaymentDraft({ ...draft(), amount: "1000000000000.00" }, "2026-11-06"));
   assert.throws(() => validatePaymentDraft({ ...draft(), amount: "1000000000000.01" }, "2026-11-06"), /no greater/);
   assert.doesNotThrow(() => validatePaymentDraft({ ...draft(), amount: "0.01" }, "2026-11-06"));
   assert.doesNotThrow(() => validateReceiptFiles([
     new File(["image"], "BANK.JPG", { type: "image/jpeg" }),
     new File(["image"], "BANK.webp", { type: "image/webp" }),
+    new File(["%PDF-1.7"], "BANK.PDF", { type: "application/pdf" }),
   ]));
+  assert.throws(() => validateReceiptFiles([new File(["pdf"], "bank.png", { type: "application/pdf" })]), /choose a PDF/);
 });
 
 test("server validation messages are preserved and a failed submission stays retryable", async () => {

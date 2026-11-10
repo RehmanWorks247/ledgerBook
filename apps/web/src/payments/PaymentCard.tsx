@@ -1,7 +1,7 @@
 import { usePrivateAsset } from "../private-assets";
 import { FilePreviewModal } from "../file-preview/FilePreviewModal";
 import { useEffect, useId, useRef, useState } from "react";
-import { CheckCircle2, Clock3, Expand, ExternalLink, ImageIcon, XCircle } from "lucide-react";
+import { CheckCircle2, Clock3, Expand, ExternalLink, FileText, ImageIcon, XCircle } from "lucide-react";
 import { dateLabel, errorMessage, money, mutate } from "../api";
 import { ErrorNotice } from "../components";
 import { departureLabel } from "../pages/booking-model";
@@ -65,7 +65,7 @@ export function PaymentCard({ payment, organizationId, timeZone, canReview, show
     </dl>
     {current.note && <p className="payment-note"><span>Customer note</span>{current.note}</p>}
     {current.status === "rejected" && <p className="payment-rejection"><strong>Review note</strong>{current.rejection_reason || "This submission was not approved."}{!canReview && <span>Check the details, then submit new receipts above if you need another review.</span>}</p>}
-    <div className="payment-receipts" aria-label="Payment receipt images">{current.receipts.map((receipt, index) => {
+    <div className="payment-receipts" aria-label="Payment receipts">{current.receipts.map((receipt, index) => {
       const url = receiptPath(organizationId, current, receipt.id);
       return <ReceiptImage key={receipt.id} path={url} name={receipt.name} mimeType={receipt.mime_type} size={receipt.size} index={index} bookingReference={current.booking_reference} />;
     })}</div>
@@ -91,7 +91,7 @@ function ReceiptImage({ path, name, mimeType, size, index, bookingReference }: {
   if (error) return <div className="payment-receipt"><ErrorNotice message={`${name}: ${error}`} /></div>;
   if (!url) return <div className="payment-receipt" role="status">Loading {name}…</div>;
   return <><button type="button" className="payment-receipt" style={{ padding: 0, textAlign: "left", background: "var(--surface)", width: "100%" }} aria-label={`Preview receipt ${index + 1}: ${name}`} aria-haspopup="dialog" onClick={() => setPreviewing(true)}>
-    <img src={url} alt={`Receipt ${index + 1} for ${bookingReference}`} loading="lazy" />
-    <span><ImageIcon size={13} /><span>{name}</span><Expand size={13} /></span>
+    {mimeType === "application/pdf" ? <div className="payment-receipt-document"><FileText size={36} /><strong>PDF receipt</strong></div> : <img src={url} alt={`Receipt ${index + 1} for ${bookingReference}`} loading="lazy" />}
+    <span>{mimeType === "application/pdf" ? <FileText size={13} /> : <ImageIcon size={13} />}<span>{name}</span><Expand size={13} /></span>
   </button>{previewing && <FilePreviewModal file={{ name, mimeType, size, url: path, blob }} onClose={() => setPreviewing(false)} />}</>;
 }

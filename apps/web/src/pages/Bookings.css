@@ -65,6 +65,7 @@
 .payment-file-picker input::file-selector-button { border: 1px solid var(--line-strong); border-radius: 6px; padding: 8px 12px; margin-right: 10px; background: var(--surface); color: var(--text); font: inherit; cursor: pointer; }
 .payment-file-picker p { color: var(--muted); font-size: 12px; }
 .payment-previews { display: grid; gap: 8px; }
+.payment-receipt-document { height: 170px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; color: var(--muted); background: var(--surface-subtle); }
 .payment-preview { display: flex; gap: 12px; align-items: center; padding: 8px 12px 8px 8px; border: 1px solid var(--line); border-radius: 7px; }
 .payment-preview img { width: 54px; height: 54px; object-fit: contain; border-radius: 4px; background: var(--surface-subtle); }
 .payment-preview > div { display: grid; gap: 3px; min-width: 0; flex: 1; }

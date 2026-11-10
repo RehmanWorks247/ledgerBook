@@ -14,7 +14,7 @@ export async function queueCustomerPaymentEmail(client:PoolClient, event:Custome
   const details=`Booking: ${event.bookingReference}\nAmount: ${event.currency} ${formatMoney(event.amountMinor,2)}\nPayment date: ${event.paymentDate}`;
   const messages={
     received:{subject:'Your payment receipt has been received',
-      text:event.kind==='received' ? `We received ${event.receiptCount} payment receipt image(s) for ${event.organizationName}.\n\n${details}\n\nSubmitting a receipt does not credit your account. An administrator must verify and approve the payment. We will email you when it is approved or rejected.\n\nView your receipt and current payment status:\n${link}` : ''},
+      text:event.kind==='received' ? `We received ${event.receiptCount} payment receipt file(s) for ${event.organizationName}.\n\n${details}\n\nSubmitting a receipt does not credit your account. An administrator must verify and approve the payment. We will email you when it is approved or rejected.\n\nView your receipt and current payment status:\n${link}` : ''},
     approved:{subject:'Your payment has been approved',
       text:`Your payment has been approved by ${event.organizationName}.\n\n${details}\n\nThe payment has been credited to your account.${event.invoiceId ? ' Your updated booking invoice is attached.' : ''} View your booking:\n${link}`},
     rejected:{subject:'Your payment was not approved',

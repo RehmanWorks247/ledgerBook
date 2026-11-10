@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
-import { ImagePlus, RefreshCw, Upload, X } from "lucide-react";
+import { FileText, ImagePlus, RefreshCw, Upload, X } from "lucide-react";
 import { errorMessage, useResource } from "../api";
 import { Empty, ErrorNotice, TableSkeleton, Pagination } from "../components";
 import { Link } from "../router";
@@ -17,7 +17,7 @@ function FilePreview({ file, index, onRemove, disabled }: { file: File; index: n
     setUrl(objectUrl);
     return () => URL.revokeObjectURL(objectUrl);
   }, [file]);
-  return <div className="payment-preview">{url && <img src={url} alt={`Selected receipt ${index + 1}`} />}<div><strong>{file.name}</strong><small>{Math.ceil(file.size / 1024).toLocaleString()} KB</small></div><button type="button" className="icon-button" onClick={onRemove} disabled={disabled} aria-label={`Remove ${file.name}`}><X size={17} /></button></div>;
+  return <div className="payment-preview">{file.type === "application/pdf" ? <FileText size={40} aria-label="PDF receipt" /> : url && <img src={url} alt={`Selected receipt ${index + 1}`} />}<div><strong>{file.name}</strong><small>{Math.ceil(file.size / 1024).toLocaleString()} KB</small></div><button type="button" className="icon-button" onClick={onRemove} disabled={disabled} aria-label={`Remove ${file.name}`}><X size={17} /></button></div>;
 }
 
 export function ReceiptUploadForm({ organizationId, customerId, bookingId, timeZone, onSubmitted }: {
@@ -60,13 +60,13 @@ export function ReceiptUploadForm({ organizationId, customerId, bookingId, timeZ
   return <form className="payment-upload" onSubmit={submit} aria-busy={busy} aria-label="Upload booking payment receipts">
     <fieldset disabled={busy}>
       <legend><Upload size={18} />Submit a payment for review</legend>
-      <p className="muted">Already made a transfer? Add the amount, payment date and receipt images. Your administrator will check the payment and email you after approval.</p>
+      <p className="muted">Already made a transfer? Add the amount, payment date and receipt files. Your administrator will check the payment and email you after approval.</p>
       <div className="form-columns"><label>Amount paid (GBP)<input required inputMode="decimal" pattern="[0-9]+([.][0-9]{1,2})?" maxLength={20} placeholder="0.00" value={amount} onChange={event => { changed(); setAmount(event.target.value); }} /></label><label>Payment date<input required type="date" max={today} value={paymentDate} onChange={event => { changed(); setPaymentDate(event.target.value); }} /><small>Dates use {timeZone}.</small></label></div>
       <label>Payment note <span className="muted">(optional)</span><textarea rows={2} maxLength={1000} placeholder="Transfer reference or anything your administrator should know" value={note} onChange={event => { changed(); setNote(event.target.value); }} /></label>
-      <div className="payment-file-picker"><label htmlFor={inputId}><ImagePlus size={20} />{files.length ? "Add more receipt images" : "Choose receipt images"}</label><input id={inputId} type="file" multiple accept={RECEIPT_ACCEPT} disabled={busy || files.length >= MAX_RECEIPT_FILES} aria-describedby={helpId} onChange={event => { selectFiles(event.target.files); event.target.value = ""; }} /><p id={helpId}>1–5 JPG, PNG or WebP images · up to 5 MB each. Include only information needed to verify this payment.</p></div>
-      {!!files.length && <div className="payment-previews" aria-label="Selected receipt images">{files.map((file, index) => <FilePreview key={`${index}/${file.name}/${file.lastModified}`} file={file} index={index} disabled={busy} onRemove={() => { changed(); setFiles(previous => previous.filter((_, fileIndex) => fileIndex !== index)); }} />)}</div>}
+      <div className="payment-file-picker"><label htmlFor={inputId}><ImagePlus size={20} />{files.length ? "Add more receipt files" : "Choose receipt files"}</label><input id={inputId} type="file" multiple accept={RECEIPT_ACCEPT} disabled={busy || files.length >= MAX_RECEIPT_FILES} aria-describedby={helpId} onChange={event => { selectFiles(event.target.files); event.target.value = ""; }} /><p id={helpId}>1–5 PDF, JPG, PNG or WebP files · up to 5 MB each. Include only information needed to verify this payment.</p></div>
+      {!!files.length && <div className="payment-previews" aria-label="Selected receipt files">{files.map((file, index) => <FilePreview key={`${index}/${file.name}/${file.lastModified}`} file={file} index={index} disabled={busy} onRemove={() => { changed(); setFiles(previous => previous.filter((_, fileIndex) => fileIndex !== index)); }} />)}</div>}
       <ErrorNotice message={error} />
-      <div className="payment-upload-footer"><span>{files.length} of {MAX_RECEIPT_FILES} images selected</span><button className="button" disabled={busy || !files.length}><Upload size={16} />{busy ? "Uploading receipts…" : "Submit payment for review"}</button></div>
+      <div className="payment-upload-footer"><span>{files.length} of {MAX_RECEIPT_FILES} files selected</span><button className="button" disabled={busy || !files.length}><Upload size={16} />{busy ? "Uploading receipts…" : "Submit payment for review"}</button></div>
     </fieldset>
   </form>;
 }

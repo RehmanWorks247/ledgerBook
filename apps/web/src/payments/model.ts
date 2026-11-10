@@ -3,7 +3,7 @@ import { bookingFilesPath, type BookingFileContext } from "../user-files/remote"
 
 export const MAX_RECEIPT_FILES = 5;
 export const MAX_RECEIPT_BYTES = 5 * 1024 * 1024;
-export const RECEIPT_ACCEPT = "image/jpeg,image/png,image/webp";
+export const RECEIPT_ACCEPT = "image/jpeg,image/png,image/webp,application/pdf";
 export type PaymentStatus = "pending" | "approved" | "rejected";
 export type Payment = {
   id: string;
@@ -34,12 +34,12 @@ export type PaymentDraft = { amount: string; paymentDate: string; note: string; 
 
 export function validateReceiptFiles(files: readonly File[]) {
   if (!files.length || files.length > MAX_RECEIPT_FILES)
-    throw new Error("Attach between 1 and 5 receipt images.");
+    throw new Error("Attach between 1 and 5 receipt files.");
   for (const file of files) {
-    if (!RECEIPT_ACCEPT.split(",").includes(file.type) || !/\.(jpe?g|png|webp)$/i.test(file.name))
-      throw new Error(`${file.name}: choose a JPG, PNG or WebP image.`);
+    if (!RECEIPT_ACCEPT.split(",").includes(file.type) || !(file.type === "application/pdf" ? /\.pdf$/i : /\.(jpe?g|png|webp)$/i).test(file.name))
+      throw new Error(`${file.name}: choose a PDF, JPG, PNG or WebP file.`);
     if (file.size === 0 || file.size > MAX_RECEIPT_BYTES)
-      throw new Error(`${file.name}: images must be nonempty and no larger than 5 MB.`);
+      throw new Error(`${file.name}: files must be nonempty and no larger than 5 MB.`);
   }
 }
 

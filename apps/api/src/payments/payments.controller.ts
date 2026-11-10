@@ -41,8 +41,8 @@ export class PaymentsController {
   @UseInterceptors(FilesInterceptor('receipts',MAX_RECEIPTS,{
     limits:{fileSize:MAX_RECEIPT_BYTES,files:MAX_RECEIPTS,fields:4,fieldSize:4096,parts:MAX_RECEIPTS+4,fieldNameSize:100},
     fileFilter:(_req,file,callback)=>{
-      if(!['image/jpeg','image/png','image/webp'].includes(file.mimetype)) {
-        callback(new BadRequestException('Receipts must be JPEG, PNG, or WebP images.'),false);
+      if(!['image/jpeg','image/png','image/webp','application/pdf'].includes(file.mimetype)) {
+        callback(new BadRequestException('Receipts must be PDF, JPEG, PNG, or WebP files.'),false);
       } else callback(null,true);
     },
   }))
