@@ -83,7 +83,6 @@ test("invalid receipt batches and payment dates fail before any network write", 
     const uploader = new PaymentUploader(context);
     const original = draft();
     for (const changed of [
-      { ...original, files: [] },
       { ...original, files: Array.from({ length: 6 }, () => file()) },
       { ...original, files: [new File(["svg"], "receipt.svg", { type: "image/svg+xml" })] },
       { ...original, files: [new File([new Uint8Array(MAX_RECEIPT_BYTES + 1)], "large.png", { type: "image/png" })] },
@@ -98,6 +97,7 @@ test("invalid receipt batches and payment dates fail before any network write", 
 });
 
 test("money validation uses exact minor units at limits and accepts PDF and supported image types", () => {
+  assert.doesNotThrow(() => validatePaymentDraft({ ...draft(), files: [] }, "2026-11-06"));
   assert.doesNotThrow(() => validatePaymentDraft({ ...draft(), amount: "1000000000000.00" }, "2026-11-06"));
   assert.throws(() => validatePaymentDraft({ ...draft(), amount: "1000000000000.01" }, "2026-11-06"), /no greater/);
   assert.doesNotThrow(() => validatePaymentDraft({ ...draft(), amount: "0.01" }, "2026-11-06"));
@@ -107,6 +107,58 @@ test("money validation uses exact minor units at limits and accepts PDF and supp
     new File(["%PDF-1.7"], "BANK.PDF", { type: "application/pdf" }),
   ]));
   assert.throws(() => validateReceiptFiles([new File(["pdf"], "bank.png", { type: "application/pdf" })]), /choose a PDF/);
+});
+
+test("a payment without attachments is submitted for review using the same authenticated flow", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (_input, options = {}) => {
+    assert.equal(options.method, "POST");
+    const body = options.body as FormData;
+    assert.equal(body.get("amount"), "125.50");
+    assert.deepEqual(body.getAll("receipts"), []);
+    return Response.json({ ...payment, receipts: [] });
+  };
+  try {
+    const result = await new PaymentUploader(context).submit({ ...draft(), files: [] }, "2026-11-06");
+    assert.equal(result.status, "pending");
+    assert.deepEqual(result.receipts, []);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test("account payments submit without a booking and keep receipts scoped to the customer account", async () => {
+  const originalFetch = globalThis.fetch;
+  const account = { organizationId: context.organizationId, customerId: context.customerId };
+  const accountPath = `/organizations/${context.organizationId}/customers/${context.customerId}/payments`;
+  const accountPayment: Payment = { ...payment, booking_id: null, booking_reference: null };
+  const keys: FormDataEntryValue[] = [];
+  let loseResponse = true;
+  globalThis.fetch = async (input, options = {}) => {
+    assert.equal(input, `/api${accountPath}`);
+    assert.equal(options.method, "POST");
+    assert.equal(options.credentials, "include");
+    assert.equal(new Headers(options.headers).get("X-CSRF-Protection"), "1");
+    const body = options.body as FormData;
+    assert.equal(body.has("booking_id"), false);
+    assert.equal(body.get("amount"), "125.50");
+    keys.push(body.get("idempotency_key")!);
+    if (loseResponse) { loseResponse = false; throw new Error("Response unavailable"); }
+    return Response.json(accountPayment);
+  };
+  try {
+    assert.equal(paymentsPath(account), accountPath);
+    assert.equal(paymentsPath({ ...account, bookingId: null }), accountPath);
+    const uploader = new PaymentUploader(account);
+    const original = draft();
+    await assert.rejects(uploader.submit(original, "2026-11-06"), /Response unavailable/);
+    const result = await uploader.submit(original, "2026-11-06");
+    assert.equal(result.booking_id, null);
+    assert.equal(result.status, "pending");
+    assert.equal(keys[0], keys[1]);
+    assert.equal(receiptPath(context.organizationId, result, payment.receipts[0].id), `/api${accountPath}/${payment.id}/receipts/${payment.receipts[0].id}`);
+    assert.throws(() => paymentsPath({ ...account, customerId: "../other-account" }), /Select a customer account/);
+    assert.throws(() => paymentsPath({ ...account, organizationId: "https://untrusted.test" }), /Select a customer account/);
+    assert.throws(() => receiptPath(context.organizationId, result, "../foreign-receipt"), /invalid/);
+  } finally { globalThis.fetch = originalFetch; }
 });
 
 test("server validation messages are preserved and a failed submission stays retryable", async () => {
@@ -133,9 +185,12 @@ test("payment cards expose review actions only to admins and distinguish pending
   assert.match(customer, /Pending review/);
   assert.match(customer, /has not changed the account balance/);
   assert.doesNotMatch(customer, /Approve payment|Reject submission|Confirm approval/);
+  assert.doesNotMatch(customer, /Edit payment|Move to trash|Restore payment|Delete permanently/);
   const admin = render(true);
   assert.match(admin, /Approve payment/);
   assert.match(admin, /Reject submission/);
+  assert.match(admin, /Edit payment/);
+  assert.match(admin, /Move to trash/);
   assert.match(admin, /Aster Studio/);
   assert.match(admin, /TRIP-2026/);
   assert.match(admin, /GBP 125.50/);
@@ -150,6 +205,11 @@ test("payment cards expose review actions only to admins and distinguish pending
   assert.doesNotMatch(approved, /Approve payment|Reject submission|has not changed/);
   const rejected = render(false, { ...payment, status: "rejected", rejection_reason: "The transfer reference is incomplete." });
   assert.match(rejected, /transfer reference is incomplete/);
-  assert.match(rejected, /submit new receipts/);
+  assert.match(rejected, /submit the corrected payment/);
   assert.throws(() => receiptPath(context.organizationId, payment, "https://outside.test"), /invalid/);
+  const account = render(true, { ...payment, booking_id: null, booking_reference: null });
+  assert.match(account, /Account payment/);
+  assert.match(account, /Approve payment/);
+  assert.match(account, /Edit payment/);
+  assert.doesNotMatch(account, /Open booking|\/bookings\/null/);
 });

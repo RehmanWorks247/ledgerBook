@@ -1,6 +1,16 @@
-# Booking payment receipts
+# Account and booking payment receipts
 
-Customers can attach one to five PDFs or images to a payment submission inside their own booking. A submission records the amount in GBP, the customer's payment date, an optional note, and the server upload timestamp. It starts **pending**, queues a customer acknowledgment and administrator review alerts, and does not change the ledger. An active organization administrator verifies the payment externally and either approves it or rejects it with a reason. Approval atomically posts exactly one negative payment entry to the customer's ledger, records the reviewer and review time, and queues an approval email to the customer. Rejection preserves the evidence and queues the reason and booking link for the submitting customer; corrected evidence can be submitted as a new submission.
+Customers submit payments from **My Account**, independently of any booking, with or without attachments. They enter the amount in GBP, the actual payment date and an optional note; up to five PDFs or images can be attached. It starts **pending**, queues a customer acknowledgment and administrator review alerts, and does not change the ledger. An active organization administrator verifies the payment externally and either approves it or rejects it with a reason. Approval atomically posts exactly one negative payment entry to the customer's ledger, reducing the whole account's outstanding balance across all bookings. It records the reviewer and review time and queues an approval email to the customer. Rejection preserves any evidence and queues the reason and My Account link; corrected details can be submitted as a new submission.
+
+The **Make a payment** action appears at the top of My Account when the account has an outstanding balance. It opens the payment-submission form; it does not process a card or bank transfer. Booking cards omit amounts, and consumer booking details contain document folders. Account payments have no booking allocation and do not rewrite individual booking invoices or staff payment allocations. My Account keeps previous booking-linked payment history accessible. Scheduled reminders are checked against the total account balance before queueing and again before sending; settled accounts receive no new payment reminders.
+
+Administrators use **Payment history → Record payment** to enter confirmed money
+already received, with its actual date and an optional note. **Use existing
+payment** assigns an unassigned payment from the same customer's account without
+posting it again. Both actions update the booking balance, invoice and outstanding
+reminders. Past and current payments share the same history; reminders have no
+paid checkbox and cannot change payment records. Staff-recorded payments do not
+queue a customer email. Customer submissions retain their separate review flow.
 
 ## API contract
 
@@ -8,16 +18,30 @@ All paths below have `/api/organizations/:orgId` as their prefix. All require a 
 
 | Method | Path | Input / behavior |
 | --- | --- | --- |
-| GET | `/customers/:customerId/bookings/:bookingId/payments` | Customer owner or admin; returns `{items,time_zone}`. |
-| POST | `/customers/:customerId/bookings/:bookingId/payments` | Customer owner only. Multipart fields `amount` (positive GBP decimal text), `payment_date` (`YYYY-MM-DD`, not after today in `BUSINESS_TIME_ZONE`), optional `note` (1,000 characters maximum), and `idempotency_key` (UUID). Attach one to five files in repeated `receipts` fields. |
+| GET | `/customers/:customerId/payments` | Customer owner or admin; returns `{items,time_zone}` with account payments and historical booking-linked payments. `deleted=deleted` is admin-only. |
+| POST | `/customers/:customerId/payments` | Customer owner only; same multipart fields and optional receipts as below. Creates a payment with `booking_id=null`, requiring no booking. |
+| GET | `/customers/:customerId/payments/:paymentId/receipts/:receiptId` | Owner or admin; protected receipt for an account payment. Supports `download=1`. |
+| POST | `/customers/:customerId/payments/:paymentId/approve` | Admin only, `{}`. Credits the whole customer ledger once; creates no booking allocation or invoice. |
+| POST | `/customers/:customerId/payments/:paymentId/reject` | Admin only, `{reason}`. Rejects account evidence without posting money. |
+| PATCH | `/customers/:customerId/payments/:paymentId` | Admin only; same versioned correction body as booking history below. |
+| POST | `/customers/:customerId/payments/:paymentId/{delete,restore,permanent-delete}` | Admin only; same versioned lifecycle bodies and compensating ledger behavior as booking history below. |
+| GET | `/customers/:customerId/bookings/:bookingId/payments` | Customer owner or admin; returns `{items,time_zone}`. `deleted=active` is the default; admins can request `deleted=deleted` to see trash. |
+| POST | `/customers/:customerId/bookings/:bookingId/payments` | Customer owner only. Multipart fields `amount` (positive GBP decimal text), `payment_date` (`YYYY-MM-DD`, not after today in `BUSINESS_TIME_ZONE`), optional `note` (1,000 characters maximum), and `idempotency_key` (UUID). Optional attachments: zero to five files in repeated `receipts` fields. |
+| POST | `/customers/:customerId/bookings/:bookingId/payments/record` | Admin only. JSON `{amount,payment_date,note?,idempotency_key}` records a confirmed GBP payment exactly once. |
+| POST | `/customers/:customerId/bookings/:bookingId/payments/link` | Admin only. JSON `{payment_entry_id,idempotency_key}` assigns an available whole customer payment without posting another ledger entry. |
 | GET | `/customers/:customerId/bookings/:bookingId/payments/:paymentId/receipts/:receiptId` | Customer owner or admin; private image or PDF response. Optional `?download=1` forces download. |
 | POST | `/customers/:customerId/bookings/:bookingId/payments/:paymentId/approve` | Admin only, empty JSON object. Approves the submitted amount/date and posts one ledger payment. Repeated approval returns the existing approval. |
 | POST | `/customers/:customerId/bookings/:bookingId/payments/:paymentId/reject` | Admin only, `{reason}`. The reason is required, trimmed, and limited to 1,000 characters. An identical retry returns the existing rejection. |
+| PATCH | `/customers/:customerId/bookings/:bookingId/payments/:paymentId` | Admin only, `{version,amount,payment_date,note,reason}`. Corrects the selected payment with an audit trail. |
+| POST | `/customers/:customerId/bookings/:bookingId/payments/:paymentId/delete` | Admin only, `{version,reason}`. Moves a payment to trash and reverses an active approved credit. |
+| POST | `/customers/:customerId/bookings/:bookingId/payments/:paymentId/restore` | Admin only, `{version,reason}`. Restores a trashed payment and its applicable credit once. |
+| POST | `/customers/:customerId/bookings/:bookingId/payments/:paymentId/permanent-delete` | Admin only, `{version,reason,confirmation:"DELETE"}`. Removes a trashed payment and attachments permanently, retaining ledger and audit history. |
 | GET | `/payment-submissions?status=pending` | Admin only. Searchable, paginated queue; returns `{items,time_zone,total,page,page_size,total_pages,counts}`. See filters below. |
 
 Review queue filters can be combined:
 
 - `status`: `pending` (default), `approved`, `rejected`, or `all`.
+- `deleted`: `active` (default) or `deleted` for administrator trash.
 - `q`: up to 200 characters. Case-insensitive words match payment/customer/booking IDs, customer name/code/email, booking reference, payment and rejection notes, status, GBP amount, ledger entry ID, receipt filenames, and payment/submission/review dates. `%` and `_` are literal characters. Dates accept ISO, `DD/MM/YYYY`, and displayed dates such as `6 Nov 2026`; timestamp searches use the returned business timezone.
 - `from` / `to`: inclusive payment-date boundaries in `YYYY-MM-DD`. Reversed or invalid ranges return HTTP 400.
 - `page`: positive integer (default 1, maximum 1,000,000). `page_size`: 1–100 (default 25). Pages beyond the available results resolve to the last page; an empty queue returns page 1 and `total_pages: 1`.
@@ -25,30 +49,60 @@ Review queue filters can be combined:
 
 `total` counts all matching submissions for the selected status, including results beyond the current page. `counts` contains `pending`, `approved`, `rejected`, and `all` totals after search/date filtering but before the status filter. Unknown or repeated query parameters return HTTP 400. Customer authorization and organization boundaries apply before any queue data is returned.
 
-Payment responses contain `id`, `customer_id`, `customer_name`, `customer_code`, `booking_id`, `booking_reference`, `amount_minor` (integer string), `currency`, `payment_date`, `note`, `status`, `submitted_at`, `reviewed_at`, `reviewed_by`, `rejection_reason`, `ledger_entry_id`, and `receipts`. Each receipt contains `id`, `name`, `mime_type`, `size`, and an authenticated `url`. Internal request hashes and original image bytes are never returned; PDFs retain their original bytes.
+Payment responses contain `id`, `customer_id`, `customer_name`, `customer_code`, `booking_id`, `booking_reference`, `amount_minor` (integer string), `currency`, `payment_date`, `note`, `status`, `submitted_at`, `reviewed_at`, `reviewed_by`, `rejection_reason`, `ledger_entry_id`, and `receipts`. Both booking fields are null for account payments. Organization review includes both kinds. Account mutation and receipt paths address only null-booking payments; historical booking payments retain their original paths. Each receipt contains `id`, `name`, `mime_type`, `size`, and an authenticated `url`. Internal request hashes and original image bytes are never returned; PDFs retain their original bytes.
 
-Use one idempotency key per submission attempt. Retain the key and the original files for retries after timeouts; a successful retry does not create another payment or email. Reusing the key with different fields or evidence returns a conflict. The same original receipt file cannot be attached twice, or reused in another pending/approved submission for the same booking. Evidence from a rejected submission can be resubmitted with a new key.
+Use one idempotency key per submission attempt. Retain the key and the original files for retries after timeouts; a successful retry does not create another payment or email. Reusing the key with different fields, scope or evidence returns a conflict. The same original receipt file cannot be attached twice, reused in another pending/approved submission for the same booking, or reused between account payments and any of that customer's booking payments. Evidence from a rejected submission can be resubmitted with a new key.
 
 ## Storage, security, and limits
 
 - PDF, JPEG, PNG and WebP; maximum 5 MiB per file and five files per request. Multipart parsing rejects excess files, fields and parts. Authorization and rate limiting run before multipart buffering.
 - Sharp fully decodes each image, checks its actual image format against its declared MIME type, rejects malformed and animated images, and limits input to 20 million pixels and 10,000 pixels on either dimension. Images are processed sequentially. They are auto-oriented and re-encoded to lossless WebP without metadata; normalized files must also fit 5 MiB. Original-byte SHA-256 hashes support duplicate detection.
 - Receipts are private PostgreSQL `bytea` records. Submission data, images, audits and notification intents commit in one transaction. There are no public filesystem paths or unsigned storage URLs.
-- A booking is limited to ten pending submissions, 100 total submissions, and 100 MiB of normalized receipt storage. Uploads are limited to 30 requests per customer login per hour; review actions to 120 per admin login per hour. A reverse proxy should additionally bound concurrent requests and slow-client upload duration for the deployment's available memory.
-- Customer, booking and submission locks serialize reviews and uploads. Tenant-scoped foreign keys, immutable evidence/review triggers, and a unique ledger linkage protect financial history. Admin access and active customer status are rechecked inside the write transaction. Archived accounts cannot accept submissions or reviews. Reversed booking charges cannot accept new submissions or approvals.
-- Approval is a historical decision about the evidence. A subsequent normal ledger reversal retains that decision and receipt history; it does not reopen the submission or authorize another approval. Use normal ledger correction procedures for accounting mistakes.
+- Independent account submissions and each legacy booking scope are limited to ten pending submissions, 100 total submissions, and 100 MiB of normalized receipt storage. Uploads are limited to 30 requests per customer login per hour; review actions to 120 per admin login per hour. A reverse proxy should additionally bound concurrent requests and slow-client upload duration for the deployment's available memory.
+- Customer, booking and submission locks serialize reviews, uploads and corrections. Tenant-scoped foreign keys, protected evidence/review triggers, and a unique ledger linkage protect financial history. Admin access and active customer status are rechecked inside write transactions. Archived accounts cannot accept submissions or reviews. Reversed booking charges cannot accept new submissions or approvals.
+- Approval is a historical decision about the payment. A subsequent normal ledger reversal retains that decision and any receipt history; it does not reopen the submission or authorize another approval. Administrators can correct payment history using the actions below.
 - This is manual verification of an externally completed payment; receipt submission never moves money at a payment provider. Administrators must compare the amount, date and recipient with their actual transaction records before approving.
+
+## Administrator corrections and trash
+
+Admins can edit a payment's amount, actual payment date and note from payment
+details. A reason is required. Approved amount/date changes reverse the old
+ledger entry and post a replacement in one transaction; note-only changes do
+not post money. Original submission identity, timestamps, receipt bytes and
+before/after audit records are retained. An amount correction releases any
+installment link that no longer matches, preserving the scheduled amount.
+
+**Move to trash** hides the record from ordinary history and customer access.
+If it was an active approved payment, the same transaction reverses its credit
+and refreshes the booking balance and invoice. Pending and rejected submissions
+have no ledger credit to reverse. Admins can still inspect trashed attachments.
+**Restore** returns the payment to its prior review state and reinstates only
+credit removed by the trash operation. Payments already reversed before being
+trashed remain reversed after restoration.
+
+**Delete permanently** is available only in trash and requires the literal
+confirmation `DELETE` plus a reason. It removes the payment item and receipt
+bytes; immutable ledger entries, invoice versions and the audit trail remain.
+The deleted item cannot subsequently be restored. Existing submission retry keys
+remain protected against recreating a purged payment.
+
+Responses include `version`, `deleted_at` and `deletion_reason`. Management
+requests require the current version; approval and rejection also advance it.
+A stale edit returns 409, and the dialog offers to refresh the latest history.
+These actions are administrator-only in both UI and API. The local
+[payment-history contract](../postman/contracts/payment-history.openapi.json)
+contains request and response schemas.
 
 ## Notifications and operations
 
 | Event | Recipient | Message |
 | --- | --- | --- |
-| Receipt submitted | Each active organization administrator | Customer, booking, amount, payment date, upload time and a link to check the current review status. |
-| Receipt received | The customer who submitted it | Acknowledgment that the evidence was received for review; it does not confirm payment approval or account credit. |
-| Payment approved | Customer account | Approved amount/date and an authenticated booking link. |
-| Payment rejected | The customer who submitted it | Rejection reason and an authenticated booking link. Cancellation of a booking also notifies customers about pending submissions rejected by that cancellation. |
+| Payment submitted | Each active organization administrator | Customer, optional booking, amount, payment date, submission time and a link to check the current review status. Independent account submissions link to the review queue. |
+| Payment received | The customer who submitted it | Acknowledgment that the payment details and any attachments were received for review; it does not confirm payment approval or account credit. |
+| Payment approved | Customer account | Approved amount/date and an authenticated My Account link. |
+| Payment rejected | The customer who submitted it | Rejection reason and an authenticated My Account link. Cancellation of a booking also notifies customers about pending submissions rejected by that cancellation. |
 
-Emails link to the authenticated booking. Receipt images remain private in the application and are not embedded or attached to email. Notification intents commit alongside the business change and use unique event keys; replaying the same submission or decision does not create extra messages. Administrator alerts that have never been attempted are cancelled once the submission is reviewed. A previously attempted alert retains its original body and key on retry, describes the submission as a historical event, and directs the administrator to check its current status.
+Customer payment emails link to My Account. Receipt images remain private in the application and are not embedded or attached to email. Booking-linked approvals retain their invoice attachment; independent account approvals have no booking invoice attachment. Notification intents commit alongside the business change and use unique event keys; replaying the same submission or decision does not create extra messages. Administrator alerts that have never been attempted are cancelled once the submission is reviewed. A previously attempted alert retains its original body and key on retry, describes the submission as a historical event, and directs the administrator to check its current status.
 
 The background worker polls every five seconds and sends up to ten due messages per batch. Each claim holds a two-minute durable lease; another instance can reclaim work after that lease expires if a process stops. A failed request retries after 30 seconds, doubling the delay up to one hour. Automatic provider attempts stop after 12 sends or 23 hours from the first attempt, whichever limit is reached first. Failed records remain visible for investigation. Disabled administrator access, unavailable customer accounts and organization-scoped recipient suppressions can cancel queued sends; see [notification behavior and activation](notifications.md).
 
@@ -56,7 +110,7 @@ The admin-only `GET /api/organizations/:orgId/payment-email-status` returns `que
 
 Production uses a configured verified Resend sender and a stable `Idempotency-Key` per outbox event on every attempt. The worker stops automatic retries before the provider's documented 24-hour deduplication window expires. Investigate the provider's acceptance record before manually replaying an ambiguous failed send; the application does not reset its key automatically. Database approval and ledger posting still occur only once. **Sent** means provider acceptance. **Delivered** requires a verified delivery event and still does not prove inbox placement or that the message was read. In local `EMAIL_MODE=file`, application emails are private `.eml` files in `.local/mail` (or `MAIL_DIRECTORY`), with deterministic filenames preventing repeated writes for the same event. These files are **not sent to real inboxes**; Clerk account emails use a separate provider setting.
 
-Run `npm run db:migrate` before starting a deployed API with this feature. Apply all current migrations in filename order through `017_payment_email_queue_index.sql`, including `006_booking_payments.sql` for evidence/reviews, `007_payment_email_outbox.sql` for durable notification intents and `015_reminders_delivery.sql` for delivery tracking and suppression. Migration 017 keeps terminal failed/cancelled rows out of the active queue index. The migration runner applies the set transactionally. Local startup applies migrations automatically. Include receipt bytes and outbox records in PostgreSQL backup, retention, disk-capacity and restore plans. Evidence and terminal review history are intentionally retained rather than offering an unaudited delete operation; the per-booking 100 MiB receipt quota does not replace monitoring total database storage across all customers.
+Run `npm run db:migrate` before starting a deployed API with this feature. Apply all current migrations in filename order, including `025_booking_paid_instalments.sql`, `026_payment_history_management.sql` and `028_account_payments.sql`, and reapply `deploy/runtime-grants.sql` with the production runtime role. Migration 026 adds lifecycle metadata and checked correction permissions without rewriting existing amounts, receipts or ledger entries. It also makes attachments optional while keeping submitted evidence protected. Migration 028 makes booking associations optional and adds customer-scoped foreign keys and receipt scope validation, preserving existing financial records and receipt bytes. It reuses the checked payment history routine for account corrections. The migration runner applies the set transactionally. Local startup applies migrations automatically. Include receipt bytes and outbox records in PostgreSQL backup, retention, disk-capacity and restore plans. Receipt quotas do not replace monitoring total database storage across all customers.
 
 ## Verification
 

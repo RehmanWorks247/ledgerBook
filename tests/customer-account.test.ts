@@ -70,16 +70,16 @@ describe('customer account lifetime totals', () => {
     await management.cancel(seed.admin, seed.customerId, second.id, {
       confirmation: second.reference, effective_date, expected_version: 1, reason: 'Cancelled trip', idempotency_key: randomUUID(),
     });
-    await totals('60000', '20000', '40000');
+    await totals('60000', '12500', '47500');
     await ledger.post(seed.admin, seed.customerId, {
       kind: 'reversal', reversal_of: approvedFirst.ledger_entry_id!, effective_date,
       description: 'Payment returned', idempotency_key: randomUUID(),
     });
-    await totals('60000', '7500', '52500');
+    await totals('60000', '0', '60000');
     await management.cancel(seed.admin, seed.customerId, first.id, {
       confirmation: first.reference, effective_date, expected_version: 2, reason: 'Cancelled trip', idempotency_key: randomUUID(),
     });
-    await totals('0', '7500', '-7500');
+    await totals('0', '0', '0');
     await assert.rejects(ledger.statement(seed.customerMember, seed.secondCustomerId), /not found/);
   });
 });

@@ -23,6 +23,18 @@ export class CompaniesController {
     return this.companies.create(request.user.id, orgId, input);
   }
 
+  @Get('export')
+  async export(@Req() request: AuthenticatedRequest, @Param('orgId', ParseUUIDPipe) orgId: string, @Query() query: unknown) {
+    await this.rates.consume('company-read', request.user.id, 240, 60);
+    return this.companies.export(request.user.id, orgId, query);
+  }
+
+  @Patch('paid')
+  async updatePaid(@Req() request: AuthenticatedRequest, @Param('orgId', ParseUUIDPipe) orgId: string, @Body() input: unknown) {
+    await this.rates.consume('company-write', request.user.id, 240, 3600);
+    return this.companies.updatePaid(request.user.id, orgId, input);
+  }
+
   @Patch(':id')
   async update(@Req() request: AuthenticatedRequest, @Param('orgId', ParseUUIDPipe) orgId: string, @Param('id', ParseUUIDPipe) id: string, @Body() input: unknown) {
     await this.rates.consume('company-write', request.user.id, 240, 3600);

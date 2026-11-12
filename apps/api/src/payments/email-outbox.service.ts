@@ -74,7 +74,7 @@ export class PaymentEmailOutbox implements OnApplicationBootstrap, BeforeApplica
     const result=await client.query<{status:string;submitted_by:string;customer_id:string;email:string;customer_status:string}>(
       `SELECT p.status,p.submitted_by,p.customer_id,c.email,c.status AS customer_status FROM booking_payments p
        JOIN customers c ON c.id=p.customer_id AND c.organization_id=p.organization_id
-       WHERE p.id=$1 AND p.organization_id=$2 FOR SHARE OF p`,[paymentId,email.organization_id]);
+       WHERE p.id=$1 AND p.organization_id=$2 AND p.deleted_at IS NULL FOR SHARE OF p`,[paymentId,email.organization_id]);
     const payment=result.rows[0];
     if(!payment || payment.customer_status!=='active') return 'Payment notification account is no longer active.';
     if(kind==='payment-submitted') {
@@ -109,7 +109,7 @@ export class PaymentEmailOutbox implements OnApplicationBootstrap, BeforeApplica
       WHERE i.id=$1 AND i.organization_id=$2 AND c.email=$3 AND c.status='active'
         AND (($4='booking-created' AND i.booking_id=$5::uuid) OR ($4='payment-approved' AND EXISTS (
           SELECT 1 FROM booking_payments p WHERE p.id=$5::uuid AND p.organization_id=i.organization_id
-            AND p.customer_id=i.customer_id AND p.booking_id=i.booking_id)))`,
+            AND p.customer_id=i.customer_id AND p.booking_id=i.booking_id AND p.deleted_at IS NULL)))`,
     [email.invoice_id,email.organization_id,email.recipient,kind,sourceId]);
     const saved=invoice.rows[0];
     return saved ? {filename:saved.filename,content:Buffer.from(saved.pdf),contentType:'application/pdf'} : null;

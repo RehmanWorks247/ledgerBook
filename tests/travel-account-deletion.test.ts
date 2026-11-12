@@ -68,7 +68,8 @@ describe('merged travel records and permanent account deletion', () => {
     assert.equal((await payments.list(seed.customerMember,seed.customerId,trip.id)).items.length,2);
     assert.equal((await context.db.query('SELECT amount_minor::text AS amount,created_by FROM ledger_entries WHERE id=$1',[approved.ledger_entry_id])).rows[0].amount,'-2500');
     await assert.rejects(context.db.query('UPDATE booking_payments SET reviewed_by=$1 WHERE id=$2',[seed.adminId,approved.id]),/immutable/);
-    await assert.rejects(context.db.query('DELETE FROM booking_payment_receipts WHERE payment_id=$1',[approved.id]),/cannot be edited or deleted/);
+    await assert.rejects(context.db.query('DELETE FROM booking_payment_receipts WHERE payment_id=$1',[approved.id]),
+      {code:'23514',message:/immutable outside checked administrator corrections/});
     // Existing bookings remain repairable after their creator has been removed.
     await context.db.query('SELECT ensure_booking_folders($1)',[trip.id]);
     assert.equal((await context.db.query('SELECT * FROM account_purge_context')).rowCount,0);

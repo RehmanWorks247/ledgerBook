@@ -22,7 +22,15 @@ Automatic reminders default to **disabled** in every organization. Enabling them
 
 Time zone names are canonicalized to an IANA zone; bare numeric offsets are rejected to keep PostgreSQL and browser scheduling consistent. The settings form submits the version it loaded and rejects a conflicting update from another administrator while preserving unsaved input. The customer preference checkbox updates immediately and restores its previous value if saving fails.
 
-The scheduler uses the same allocation calculation as the dashboard: payments settle receivables by due date and scheduled arrears never exceed the account balance. The worker checks the balance again immediately before sending. Settled balances, cancelled bookings, archived accounts, customer opt-outs, disabled reminder settings and suppressed addresses cancel queued reminders. Booking schedule changes preserve sent reminder history and cancel unsent notices tied to replaced instalments. Account deletion cascades reminder records and removes their audit history. The customer's lock coordinates the final check with payment settlement and account deletion. Receipt-review notification recipients are checked again at send time so a disabled administrator does not receive queued customer information.
+The scheduler uses the same allocation calculation as the dashboard. For simple
+payment reminders, only confirmed payments belonging to that booking reduce its
+earliest outstanding reminders. Payments already accounted for when saving the
+plan are not deducted twice, and reminders never exceed the booking's remaining
+balance. Unassigned customer credit and payments for another booking do not
+silently settle these reminders. Older installment plans retain their historical
+account allocation until explicitly converted in the booking editor.
+
+The worker checks the balance again immediately before sending. Settled balances, cancelled bookings, archived accounts, customer opt-outs, disabled reminder settings and suppressed addresses cancel queued reminders. Booking schedule changes preserve sent reminder history and cancel unsent notices tied to replaced instalments. Account deletion cascades reminder records and removes their audit history. The customer's lock coordinates the final check with payment settlement and account deletion. Receipt-review notification recipients are checked again at send time so a disabled administrator does not receive queued customer information.
 
 Leases, retries, and scheduling claims live in PostgreSQL and can be used by multiple API instances. A reminder scan runs every 30 seconds, handles up to 20 due organizations, and each worker sends up to 20 queued messages per pass. Payment notifications retain their existing five-second worker. Network requests time out after ten seconds. Retries keep the same provider idempotency key and unchanged message body, with backoff up to one hour. Automatic attempts stop after 12 attempts or 23 hours from the first attempt, before Resend's documented 24-hour deduplication window ends. A failed row stays visible for investigation; the application does not blindly replay an old ambiguous send with a new key.
 

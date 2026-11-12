@@ -104,7 +104,7 @@ describe('booking edits and cancellations preserve financial history', () => {
     assert.deepEqual(history.find(row=>row.id===queued),{id:queued,instalment_id:null,state:'cancelled',delivery_status:'cancelled'});
   });
 
-  it('cancels independently, revokes files and new payments, and preserves approved payments and receipts as credit',async()=>{
+  it('cancels independently, revokes files and new payments, and preserves payment audit records',async()=>{
     const original=await create(),id=original.id as string;
     const folder=(await bookings.files(seed.admin,seed.customerId,id)).items.find(item=>item.serviceKey==='makkah')!;
     const document=await bookings.upload(seed.admin,seed.customerId,id,folder.id,'voucher.txt',randomUUID(),Buffer.from('private booking voucher'));
@@ -114,7 +114,7 @@ describe('booking edits and cancellations preserve financial history', () => {
     const request=cancelInput(original.reference);
     await assert.rejects(management.cancel(seed.admin,seed.customerId,id,{...request,confirmation:'wrong'}),/exact booking reference/);
     const cancelled=await management.cancel(seed.admin,seed.customerId,id,request);
-    assert.equal(cancelled.cancelled,true); assert.equal(cancelled.retained_payments_minor,'4000');
+    assert.equal(cancelled.cancelled,true); assert.equal(cancelled.retained_payments_minor,'0'); assert.equal(cancelled.excluded_payments_minor,'4000');
     assert.deepEqual(await management.cancel(seed.admin,seed.customerId,id,request),cancelled);
     assert.equal((await bookings.list(seed.admin,seed.customerId)).items.some(item=>item.id===id),false);
     await assert.rejects(bookings.get(seed.admin,seed.customerId,id),/not found/);

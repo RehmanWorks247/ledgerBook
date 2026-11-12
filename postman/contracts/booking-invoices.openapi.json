@@ -357,7 +357,10 @@
             "format": "uuid"
           },
           "invoice_number": {
-            "type": "string"
+            "type": "string",
+            "pattern": "^Inv-up[0-9]{3,}$",
+            "example": "Inv-up001",
+            "description": "Unique increasing invoice number; each issued version receives its own number."
           },
           "version": {
             "type": "integer",
@@ -396,7 +399,8 @@
             ]
           },
           "filename": {
-            "type": "string"
+            "type": "string",
+            "example": "Inv-up001.pdf"
           },
           "total_minor": {
             "type": "string",

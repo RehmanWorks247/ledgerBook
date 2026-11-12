@@ -29,7 +29,7 @@ async function downloadInvoice(page: Page, history: Locator, invoice: Invoice) {
   return bytes;
 }
 
-test('booking invoices download, update after approval, and remain accessible after cancellation', async ({ page, context, browser }) => {
+test('admin invoices remain available after cancellation while customer bookings contain only folders', async ({ page, context, browser }) => {
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
   await authenticate(context, 'admin@example.test');
@@ -59,6 +59,14 @@ test('booking invoices download, update after approval, and remain accessible af
     const originalHistory = await context.request.get(`${bookingBase}/invoices`);
     expect(originalHistory.status(), await originalHistory.text()).toBe(200);
     const initial = (await originalHistory.json()).invoices[0] as Invoice;
+    expect(initial.invoice_number).toMatch(/^Inv-up\d{3,}$/);
+    await invoiceHistory.getByRole('button', { name: `Preview ${initial.invoice_number} version 1`, exact: true }).click();
+    const preview = page.getByRole('dialog', { name: initial.filename, exact: true });
+    await expect(preview).toBeVisible();
+    await expect(preview.locator('canvas')).toBeVisible();
+    await expect(preview).toContainText(initial.invoice_number);
+    await preview.getByRole('button', { name: 'Close preview', exact: true }).click();
+    await expect(preview).toHaveCount(0);
     const originalPdf = await downloadInvoice(page, invoiceHistory, initial);
 
     await authenticate(customerContext, 'customer@example.test');
@@ -91,6 +99,8 @@ test('booking invoices download, update after approval, and remain accessible af
     const approvedHistory = (await (await context.request.get(`${bookingBase}/invoices`)).json()).invoices as Invoice[];
     expect(approvedHistory.map(item => item.version)).toEqual([2, 1]);
     expect(await downloadInvoice(page, invoiceHistory, approvedHistory[1])).toEqual(originalPdf);
+    const approvedPdf = await downloadInvoice(page, invoiceHistory, approvedHistory[0]);
+    expect(approvedPdf.equals(originalPdf)).toBe(false);
     await page.setViewportSize({ width: 1440, height: 1000 });
     await invoiceHistory.screenshot({ path: '.local/invoice-history.png' });
 
@@ -98,10 +108,10 @@ test('booking invoices download, update after approval, and remain accessible af
     customer.on('pageerror', error => errors.push(error.message));
     await customer.goto(bookingPath);
     const customerHistory = customer.getByRole('region', { name: 'Invoice history', exact: true });
-    await expect(customerHistory.locator('tbody tr')).toHaveCount(2);
+    await expect(customer.getByRole('button', { name: 'Open Flight Tickets folder', exact: true })).toBeVisible();
+    await expect(customerHistory).toHaveCount(0);
     await expect(customer.getByRole('button', { name: 'Edit booking', exact: true })).toHaveCount(0);
-    const approvedPdf = await downloadInvoice(customer, customerHistory, approvedHistory[0]);
-    expect(approvedPdf.equals(originalPdf)).toBe(false);
+    await expect(customer.getByRole('form', { name: 'Submit booking payment', exact: true })).toHaveCount(0);
     await customer.setViewportSize({ width: 390, height: 844 });
     const viewport = await customer.evaluate(() => ({ width: window.innerWidth, scrollWidth: document.documentElement.scrollWidth }));
     expect(viewport.scrollWidth, JSON.stringify(viewport)).toBeLessThanOrEqual(viewport.width + 1);
@@ -129,9 +139,19 @@ test('booking invoices download, update after approval, and remain accessible af
     await downloadInvoice(page, invoiceHistory, cancelledHistory[0]);
     expect(await downloadInvoice(page, invoiceHistory, cancelledHistory[2])).toEqual(originalPdf);
 
+    await customer.getByRole('main').getByRole('link', { name: 'My bookings', exact: true }).click();
+    await expect(customer.getByRole('heading', { name: 'My bookings', exact: true })).toBeVisible();
+    const customerBookings = customer.getByRole('region', { name: 'Customer bookings', exact: true });
+    await expect(customerBookings.getByRole('table')).toHaveCount(0);
+    await expect(customerBookings.getByRole('search')).toHaveCount(0);
+    await expect(customerBookings.getByRole('combobox')).toHaveCount(0);
+    const cancelledCard = customerBookings.getByRole('article', { name: reference, exact: true });
+    await expect(cancelledCard).toHaveCount(0);
+    await expect(customerBookings).not.toContainText('Cancelled bookings');
     await customer.goto(`${bookingPath}/invoices`);
-    await expect(customerHistory.locator('tbody tr')).toHaveCount(3);
-    expect(await downloadInvoice(customer, customerHistory, cancelledHistory[1])).toEqual(approvedPdf);
+    await expect(customer).toHaveURL(`/o/${seed.orgId}/users/${seed.customerId}`);
+    await expect(customerHistory).toHaveCount(0);
+    expect(await downloadInvoice(page, invoiceHistory, cancelledHistory[1])).toEqual(approvedPdf);
     await expect(page.getByRole('button', { name: 'Cancel booking', exact: true })).toHaveCount(0);
     expect(errors).toEqual([]);
   } finally {

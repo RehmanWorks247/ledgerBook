@@ -41,7 +41,7 @@ export function UserRecord() {
         <ArrowLeft size={15} /> {admin ? "All user records" : "My account"}
       </Link>
       {!admin ? <>
-        <PageHeading title="My bookings" description="Choose a booking to see your trip details, documents, invoices and payment receipts." />
+        <PageHeading title="My bookings" description="Your tickets and travel documents in one place." />
         <CustomerBookings customerId={customerId} />
       </> : customerId === sampleUser.id ? (
         <RecordContents

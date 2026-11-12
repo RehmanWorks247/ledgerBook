@@ -11,20 +11,23 @@ import { documentExtension, documentMimeType } from './document-files';
 import { issueBookingInvoice } from '../invoices/invoices.service';
 import { queueBookingCreatedEmail } from '../payments/payment-emails';
 import { validateInstalmentTotal } from './instalment-total';
+import { availableBookingPayments, bookingPaymentTotals, instalmentInputSchema, normalizeInstalments, readBookingInstalments, remainingScheduleInput, saveBookingInstalments, saveRemainingBalanceInstalments } from './booking-instalment-payments';
+import { readBookingReminders, saveBookingReminders, validateReminderInput } from './booking-reminders';
 
 export const SERVICE_KEYS = ['flight','makkah','madinah','transfers','visas','extras'] as const;
 export const MAX_DOCUMENT_BYTES = 10 * 1024 * 1024;
 const nameSchema = z.string().trim().min(1).max(240).refine(value => value !== '.' && value !== '..' && !/[/\\]/.test(value)
   && !Array.from(value).some(char => char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127), 'Enter a name without a slash or control character.');
 const dateSchema = z.string().refine(validDate, 'Use a valid date in YYYY-MM-DD format.');
-const bookingSchema = z.object({
+const bookingSchema = z.object({...remainingScheduleInput,
   reference:z.string().trim().min(1).max(160),
   departure_at:z.iso.datetime({ offset:true }),
   required_services:z.array(z.enum(SERVICE_KEYS)).max(6).default([]),
   amount:z.string(), instalment_total:z.string().optional(), effective_date:dateSchema,
-  instalments:z.array(z.object({due_date:dateSchema,amount:z.string()}).strict()).max(100).default([]),
+  instalments:z.array(instalmentInputSchema).max(1000).default([]),
   idempotency_key:z.uuid(),
-}).strict();
+}).strict().refine(data=>data.schedule_basis==='remaining_balance'?data.instalments.filter(row=>!row.paid).length<=100:data.instalments.length<=100,
+  {message:'A plan supports at most 100 unpaid installments (100 total for legacy schedules).',path:['instalments']});
 const folderSchema = z.object({parent_id:z.uuid().nullable(),name:nameSchema,idempotency_key:z.uuid()}).strict();
 const moveSchema = z.object({parent_id:z.uuid().nullable()}).strict();
 const renameSchema = z.object({name:nameSchema}).strict();
@@ -46,7 +49,7 @@ type Node = QueryResultRow & {
   default_folder:boolean; issued_at:Date|null; request_hash:string; content?:Buffer; mime_type:string; content_version:number;
 };
 const nodeColumns = 'id,organization_id,customer_id,booking_id,parent_id,name,kind,size,updated_at,service_key,default_folder,issued_at,request_hash,mime_type,content_version';
-const bookingColumns = 'b.*,b.total_minor::text AS total_minor,COALESCE(b.instalment_total_minor,b.total_minor)::text AS instalment_total_minor,(SELECT e.effective_date::text FROM ledger_entries e WHERE e.id=b.charge_entry_id) AS effective_date,(SELECT c.customer_code FROM customers c WHERE c.id=b.customer_id AND c.organization_id=b.organization_id) AS customer_code';
+const bookingColumns = 'b.*,b.total_minor::text AS total_minor,b.reminder_paid_baseline_minor::text AS reminder_paid_baseline_minor,COALESCE(b.instalment_total_minor,b.total_minor)::text AS instalment_total_minor,(SELECT e.effective_date::text FROM ledger_entries e WHERE e.id=b.charge_entry_id) AS effective_date,(SELECT c.customer_code FROM customers c WHERE c.id=b.customer_id AND c.organization_id=b.organization_id) AS customer_code';
 
 @Injectable()
 export class BookingsService {
@@ -95,26 +98,38 @@ export class BookingsService {
       const active = await this.access.membership(member.user_id,member.organization_id,false,client);
       await this.access.customer(active,customerId,client);
       const result = await client.query(`SELECT ${bookingColumns} FROM bookings b
-        WHERE b.organization_id=$1 AND b.customer_id=$2 AND ($3::boolean OR b.deleted_at IS NULL) ORDER BY b.departure_at DESC,b.id`,[active.organization_id,customerId,includeCancelled]);
-      return {time_zone:config.businessTimeZone,items:result.rows.map(({request_hash:_hash,idempotency_key:_key,...booking}) => ({...booking,currency_exponent:2}))};
+        WHERE b.organization_id=$1 AND b.customer_id=$2 AND ($3::boolean OR b.deleted_at IS NULL) ORDER BY b.departure_at DESC,b.id`,[active.organization_id,customerId,includeCancelled && active.role==='admin']);
+      return {time_zone:config.businessTimeZone,items:result.rows.map(({request_hash:_hash,idempotency_key:_key,reminder_payment_baseline:_baseline,...booking}) => ({...booking,currency_exponent:2}))};
     });
   }
   async get(member:Membership, customerId:string, bookingId:string) {
     return this.db.transaction(async client => {
       const {booking} = await this.context(client,member,customerId,bookingId);
-      const instalments = await client.query(`SELECT id,due_date::text AS due_date,amount_minor::text AS amount_minor
-        FROM booking_instalments WHERE organization_id=$1 AND customer_id=$2 AND booking_id=$3 ORDER BY due_date,id`,[member.organization_id,customerId,bookingId]);
-      const {request_hash:_hash,idempotency_key:_key,...visible} = booking;
-      return {...visible,currency_exponent:2,time_zone:config.businessTimeZone,instalments:instalments.rows};
+      const instalments = booking.schedule_basis==='reminders'?await readBookingReminders(client,booking.organization_id,bookingId):await readBookingInstalments(client,bookingId);
+      const payments = await bookingPaymentTotals(client,bookingId,booking.total_minor);
+      const {request_hash:_hash,idempotency_key:_key,reminder_payment_baseline:_baseline,...visible} = booking;
+      return {...visible,...payments,currency_exponent:2,time_zone:config.businessTimeZone,instalments};
+    });
+  }
+  async paymentOptions(member:Membership,customerId:string,bookingId?:string) {
+    if(bookingId!==undefined) uuid(bookingId,'booking');
+    return this.db.transaction(async client=>{
+      const active=await this.access.membership(member.user_id,member.organization_id,true,client);
+      await this.access.customer(active,customerId,client);
+      if(bookingId) await this.context(client,active,customerId,bookingId);
+      return {items:await availableBookingPayments(client,active.organization_id,customerId,bookingId)};
     });
   }
   async create(member:Membership, customerId:string, raw:unknown) {
     const data = parse(bookingSchema,raw);
     const amount = parseMoney(data.amount,2);
+    const remainingBasis=data.schedule_basis==='remaining_balance',reminderBasis=data.schedule_basis==='reminders';
+    if(reminderBasis) validateReminderInput(data);
     const calculationTotal = parseMoney(data.instalment_total ?? data.amount,2);
-    const instalments = (data.instalments.length ? data.instalments : [{due_date:data.effective_date,amount:data.instalment_total ?? data.amount}])
-      .map(item => ({due_date:item.due_date,amount_minor:parseMoney(item.amount,2).toString()}));
-    validateInstalmentTotal(calculationTotal,instalments);
+    if(remainingBasis && calculationTotal!==amount) throw new BadRequestException('Remaining-balance schedules use the booking total.');
+    if(!remainingBasis && data.existing_payment_entry_ids?.length) throw new BadRequestException('Select remaining_balance to allocate existing payments to a new plan.');
+    const instalments = normalizeInstalments(remainingBasis||reminderBasis?data.instalments:data.instalments.length ? data.instalments : [{due_date:data.effective_date,amount:data.instalment_total ?? data.amount}]);
+    if(!remainingBasis&&!reminderBasis) validateInstalmentTotal(calculationTotal,instalments);
     const required = [...new Set(data.required_services)].sort();
     const fingerprint = hash({...data,...(data.instalment_total === undefined ? {} : {instalment_total:calculationTotal.toString()}),required_services:required,amount:amount.toString(),instalments,customerId,userId:member.user_id});
     const bookingId = await this.db.transaction(async client => {
@@ -137,8 +152,11 @@ export class BookingsService {
         [active.organization_id,customerId,amount.toString(),data.effective_date,`Booking ${data.reference}`,data.reference,active.user_id,randomUUID(),fingerprint]);
       await client.query(`INSERT INTO bookings(id,organization_id,customer_id,reference,departure_at,required_services,total_minor,charge_entry_id,created_by,idempotency_key,request_hash,instalment_total_minor)
         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,[id,active.organization_id,customerId,data.reference,data.departure_at,required,amount.toString(),charge.rows[0].id,active.user_id,data.idempotency_key,fingerprint,calculationTotal.toString()]);
-      for (const item of instalments) await client.query(`INSERT INTO booking_instalments(id,organization_id,customer_id,booking_id,due_date,amount_minor)
-        VALUES($1,$2,$3,$4,$5,$6)`,[randomUUID(),active.organization_id,customerId,id,item.due_date,item.amount_minor]);
+      const scheduleContext={member:active,customerId,bookingId:id,reference:data.reference,reason:'Booking created',fingerprint};
+      if(reminderBasis) await saveBookingReminders(client,{organizationId:active.organization_id,customerId,bookingId:id},instalments,amount.toString());
+      else if(remainingBasis) {await saveRemainingBalanceInstalments(client,scheduleContext,instalments,data.existing_payment_entry_ids??[],amount,data.effective_date);
+        await client.query("UPDATE bookings SET schedule_basis='remaining_balance' WHERE id=$1",[id]);}
+      else await saveBookingInstalments(client,scheduleContext,instalments);
       await client.query('SELECT ensure_booking_folders($1)',[id]);
       await this.audit(client,active,'booking.created',id,{customer_id:customerId,booking_id:id,reference:data.reference,entry_id:charge.rows[0].id});
       await this.audit(client,active,'ledger.posted',charge.rows[0].id,{customer_id:customerId,kind:'charge',booking_id:id});

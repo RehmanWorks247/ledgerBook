@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "LedgerBook standalone companies",
-    "version": "1.0.0",
-    "description": "One manually maintained row per company within a workspace. All money fields are independent; customer and hotel names are free text. No customer, booking, payment, invoice, reminder or ledger records are created. Optional text defaults to empty strings; dates and amounts default to null."
+    "version": "2.1.0",
+    "description": "Company vouchers with informational room quantity and a separate company-wide paid amount. Voucher totals are summed across the entire company; balance is this sum minus company paid. Customer and hotel names are free text. No customer account, booking, ledger or notification records are created."
   },
   "servers": [
     {
@@ -34,8 +34,8 @@
       ],
       "get": {
         "operationId": "listCompanies",
-        "summary": "List standalone companies",
-        "description": "Administrator only. Literal case-insensitive substring search across company/hotel/customer names, room type, voucher number and remarks. Dates are inclusive; null dates are excluded when a bound is set. Results sort by creation time descending and ID descending. Count and items are from one database snapshot. Limited to 240 requests per minute per user.",
+        "summary": "List company customer records",
+        "description": "Administrator only. Literal case-insensitive substring search and inclusive date filters apply to rows; ordering is creation time and ID descending. The totals object always covers every voucher in the selected company, ignoring search, dates and pagination. Company paid is stored separately; balance equals sum of full voucher prices minus company paid. Quantity is informational. If any voucher price is missing, total and balance remain null. Reads are limited to 240 per minute per user.",
         "responses": {
           "200": {
             "description": "Successful result.",
@@ -67,6 +67,17 @@
           }
         },
         "parameters": [
+          {
+            "name": "company_name",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "description": "Trimmed, case-insensitive exact company name. Scopes records and total before search, date filters and pagination; omitted returns the full workspace register. The admin UI uses Muhabiya Hotels, Aden Golden and Al Subaee."
+          },
           {
             "name": "search",
             "in": "query",
@@ -141,7 +152,7 @@
       },
       "post": {
         "operationId": "createCompany",
-        "summary": "Add a company manually",
+        "summary": "Add a company voucher",
         "description": "Administrator only. A workspace-scoped UUID key retries the original committed result, including after edits. Different input or a deleted company with the same key returns 409. All writes share a limit of 240 per hour per user.",
         "parameters": [
           {
@@ -200,6 +211,9 @@
           "409": {
             "description": "Stale version, changed idempotency input, or retry after deletion."
           },
+          "413": {
+            "description": "JSON body exceeds 16 KB."
+          },
           "429": {
             "description": "Rate limit exceeded; retry after the Retry-After header."
           }
@@ -229,7 +243,7 @@
       ],
       "patch": {
         "operationId": "updateCompany",
-        "summary": "Edit entered company fields",
+        "summary": "Edit voucher details",
         "description": "Administrator only. Send at least one field and the current version. Omitted fields are preserved; null clears dates or money. A changed row increments version; an identical edit keeps it. No money field is calculated from another. All writes share a limit of 240 per hour per user.",
         "parameters": [
           {
@@ -288,6 +302,9 @@
           "409": {
             "description": "Stale version, changed idempotency input, or retry after deletion."
           },
+          "413": {
+            "description": "JSON body exceeds 16 KB."
+          },
           "429": {
             "description": "Rate limit exceeded; retry after the Retry-After header."
           }
@@ -295,7 +312,7 @@
       },
       "delete": {
         "operationId": "deleteCompany",
-        "summary": "Delete a company",
+        "summary": "Delete a voucher; preserve company paid",
         "description": "Administrator only. Requires current version. Deletes the row and clears its stored creation snapshot, retaining an opaque request receipt so delayed creation retries cannot recreate it. Workspace deletion removes receipts as well. All writes share a limit of 240 per hour per user.",
         "parameters": [
           {
@@ -354,6 +371,147 @@
           "409": {
             "description": "Stale version, changed idempotency input, or retry after deletion."
           },
+          "413": {
+            "description": "JSON body exceeds 16 KB."
+          },
+          "429": {
+            "description": "Rate limit exceeded; retry after the Retry-After header."
+          }
+        }
+      }
+    },
+    "/organizations/{orgId}/companies/paid": {
+      "parameters": [
+        {
+          "name": "orgId",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      ],
+      "patch": {
+        "operationId": "updateCompanyPaid",
+        "summary": "Set the company-wide paid amount",
+        "description": "Administrator only. Replaces the paid amount for all company vouchers together. Requires expected_version from totals.paid_version. Names are trimmed and matched case-insensitively. Zero clears paid. Stale edits return 409. An unchanged amount retains its version. Voucher creation, edits and deletion never change company paid. Requires CSRF headers and shares the 240/hour/user write limit.",
+        "parameters": [
+          {
+            "name": "X-CSRF-Protection",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "const": "1"
+            }
+          },
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uri"
+            },
+            "description": "Must match the configured application origin."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateCompanyPaid"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful result.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompanyPaid"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input, unknown field, unsupported precision, reversed stay dates or malformed date filter."
+          },
+          "401": {
+            "description": "Authentication required."
+          },
+          "403": {
+            "description": "Administrator access or valid CSRF headers required."
+          },
+          "404": {
+            "description": "Workspace access is unavailable or company not found in this workspace."
+          },
+          "409": {
+            "description": "Stale version, changed idempotency input, or retry after deletion."
+          },
+          "413": {
+            "description": "JSON body exceeds 16 KB."
+          },
+          "429": {
+            "description": "Rate limit exceeded; retry after the Retry-After header."
+          }
+        }
+      }
+    },
+    "/organizations/{orgId}/companies/export": {
+      "parameters": [
+        {
+          "name": "orgId",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      ],
+      "get": {
+        "summary": "Read every voucher and shared totals for one company for Excel preview and download",
+        "description": "Administrator only. Required company_name matches exactly and case-insensitively within this workspace. Returns all rows and company aggregates in one database snapshot, ordered by creation time and ID descending. No pagination or table filters are accepted. Currency is labeled SAR with unchanged stored amounts and precision. Uses the shared read rate limit.",
+        "parameters": [
+          {
+            "name": "company_name",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Complete company snapshot, including empty companies.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompanyExport"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input, unknown field, unsupported precision, reversed stay dates or malformed date filter."
+          },
+          "401": {
+            "description": "Authentication required."
+          },
+          "403": {
+            "description": "Administrator access or valid CSRF headers required."
+          },
+          "404": {
+            "description": "Workspace access is unavailable or company not found in this workspace."
+          },
           "429": {
             "description": "Rate limit exceeded; retry after the Retry-After header."
           }
@@ -392,12 +550,10 @@
           "voucher_number",
           "remarks",
           "voucher_price_minor",
-          "paid_minor",
-          "unpaid_minor",
-          "balance_minor",
           "version",
           "created_at",
-          "updated_at"
+          "updated_at",
+          "quantity"
         ],
         "properties": {
           "id": {
@@ -469,31 +625,7 @@
               "null"
             ],
             "pattern": "^\\d+$",
-            "description": "Exact manually entered minor units; never derived from other fields."
-          },
-          "paid_minor": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "pattern": "^\\d+$",
-            "description": "Exact manually entered minor units; never derived from other fields."
-          },
-          "unpaid_minor": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "pattern": "^\\d+$",
-            "description": "Exact manually entered minor units; never derived from other fields."
-          },
-          "balance_minor": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "pattern": "^-?\\d+$",
-            "description": "Exact manually entered minor units; never derived from other fields."
+            "description": "Full voucher total in minor units. Quantity does not change it."
           },
           "version": {
             "type": "integer",
@@ -506,6 +638,13 @@
           "updated_at": {
             "type": "string",
             "format": "date-time"
+          },
+          "quantity": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000000,
+            "default": 1,
+            "description": "Informational room quantity; does not multiply the voucher price."
           }
         }
       },
@@ -574,34 +713,7 @@
             ],
             "maxLength": 24,
             "pattern": "^\\d{1,18}(?:\\.\\d{1,3})?$",
-            "description": "Decimal text in workspace currency, or null. Precision follows currency_exponent. Maximum 100000000000000 minor units; zero is allowed."
-          },
-          "paid": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "maxLength": 24,
-            "pattern": "^\\d{1,18}(?:\\.\\d{1,3})?$",
-            "description": "Decimal text in workspace currency, or null. Precision follows currency_exponent. Maximum 100000000000000 minor units; zero is allowed."
-          },
-          "unpaid": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "maxLength": 24,
-            "pattern": "^\\d{1,18}(?:\\.\\d{1,3})?$",
-            "description": "Decimal text in workspace currency, or null. Precision follows currency_exponent. Maximum 100000000000000 minor units; zero is allowed."
-          },
-          "balance": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "maxLength": 24,
-            "pattern": "^-?\\d{1,18}(?:\\.\\d{1,3})?$",
-            "description": "Decimal text in workspace currency, or null. Precision follows currency_exponent. Maximum 100000000000000 minor units; zero is allowed. Negative balances are allowed."
+            "description": "Full voucher total in workspace currency as decimal text; quantity is informational and never multiplies this value. Null if unknown. Up to 100000000000000 minor units; zero is allowed."
           },
           "remarks": {
             "type": "string",
@@ -611,6 +723,12 @@
           "idempotency_key": {
             "type": "string",
             "format": "uuid"
+          },
+          "quantity": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000000,
+            "default": 1
           }
         }
       },
@@ -679,34 +797,7 @@
             ],
             "maxLength": 24,
             "pattern": "^\\d{1,18}(?:\\.\\d{1,3})?$",
-            "description": "Decimal text in workspace currency, or null. Precision follows currency_exponent. Maximum 100000000000000 minor units; zero is allowed."
-          },
-          "paid": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "maxLength": 24,
-            "pattern": "^\\d{1,18}(?:\\.\\d{1,3})?$",
-            "description": "Decimal text in workspace currency, or null. Precision follows currency_exponent. Maximum 100000000000000 minor units; zero is allowed."
-          },
-          "unpaid": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "maxLength": 24,
-            "pattern": "^\\d{1,18}(?:\\.\\d{1,3})?$",
-            "description": "Decimal text in workspace currency, or null. Precision follows currency_exponent. Maximum 100000000000000 minor units; zero is allowed."
-          },
-          "balance": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "maxLength": 24,
-            "pattern": "^-?\\d{1,18}(?:\\.\\d{1,3})?$",
-            "description": "Decimal text in workspace currency, or null. Precision follows currency_exponent. Maximum 100000000000000 minor units; zero is allowed. Negative balances are allowed."
+            "description": "Full voucher total in workspace currency as decimal text; quantity is informational and never multiplies this value. Null if unknown. Up to 100000000000000 minor units; zero is allowed."
           },
           "remarks": {
             "type": "string",
@@ -717,6 +808,12 @@
             "type": "integer",
             "minimum": 1,
             "maximum": 2147483646
+          },
+          "quantity": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000000,
+            "default": 1
           }
         }
       },
@@ -743,7 +840,8 @@
           "page",
           "page_size",
           "currency",
-          "currency_exponent"
+          "currency_exponent",
+          "totals"
         ],
         "properties": {
           "items": {
@@ -775,6 +873,9 @@
               2,
               3
             ]
+          },
+          "totals": {
+            "$ref": "#/components/schemas/VoucherTotals"
           }
         }
       },
@@ -792,6 +893,158 @@
           },
           "deleted": {
             "const": true
+          }
+        }
+      },
+      "VoucherTotals": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "total_minor",
+          "paid_minor",
+          "balance_minor",
+          "unpriced_count",
+          "unpaid_minor",
+          "voucher_count",
+          "paid_version"
+        ],
+        "properties": {
+          "total_minor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Sum of all full voucher prices for the selected company, ignoring table search, dates and pagination. Null if any voucher price is unknown. Quantity does not multiply price."
+          },
+          "paid_minor": {
+            "type": "string",
+            "description": "Independently entered company-wide paid amount; never derived from individual voucher rows."
+          },
+          "balance_minor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Sum of all company voucher prices minus company paid, or null when a price is unknown. Negative means credit."
+          },
+          "unpriced_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "unpaid_minor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Maximum of company balance and zero; null when a price is unknown."
+          },
+          "voucher_count": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "All vouchers for the company, ignoring table filters."
+          },
+          "paid_version": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0,
+            "description": "Version required when updating company paid; zero for a company without a saved paid amount, null for an unfiltered multi-company listing."
+          }
+        }
+      },
+      "UpdateCompanyPaid": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "company_name",
+          "paid",
+          "expected_version"
+        ],
+        "properties": {
+          "company_name": {
+            "type": "string",
+            "maxLength": 200,
+            "description": "Trimmed; null characters are rejected.",
+            "minLength": 1
+          },
+          "paid": {
+            "type": "string",
+            "maxLength": 32,
+            "pattern": "^[0-9]{1,27}(?:\\.[0-9]{1,3})?$",
+            "description": "Nonnegative total paid to date in workspace currency. Decimal precision follows currency_exponent. Replaces the company paid amount; not an incremental payment."
+          },
+          "expected_version": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 2147483646
+          }
+        }
+      },
+      "CompanyPaid": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "company_name",
+          "paid_minor",
+          "version"
+        ],
+        "properties": {
+          "company_name": {
+            "type": "string"
+          },
+          "paid_minor": {
+            "type": "string",
+            "pattern": "^[0-9]+$"
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      },
+      "CompanyExport": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "items",
+          "total",
+          "currency",
+          "currency_exponent",
+          "totals",
+          "company_name"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Company"
+            }
+          },
+          "total": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "currency": {
+            "type": "string",
+            "const": "SAR",
+            "description": "Export label only; no currency conversion."
+          },
+          "currency_exponent": {
+            "type": "integer",
+            "enum": [
+              0,
+              2,
+              3
+            ]
+          },
+          "totals": {
+            "$ref": "#/components/schemas/VoucherTotals"
+          },
+          "company_name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
           }
         }
       }

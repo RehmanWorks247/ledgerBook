@@ -1,5 +1,5 @@
 import { ApiError, authenticatedFetch } from "../api";
-import { bookingFilesPath, type BookingFileContext } from "../user-files/remote";
+import { bookingFilesPath } from "../user-files/remote";
 
 export const MAX_RECEIPT_FILES = 5;
 export const MAX_RECEIPT_BYTES = 5 * 1024 * 1024;
@@ -7,8 +7,8 @@ export const RECEIPT_ACCEPT = "image/jpeg,image/png,image/webp,application/pdf";
 export type PaymentStatus = "pending" | "approved" | "rejected";
 export type Payment = {
   id: string;
-  booking_id: string;
-  booking_reference: string;
+  booking_id: string | null;
+  booking_reference: string | null;
   customer_id: string;
   customer_name: string;
   customer_code: string;
@@ -17,6 +17,12 @@ export type Payment = {
   payment_date: string;
   submitted_at: string;
   status: PaymentStatus;
+  source?: 'customer_receipt' | 'booking_instalment';
+  reversed?: boolean;
+  version?: number;
+  deleted_at?: string | null;
+  deletion_reason?: string | null;
+  restore_credit?: boolean | null;
   note: string;
   reviewed_at: string | null;
   reviewed_by_name?: string;
@@ -25,6 +31,13 @@ export type Payment = {
   receipts: { id: string; name: string; mime_type: string; size: number; url: string }[];
 };
 export type PaymentReviewStatus = PaymentStatus | "all";
+export type PaymentHistoryAction = "updated" | "deleted" | "restored" | "purged";
+export const paymentHistoryNotices: Record<PaymentHistoryAction, string> = {
+  updated: "Payment updated. The account balance has been refreshed.",
+  deleted: "Payment moved to trash. You can restore it from the Trash tab.",
+  restored: "Payment restored. The account balance has been refreshed.",
+  purged: "Payment and receipts permanently deleted. The ledger and audit history are retained.",
+};
 export type PaymentReviewCounts = Record<PaymentReviewStatus, number>;
 export type PaymentsResponse = { items: Payment[]; time_zone: string; total?: number; page?: number;
   page_size?: number; total_pages?: number; counts?: PaymentReviewCounts };
@@ -33,8 +46,8 @@ export type PaymentReviewResponse = PaymentsResponse & { total: number; page: nu
 export type PaymentDraft = { amount: string; paymentDate: string; note: string; files: readonly File[] };
 
 export function validateReceiptFiles(files: readonly File[]) {
-  if (!files.length || files.length > MAX_RECEIPT_FILES)
-    throw new Error("Attach between 1 and 5 receipt files.");
+  if (files.length > MAX_RECEIPT_FILES)
+    throw new Error("Attach no more than 5 receipt files.");
   for (const file of files) {
     if (!RECEIPT_ACCEPT.split(",").includes(file.type) || !(file.type === "application/pdf" ? /\.pdf$/i : /\.(jpe?g|png|webp)$/i).test(file.name))
       throw new Error(`${file.name}: choose a PDF, JPG, PNG or WebP file.`);
@@ -58,7 +71,15 @@ export function validatePaymentDraft(draft: PaymentDraft, today: string) {
   validateReceiptFiles(draft.files);
 }
 
-export const paymentsPath = (context: BookingFileContext) => `${bookingFilesPath(context)}/payments`;
+export type PaymentContext = { organizationId: string; customerId: string; bookingId?: string | null };
+
+export function paymentsPath(context: PaymentContext) {
+  if (context.bookingId != null) return `${bookingFilesPath({ ...context, bookingId: context.bookingId })}/payments`;
+  const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  if (![context.organizationId, context.customerId].every(id => uuid.test(id)))
+    throw new Error("Select a customer account before submitting a payment.");
+  return `/organizations/${context.organizationId}/customers/${context.customerId}/payments`;
+}
 
 // Never use an arbitrary server-supplied URL for a private financial attachment.
 export function receiptPath(organizationId: string, payment: Pick<Payment, "id" | "customer_id" | "booking_id">, receiptId: string) {
@@ -73,7 +94,7 @@ export class PaymentUploader {
   private key = "";
   private fileIds = new WeakMap<File, string>();
   readonly path: string;
-  constructor(context: BookingFileContext) { this.path = paymentsPath(context); }
+  constructor(context: PaymentContext) { this.path = paymentsPath(context); }
 
   reset() { this.signature = ""; this.key = ""; }
 

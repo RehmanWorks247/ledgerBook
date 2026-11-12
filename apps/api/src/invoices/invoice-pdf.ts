@@ -37,7 +37,7 @@ export function invoiceText(value: string): string {
 }
 
 const services: Record<string, string> = {
-  flight: 'Flights', makkah: 'Makkah hotel', madinah: 'Madinah hotel', transfers: 'Ground transfers', visas: 'Visas', extras: 'Extras',
+  flight: 'Flight Tickets', makkah: 'Makkah Hotel', madinah: 'Madinah Hotel', transfers: 'Transfers', visas: 'Visas', extras: 'Extras',
 };
 const gold = '#d8ad46';
 const charcoal = '#2a2a28';
@@ -164,7 +164,6 @@ export function renderInvoicePdf(snapshot: InvoiceSnapshot): Promise<Buffer> {
       const rows = [
         ['Booking reference', snapshot.booking.reference],
         ['Departure', date(snapshot.booking.departure_at)],
-        ['Services', snapshot.booking.required_services.map(key => services[key] ?? key).join(', ') || 'Travel package'],
       ];
       if (snapshot.status === 'cancelled') rows.push(['Booking status', snapshot.booking.cancelled_at ? 'Cancelled' : 'Charge reversed']);
       y = Math.max(pageNumber === 1 ? 371 : 78, y + 17);
@@ -186,7 +185,32 @@ export function renderInvoicePdf(snapshot: InvoiceSnapshot): Promise<Buffer> {
         } while (remaining);
       }
 
-      y += 28;
+      // Follow the booking form's order and print only its selected services.
+      // Vector checkboxes stay sharp in print and do not depend on font glyphs.
+      const includedServices = Object.entries(services)
+        .filter(([key]) => snapshot.booking.required_services.includes(key))
+        .map(([, label]) => label);
+      if (includedServices.length) {
+        const panelHeight = 32 + Math.ceil(includedServices.length / 2) * 24;
+        y += 12;
+        if (y + panelHeight > bodyBottom) y = newPage();
+        doc.roundedRect(left, y, bodyWidth, panelHeight, 5).fill('#faf7ef');
+        text('Included services', left + 14, y + 9, bodyWidth - 28, 10, true, charcoal);
+        const columnWidth = (bodyWidth - 28) / 2;
+        includedServices.forEach((label, index) => {
+          const x = left + 14 + (index % 2) * columnWidth;
+          const rowY = y + 32 + Math.floor(index / 2) * 24;
+          doc.save();
+          doc.roundedRect(x, rowY + 1, 12, 12, 2).lineWidth(0.9).fillAndStroke('#ffffff', gold);
+          doc.moveTo(x + 2.8, rowY + 7).lineTo(x + 5.2, rowY + 9.3).lineTo(x + 9.4, rowY + 4.3)
+            .lineWidth(1.35).lineCap('round').lineJoin('round').stroke(charcoal);
+          doc.restore();
+          text(label, x + 21, rowY - 1, columnWidth - 29, 10.5, false, charcoal);
+        });
+        y += panelHeight + 22;
+      } else {
+        y += 28;
+      }
       if (y + 139 > bodyBottom) y = newPage();
       text('Payment Details:', left + 2, y, bodyWidth, 16.6, true);
       y += 29;

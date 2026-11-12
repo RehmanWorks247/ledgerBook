@@ -135,6 +135,7 @@ export class ReminderService implements OnApplicationBootstrap,BeforeApplication
           SELECT DISTINCT ON(p.customer_id) p.* FROM positioned p JOIN customers c ON c.id=p.customer_id
           LEFT JOIN customer_reminder_preferences pref ON pref.customer_id=c.id
           WHERE p.unpaid>0 AND p.due_date<=$2::date+$3::integer AND c.status='active' AND COALESCE(pref.enabled,true)
+            AND (SELECT COALESCE(SUM(e.amount_minor),0) FROM account_ledger_entries e WHERE e.organization_id=$1 AND e.customer_id=c.id)>0
             AND NOT EXISTS(SELECT 1 FROM email_suppressions s WHERE s.organization_id=$1 AND s.recipient_hash=encode(sha256(convert_to(lower(c.email),'UTF8')),'hex'))
             AND NOT EXISTS(SELECT 1 FROM reminder_email_outbox e WHERE e.customer_id=p.customer_id
               AND (e.state IN ('pending','processing') OR (e.state<>'cancelled' AND e.scheduled_date>$2::date-$4::integer)))
@@ -142,7 +143,7 @@ export class ReminderService implements OnApplicationBootstrap,BeforeApplication
         ) INSERT INTO reminder_email_outbox(organization_id,customer_id,booking_id,instalment_id,scheduled_date,recipient,subject,body)
         SELECT $1,p.customer_id,p.booking_id,p.id::uuid,$2::date,c.email,'Payment reminder · '||o.name,
           'Hello '||c.name||E',\n\nA payment for booking '||p.booking_reference||' is due on '||p.due_date::text||
-          E'.\nPlease check your current balance and remaining instalments in your booking:\n'||$5::text||'/o/'||$1::text||'/users/'||c.id::text||'/bookings/'||p.booking_id::text||
+          E'.\nPlease check your current account balance and payment history in My Account:\n'||$5::text||'/o/'||$1::text||
           E'\n\nIf you have already paid, please upload your receipt for review.\nYou can turn off payment reminders in your account Settings.\n\n'||o.name
         FROM candidates p JOIN customers c ON c.id=p.customer_id JOIN organizations o ON o.id=$1
         ON CONFLICT(instalment_id,scheduled_date) DO NOTHING RETURNING id,customer_id,booking_id,instalment_id`,
@@ -197,6 +198,7 @@ export class ReminderService implements OnApplicationBootstrap,BeforeApplication
           const due=await client.query(`WITH ${positionCtes} SELECT p.id FROM positioned p JOIN customers c ON c.id=p.customer_id
             LEFT JOIN customer_reminder_preferences pref ON pref.customer_id=c.id
             WHERE p.id=$2 AND p.unpaid>0 AND c.status='active' AND COALESCE(pref.enabled,true) AND lower(c.email)=lower($5::text)
+              AND (SELECT COALESCE(SUM(e.amount_minor),0) FROM account_ledger_entries e WHERE e.organization_id=$1 AND e.customer_id=c.id)>0
               AND p.due_date<=$3::date+$4::integer AND NOT EXISTS(SELECT 1 FROM email_suppressions s
                 WHERE s.organization_id=$1 AND s.recipient_hash=encode(sha256(convert_to(lower(c.email),'UTF8')),'hex'))`,
           [email.organization_id,email.instalment_id,businessDate(new Date(),settings?.time_zone??config.businessTimeZone),settings?.due_soon_days??0,email.recipient]);

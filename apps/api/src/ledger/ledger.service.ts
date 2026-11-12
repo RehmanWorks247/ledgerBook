@@ -205,7 +205,7 @@ export class LedgerService {
     }
     const where = criteria.length ? `AND ${criteria.join(' AND ')}` : '';
     const count = await client.query<{ total: string }>(
-      `SELECT count(*)::text AS total FROM ledger_entries WHERE organization_id = $1 AND customer_id = $2 ${where}`, values,
+      `SELECT count(*)::text AS total FROM account_ledger_entries WHERE organization_id = $1 AND customer_id = $2 ${where}`, values,
     );
     const total = Number(count.rows[0].total);
     if (exportAll && total > 10_000) throw new BadRequestException('CSV exports are limited to 10,000 entries. Narrow the date range before exporting.');
@@ -215,7 +215,7 @@ export class LedgerService {
     const entries = await client.query<LedgerEntry>(
       `WITH running AS (
          SELECT e.*, sum(amount_minor) OVER (ORDER BY effective_date,id ROWS UNBOUNDED PRECEDING)::text AS running_balance_minor
-         FROM ledger_entries e WHERE organization_id = $1 AND customer_id = $2
+         FROM account_ledger_entries e WHERE organization_id = $1 AND customer_id = $2
        ) SELECT *, effective_date::text AS effective_date,
          (SELECT r.id::text FROM ledger_entries r WHERE r.reversal_of=running.id) AS reversed_by
        FROM running WHERE true ${where}
@@ -228,7 +228,7 @@ export class LedgerService {
         coalesce(sum(e.amount_minor) FILTER (WHERE $4::date IS NULL OR e.effective_date <= $4::date),0)::text AS closing,
         coalesce(sum(e.amount_minor) FILTER (WHERE coalesce(original.kind,e.kind) <> 'payment'),0)::text AS total_amount,
         (-coalesce(sum(e.amount_minor) FILTER (WHERE coalesce(original.kind,e.kind) = 'payment'),0))::text AS total_paid
-       FROM ledger_entries e
+       FROM account_ledger_entries e
        LEFT JOIN ledger_entries original ON original.id = e.reversal_of
          AND original.organization_id = e.organization_id AND original.customer_id = e.customer_id
        WHERE e.organization_id = $1 AND e.customer_id = $2`,
@@ -290,7 +290,7 @@ export class LedgerService {
       const totals = await client.query<{ total_debt_minor: string; total_credit_minor: string; customer_count: number }>(
         `WITH balances AS (
            SELECT c.id, coalesce(sum(e.amount_minor),0) AS balance FROM customers c
-           LEFT JOIN ledger_entries e ON e.customer_id=c.id AND e.organization_id=c.organization_id
+           LEFT JOIN account_ledger_entries e ON e.customer_id=c.id AND e.organization_id=c.organization_id
            WHERE c.organization_id=$1 GROUP BY c.id
          ) SELECT coalesce(sum(balance) FILTER (WHERE balance>0),0)::text AS total_debt_minor,
            coalesce(-sum(balance) FILTER (WHERE balance<0),0)::text AS total_credit_minor,
@@ -298,7 +298,7 @@ export class LedgerService {
       );
       const recent = await client.query<LedgerEntry>(
         `SELECT e.*, e.effective_date::text AS effective_date,c.name AS customer_name
-         FROM ledger_entries e JOIN customers c ON c.id=e.customer_id
+         FROM account_ledger_entries e JOIN customers c ON c.id=e.customer_id
          WHERE e.organization_id=$1 ORDER BY e.created_at DESC,e.id DESC LIMIT 10`, [authorized.organization_id],
       );
       return { ...totals.rows[0], recent_entries: recent.rows, currency: authorized.currency, currency_exponent: authorized.currency_exponent };

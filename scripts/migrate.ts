@@ -5,6 +5,7 @@ import { resolve } from 'node:path';
 import { DatabaseService } from '../apps/api/src/database/database.service';
 import { migrationDatabaseUrl } from '../apps/api/src/database/pool-config';
 import { config } from '../apps/api/src/config';
+import { renumberExistingInvoices } from '../apps/api/src/database/invoice-number-migration';
 
 async function migrate() {
   const db=new DatabaseService(migrationDatabaseUrl(process.env,config.databaseUrl));
@@ -27,6 +28,7 @@ async function migrate() {
           continue;
         }
         await client.query(sql);
+        if(name==='030_sequential_invoice_numbers.sql') await renumberExistingInvoices(client);
         await client.query('INSERT INTO schema_migrations(name,checksum) VALUES($1,$2)',[name,checksum]);
         console.log(`Applied ${name}`);
       }

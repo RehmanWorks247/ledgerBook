@@ -33,20 +33,33 @@ async function main() {
       amount:'100.00',effective_date:today,idempotency_key:randomUUID(),
     });
     const payments=new PaymentsService(database.db,access);
-    async function submit(color:string) {
+    const accountPayments=new Set<string>();
+    async function submit(bookingId:string|null,color:string) {
       const buffer=await sharp({create:{width:30,height:24,channels:3,background:color}}).png().toBuffer();
       const files=[{originalname:'simulation-receipt.png',mimetype:'image/png',buffer,size:buffer.length}];
       const body={amount:'25.00',payment_date:today,note:'Synthetic provider simulation',idempotency_key:randomUUID()};
-      const payment=await payments.submit(customer,seed.customerId,booking.id,body,files);
-      const replay=await payments.submit(customer,seed.customerId,booking.id,body,files);
+      const payment=await payments.submit(customer,seed.customerId,bookingId,body,files);
+      const replay=await payments.submit(customer,seed.customerId,bookingId,body,files);
       assert.equal(replay.id,payment.id,'submission replay must not queue another notification');
+      assert.equal(payment.booking_id,bookingId);
+      if(!bookingId)accountPayments.add(payment.id);
       return payment;
     }
-    const link=`${config.appUrl}/o/${seed.orgId}/users/${seed.customerId}/bookings/${booking.id}`;
     function checkMessage(message:OutboxRow) {
-      assert.equal(message.recipient,message.dedupe_key.startsWith('payment-submitted:')?'admin@example.test':'customer@example.test');
-      assert.ok(message.body.includes(booking.reference));
-      assert.ok(message.body.includes(link),'notifications must use an authenticated booking link');
+      const adminAlert=message.dedupe_key.startsWith('payment-submitted:');
+      const accountPayment=accountPayments.has(message.dedupe_key.split(':')[1]);
+      assert.equal(message.recipient,adminAlert?'admin@example.test':'customer@example.test');
+      if(accountPayment) {
+        assert.match(message.body,/account/i);
+        assert.ok(!message.body.includes(booking.reference),'account notices must not claim a booking allocation');
+        assert.equal(message.invoice_id,null,'account payments must not issue a booking invoice');
+      } else assert.ok(message.body.includes(booking.reference));
+      if(!adminAlert) {
+        assert.ok(message.body.split(/\s+/).includes(`${config.appUrl}/o/${seed.orgId}`),'customer notices must link to My Account');
+        assert.ok(!message.body.includes(`/bookings/${booking.id}`),'payment history now lives on My Account');
+      } else assert.ok(message.body.split(/\s+/).includes(accountPayment
+        ? `${config.appUrl}/o/${seed.orgId}/payment-reviews?q=${message.dedupe_key.split(':')[1]}`
+        : `${config.appUrl}/o/${seed.orgId}/users/${seed.customerId}/bookings/${booking.id}`),'administrator alert must link to a working review page');
       assert.ok(message.body.includes('25.00'));
       if(message.dedupe_key.startsWith('payment-received:')) {
         assert.match(message.body,/verify|review|pending/i);
@@ -80,8 +93,8 @@ async function main() {
       assert.deepEqual(state.keys,[`payment-email/${row.id}`]);
       console.log(`PASS: ${row.dedupe_key.split(':')[0]} real HTTP 500/retry/replay; one modeled acceptance.`);
     }
-    for(const decision of ['approved','rejected'] as const) {
-      const payment=await submit(decision==='approved'?'#225599':'#228855');
+    for(const bookingId of [booking.id,null]) for(const decision of ['approved','rejected'] as const) {
+      const payment=await submit(bookingId,bookingId ? decision==='approved'?'#225599':'#228855' : decision==='approved'?'#552299':'#882255');
       const list=async()=>(await database.db.query<OutboxRow>('SELECT * FROM payment_email_outbox WHERE dedupe_key LIKE $1 ORDER BY created_at,id',[`%${payment.id}%`])).rows;
       const initial=await list();
       const expectedKeys=[`payment-submitted:${payment.id}:admin@example.test`,`payment-received:${payment.id}:${seed.customerUserId}`];
@@ -91,12 +104,12 @@ async function main() {
       for(const message of initial) await sendWithRetry(message);
       const reason='The reported amount does not match this synthetic transfer.';
       if(decision==='approved') {
-        await payments.approve(admin,seed.customerId,booking.id,payment.id);
-        await payments.approve(admin,seed.customerId,booking.id,payment.id);
+        await payments.approve(admin,seed.customerId,bookingId,payment.id);
+        await payments.approve(admin,seed.customerId,bookingId,payment.id);
         expectedKeys.push(`payment-approved:${payment.id}`);
       } else {
-        await payments.reject(admin,seed.customerId,booking.id,payment.id,{reason});
-        await payments.reject(admin,seed.customerId,booking.id,payment.id,{reason});
+        await payments.reject(admin,seed.customerId,bookingId,payment.id,{reason});
+        await payments.reject(admin,seed.customerId,bookingId,payment.id,{reason});
         expectedKeys.push(`payment-rejected:${payment.id}:${seed.customerUserId}`);
       }
       const all=await list();
@@ -106,8 +119,8 @@ async function main() {
       if(decision==='rejected') assert.ok(reviewed.body.includes(reason));
       await sendWithRetry(reviewed);
     }
-    assert.equal((await worker.status(admin)).sent,6);
-    console.log('PASS: submission acknowledgments, administrator review alerts, approval and rejection events; business replays queue no duplicates. Acceptance is not inbox delivery.');
+    assert.equal((await worker.status(admin)).sent,12);
+    console.log('PASS: booking and account submission acknowledgments, administrator alerts, approval and rejection; business replays queue no duplicates. Acceptance is not inbox delivery.');
   } finally {await database.close();}
 }
-void main().catch(()=>{console.error('Payment provider simulation failed.');process.exitCode=1;});
+void main().catch(error=>{console.error('Payment provider simulation failed.',error);process.exitCode=1;});

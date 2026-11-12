@@ -41,6 +41,12 @@ test("compact payment rows defer receipt loading and expose exactly two contextu
     const approved=render(true,true,{...payment,status:"approved"});
     assert.match(approved,/>Details<\/button>/);
     assert.doesNotMatch(approved,/>Review<\/button>/);
+    const account=render(true,true,{...payment,booking_id:null,booking_reference:null});
+    assert.match(account,/Account payment/);
+    assert.match(account,new RegExp(`/customers/${payment.customer_id}`));
+    assert.match(account,/>Account<\/a>/);
+    assert.match(account,/>Review<\/button>/);
+    assert.doesNotMatch(account,/\/bookings\/null|Open booking null/);
   } finally {Reflect.deleteProperty(globalThis,"window");}
 });
 
@@ -48,8 +54,8 @@ test("payment details preserve private receipt addresses and role-gated review c
   Object.defineProperty(globalThis,"window",{configurable:true,value:{location:{pathname:"/",search:"",hash:""}}});
   try {
     const {PaymentDetailsDialog}=await import("../src/payments/PaymentTable");
-    const render=(canReview:boolean)=>renderToStaticMarkup(h(PaymentDetailsDialog,{
-      payment,organizationId,timeZone:"Asia/Karachi",canReview,onClose:()=>undefined,onReviewed:()=>undefined,
+    const render=(canReview:boolean,item=payment)=>renderToStaticMarkup(h(PaymentDetailsDialog,{
+      payment:item,organizationId,timeZone:"Asia/Karachi",canReview,onClose:()=>undefined,onReviewed:()=>undefined,
     }));
     const admin=render(true);
     assert.match(admin,/<dialog[^>]+aria-labelledby="[^"]+"/);
@@ -63,5 +69,10 @@ test("payment details preserve private receipt addresses and role-gated review c
     const customer=render(false);
     assert.match(customer,/>Payment details<\/h2>/);
     assert.doesNotMatch(customer,/Approve payment|Reject submission/);
+    const account=render(true,{...payment,booking_id:null,booking_reference:null});
+    assert.match(account,/Account payment/);
+    assert.match(account,/Approve payment/);
+    assert.match(account,/Loading receipt.png/);
+    assert.doesNotMatch(account,/Open booking|\/bookings\/null/);
   } finally {Reflect.deleteProperty(globalThis,"window");}
 });

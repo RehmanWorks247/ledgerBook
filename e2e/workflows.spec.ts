@@ -1,6 +1,7 @@
 import { authenticateFixture } from './session-fixture';
 import { test, expect, type BrowserContext, type Page } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
+import { randomBytes, randomUUID } from 'node:crypto';
 import sharp from 'sharp';
 import { receiptPdf } from '../tests/pdf-fixture';
 
@@ -121,14 +122,20 @@ test('customer receipts, administrator approval and rejection, customer balance 
   await authenticate(context);
   const bookingPath = await createBooking(page, seed.customerId, 'PAYMENT-E2E-001');
   const customerContext = await browser.newContext({ baseURL: origin });
-  const pdfReceipt = await receiptPdf('Browser bank receipt');
+  const pdfReceipt = await receiptPdf(`Browser bank receipt ${randomUUID()}`);
   try {
     await authenticate(customerContext, 'customer@example.test');
     const customer = await customerContext.newPage();
     await customer.goto(bookingPath);
     await expect(customer.getByRole('button', { name: 'New folder', exact: true })).toHaveCount(0);
+    await expect(customer.getByRole('form', { name: 'Submit booking payment', exact: true })).toHaveCount(0);
+    await customer.getByRole('main').getByRole('link', { name: 'My bookings', exact: true }).click();
+    await customer.getByRole('main').getByRole('link', { name: 'My account', exact: true }).click();
+    const customerPayments = customer.getByRole('region', { name: 'Payment history', exact: true });
     async function submitReceipt(amount: string, note: string) {
-      const receipt = await sharp({ create: { width: 30, height: 30, channels: 3, background: amount === '120.00' ? '#118833' : '#225599' } }).png().toBuffer();
+      // Account receipt deduplication spans bookings, so each transfer needs its own evidence bytes.
+      const receipt = await sharp(randomBytes(31 * 33 * 3), { raw: { width: 31, height: 33, channels: 3 } }).png().toBuffer();
+      await customer.getByRole('button', { name: 'Make a payment', exact: true }).click();
       await customer.getByLabel('Amount paid (GBP)').fill(amount);
       await customer.getByLabel('Payment note').fill(note);
       await customer.getByLabel('Choose receipt files', { exact: true }).setInputFiles([
@@ -139,7 +146,7 @@ test('customer receipts, administrator approval and rejection, customer balance 
       await expect(customer.getByText('Payment submitted for review.', { exact: false })).toBeVisible();
     }
     await submitReceipt('120.00', 'Bank transfer verified by browser workflow');
-    await page.reload();
+    await page.goto(`/o/${seed.orgId}/payment-reviews?q=${encodeURIComponent('Bank transfer verified by browser workflow')}`);
     await page.getByRole('button', { name: /^Review payment / }).click();
     const receiptPreview = page.getByRole('button', { name: /^Preview receipt \d+: receipt\.webp$/ });
     await receiptPreview.focus();
@@ -163,18 +170,18 @@ test('customer receipts, administrator approval and rejection, customer balance 
     await expect(page.getByRole('button', { name: 'Confirm approval' })).toBeDisabled();
     await page.getByLabel('I have checked the receipts and verified that the money was received.').check();
     await page.getByRole('button', { name: 'Confirm approval' }).click();
-    await expect(page.getByText('Payment approved and recorded.', { exact: false })).toBeVisible();
+    await expect(page.getByText('Account payment approved and recorded.', { exact: false })).toBeVisible();
     await customer.reload();
-    await expect(customer.getByRole('cell', { name: 'Approved', exact: true })).toBeVisible();
+    await expect(customerPayments.getByRole('article').filter({ hasText: 'Bank transfer verified by browser workflow' })).toContainText(/approved/i);
     await submitReceipt('50.00', 'Duplicate transfer for rejection');
-    await page.reload();
+    await page.goto(`/o/${seed.orgId}/payment-reviews?q=${encodeURIComponent('Duplicate transfer for rejection')}`);
     await page.getByRole('button', { name: /^Review payment / }).click();
     await page.getByRole('button', { name: 'Reject submission' }).click();
     await page.getByLabel('Reason visible to the customer').fill('Duplicate receipt, please send the correct transfer.');
     await page.getByRole('button', { name: 'Confirm rejection' }).click();
-    await expect(page.getByText('Payment rejected.', { exact: false })).toBeVisible();
+    await expect(page.getByText('Account payment rejected.', { exact: false })).toBeVisible();
     await customer.reload();
-    await expect(customer.getByRole('cell', { name: 'Rejected', exact: true })).toBeVisible();
+    await expect(customerPayments.getByRole('article').filter({ hasText: 'Duplicate transfer for rejection' })).toContainText(/rejected/i);
     const own = await customerContext.request.get(`${origin}/api/organizations/${seed.orgId}/customers/${seed.customerId}/statement`);
     expect((await own.json()).current_balance_minor).toBe('38000');
     const forbidden = await customerContext.request.get(`${origin}/api/organizations/${seed.orgId}/customers/${seed.secondCustomerId}/statement`);
@@ -245,50 +252,35 @@ test('navigation, directory filtering, persisted themes and mobile layout', asyn
   expect(errors).toEqual([]);
 });
 
-test('rounded instalment totals save within £5 and reject £5.01 when creating and editing bookings', async ({ page, context }) => {
+test('reminder totals can be below the balance and cannot exceed it', async ({ page, context }) => {
   await authenticate(context);
-  const reference = 'ROUND-INSTALMENTS-E2E';
+  const reference = 'PARTIAL-REMINDERS-E2E';
   await page.goto(`/o/${seed.orgId}/customers/${seed.customerId}/bookings/new`);
   await page.getByLabel('Booking reference', { exact: true }).fill(reference);
   await page.getByLabel(/^Departure \(/).fill('2026-12-20T10:30');
   await page.getByLabel('Booking total (GBP)', { exact: true }).fill('500.00');
   await page.getByLabel('Charge effective date').fill('2026-11-09');
-  await page.getByLabel('Instalment calculation total (GBP)', { exact: true }).fill('800.00');
-  await page.getByRole('button', { name: 'Add instalment', exact: true }).click();
   await page.getByLabel('Amount (GBP)', { exact: true }).fill('400.00');
-  await page.getByRole('button', { name: 'Add instalment', exact: true }).click();
-  await page.getByLabel('Amount (GBP)', { exact: true }).nth(1).fill('394.99');
-  await expect(page.getByText('Used only for the instalment schedule.', { exact: false })).toBeVisible();
-  await page.getByRole('button', { name: 'Create booking', exact: true }).click();
-  await expect(page.getByText('Instalments must total within £5.00 above or below the instalment calculation total.', { exact: true })).toBeVisible();
-  await page.getByLabel('Amount (GBP)', { exact: true }).nth(1).fill('395.00');
   await page.getByRole('button', { name: 'Create booking', exact: true }).click();
   await expect(page.getByRole('heading', { name: reference, exact: true })).toBeVisible();
   const path = new URL(page.url()).pathname;
   const bookingBase = `${origin}/api/organizations/${seed.orgId}/customers/${seed.customerId}/bookings/${path.split('/').at(-1)}`;
   const created = await (await context.request.get(bookingBase)).json();
   expect(created.total_minor).toBe('50000');
-  expect(created.instalment_total_minor).toBe('80000');
-  expect(created.instalments.map((item: { amount_minor: string }) => item.amount_minor).sort()).toEqual(['39500', '40000']);
+  expect(created.instalments.map((item: { amount_minor: string }) => item.amount_minor)).toEqual(['40000']);
   await page.getByRole('button', { name: 'Edit booking', exact: true }).click();
   const form = page.getByRole('form', { name: 'Edit booking', exact: true });
-  await expect(form.getByLabel('Instalment calculation total (GBP)', { exact: true })).toHaveValue('800.00');
-  await form.getByLabel('Instalment calculation total (GBP)', { exact: true }).fill('900.00');
-  await form.getByLabel('Amount (GBP)', { exact: true }).nth(0).fill('400.00');
-  await form.getByLabel('Amount (GBP)', { exact: true }).nth(1).fill('505.01');
-  await form.getByLabel('Reason for change').fill('Use rounded instalments');
+  await form.getByLabel('Amount (GBP)', { exact: true }).fill('500.01');
+  await form.getByLabel('Reason for change').fill('Change reminder amount');
   await form.getByRole('button', { name: 'Save booking', exact: true }).click();
-  await expect(form.getByText('Instalments must total within £5.00 above or below the instalment calculation total.', { exact: true })).toBeVisible();
-  await form.getByLabel('Amount (GBP)', { exact: true }).nth(1).fill('505.00');
+  await expect(form).toContainText('Reminders exceed the remaining balance');
+  await form.getByLabel('Amount (GBP)', { exact: true }).fill('200.00');
   await form.getByRole('button', { name: 'Save booking', exact: true }).click();
   await expect(form).toHaveCount(0);
-  await page.reload();
-  await expect(page.getByRole('heading', { name: reference, exact: true })).toBeVisible();
   const updated = await (await context.request.get(bookingBase)).json();
   expect(updated.total_minor).toBe('50000');
-  expect(updated.instalment_total_minor).toBe('90000');
   expect(String(updated.charge_entry_id)).toBe(String(created.charge_entry_id));
-  expect(updated.instalments.map((item: { amount_minor: string }) => item.amount_minor).sort()).toEqual(['40000', '50500']);
+  expect(updated.instalments.map((item: { amount_minor: string }) => item.amount_minor)).toEqual(['20000']);
 });
 
 test('booking corrections, issuance, text editing, binary replacement, version restore and cancellation',async({page,context})=>{
@@ -299,7 +291,6 @@ test('booking corrections, issuance, text editing, binary replacement, version r
   const form=page.getByRole('form',{name:'Edit booking',exact:true});
   await form.getByLabel('Booking reference',{exact:true}).fill('EDIT-E2E-002');
   await form.getByLabel('Booking total (GBP)',{exact:true}).fill('650.00');
-  await form.getByLabel('Instalment calculation total (GBP)',{exact:true}).fill('650.00');
   await form.getByLabel('Amount (GBP)',{exact:true}).fill('650.00');
   await form.getByLabel('Reason for change').fill('Add upgraded hotel room');
   await form.getByRole('button',{name:'Save booking',exact:true}).click();

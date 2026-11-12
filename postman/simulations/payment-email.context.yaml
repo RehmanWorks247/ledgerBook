@@ -86,7 +86,51 @@ assumptions:
     verification: On 2026-11-11 the sender check passed against port 4027. Postman logged POST /emails 500, 200, 200; control state reported three calls and one modeled acceptance. Nine existing local-email and diagnostic tests passed, and the API build passed. The running local app was restarted successfully. No new real email was sent; this does not establish inbox placement (fingerprint company-sender-2026-11-11).
     source: apps/api/src/config.ts; apps/api/src/notifications/notifications.service.ts; scripts/local-email.ts; tests/local-email.test.ts; postman/mocks/resend-email/default.js
     updated_at: "2026-11-11"
+  - id: payment-history-release-notification-regression
+    status: supported
+    claim: Existing payment-submission and review notifications retain stable retry bodies and keys after payment-history management and optional attachments were added.
+    reason: The actual payment transactions, notification worker and HTTP sender ran against the committed loopback Resend stand-in with isolated data and synthetic credentials.
+    verification: On 2026-11-11 tests/payment-provider.simulation.ts passed all six existing notification scenarios; each produced HTTP 500, 200, 200 and exactly one modeled acceptance. The new no-attachment notification wording is covered separately by payment-history API tests. No real provider or inbox delivery was exercised (fingerprint payment-history-release-2026-11-11).
+    source: tests/payment-provider.simulation.ts; tests/payment-history.test.ts; postman/mocks/resend-email/default.js; .local/payment-history-release/provider.ndjson
+    updated_at: "2026-11-11"
+  - id: reminder-only-plan-provider-regression
+    status: supported
+    claim: A reminder-only booking with a separately recorded partial payment retains its correct outstanding reminder through the modeled provider failure, retry and replay sequence.
+    reason: The real booking, payment and reminder services, SQL allocation and NotificationsService HTTP adapter ran against the committed local Resend contract stand-in with isolated PGlite data and synthetic credentials.
+    verification: On 2026-11-12 tests/reminder-provider.simulation.ts created a GBP 100 reminder-only booking, recorded a separate GBP 40 payment, and asserted GBP 60 outstanding on both booking and reminder. The worker retained the first failed send, retried using its original key, stored the accepted provider ID and correlated a signed synthetic delivered event. Postman logged POST /emails 500, 200, 200; independently queried control state reported three calls, one accepted message and one unique key. The loopback server used port 4017 with cloud history disabled and was stopped after the run. No real provider or inbox delivery was exercised (fingerprint reminder-simplification-2026-11-12).
+    source: tests/reminder-provider.simulation.ts; apps/api/src/notifications/reminder.service.ts; apps/api/src/dashboard/receivables.ts; postman/mocks/resend-email/default.js; .local/reminder-simplification-2026-11-12/provider.ndjson
+    updated_at: "2026-11-12"
+  - id: independent-account-payment-notifications
+    status: supported
+    claim: Independent account payment submission, approval and rejection preserve durable notification keys and bodies through the tested provider failure/retry/replay sequence, with one modeled acceptance per message.
+    reason: The real payment transactions, outbox worker and HTTP sender ran against the existing loopback Resend contract stand-in with an isolated PGlite database. Account notices did not create booking invoices or claim a booking allocation; customer links opened My Account and administrator links opened the scoped review queue.
+    verification: On 2026-11-12 the expanded tests/payment-provider.simulation.ts passed twelve notification scenarios covering both legacy booking and new account payments. The successful run produced 36 POST /emails calls in twelve 500, 200, 200 sequences; each reset scenario independently asserted three calls and one accepted key. Replayed business submissions and reviews queued no duplicate intents. The existing reminder-provider.simulation.ts also passed after reminder links moved to My Account, with a further 500, 200, 200 sequence and signed synthetic delivery correlation. The local simulation ran on port 4017 with cloud history disabled. No live provider or inbox delivery was exercised (fingerprint account-payment-2026-11-12).
+    source: tests/payment-provider.simulation.ts; apps/api/src/payments/payments.service.ts; apps/api/src/payments/payment-emails.ts; postman/mocks/resend-email/default.js; .local/account-payment-email-simulation.ndjson
+    updated_at: "2026-11-12"
+  - id: combined-production-release-notifications
+    status: supported
+    claim: The combined release preserves booking and account payment notification retries and reminder-only outstanding balances through the modeled provider failure, retry and replay scenarios.
+    reason: The real payment services, reminder scheduler, outbox and HTTP sender ran against the existing committed Resend stand-in with isolated data and synthetic credentials.
+    verification: On 2026-11-12 both provider simulation scripts passed. The log recorded 39 POST /emails calls in thirteen 500, 200, 200 sequences; each scenario asserted one modeled acceptance, and the reminder scenario verified signed synthetic delivery correlation. No real provider or inbox delivery was exercised (fingerprint combined-release-2026-11-12).
+    source: tests/payment-provider.simulation.ts; tests/reminder-provider.simulation.ts; postman/mocks/resend-email/default.js; .local/release-20261112/provider.ndjson
+    updated_at: "2026-11-12"
 fingerprints:
+  - id: combined-release-2026-11-12
+    date: "2026-11-12"
+    commit: b82fc1c1dbd4ca866d9107e39eac30d401ef3bad (dirty working tree containing the combined production release)
+    cli: "1.75.0"
+  - id: account-payment-2026-11-12
+    date: "2026-11-12"
+    commit: b82fc1c1dbd4ca866d9107e39eac30d401ef3bad (dirty working tree with independent account payments and existing local changes)
+    cli: "1.75.0"
+  - id: reminder-simplification-2026-11-12
+    date: "2026-11-12"
+    commit: b82fc1c1dbd4ca866d9107e39eac30d401ef3bad (dirty working tree with reminder-only plans and separate payment history entry)
+    cli: "1.75.0"
+  - id: payment-history-release-2026-11-11
+    date: "2026-11-11"
+    commit: b82fc1c1dbd4ca866d9107e39eac30d401ef3bad (dirty working tree with installment planner, payment history management and optional attachments)
+    cli: "1.75.0"
   - id: company-sender-2026-11-11
     date: "2026-11-11"
     commit: 7e605e0904269adb33c435dba564b060116495df (dirty working tree with existing application work and company sender configuration)

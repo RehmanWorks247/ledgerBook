@@ -4,6 +4,7 @@ import { mkdir, open, readFile, readdir, rmdir, unlink } from 'node:fs/promises'
 import { dirname, resolve, sep } from 'node:path';
 import type { PoolClient, QueryResult, QueryResultRow } from 'pg';
 import type { DatabaseService } from '../apps/api/src/database/database.service';
+import { renumberExistingInvoices } from '../apps/api/src/database/invoice-number-migration';
 
 type LockOwner = { pid: number; nonce: string; created_at: string };
 
@@ -95,6 +96,9 @@ async function applyMigrations(engine: PGlite, directory: string): Promise<void>
         continue;
       }
       await engine.exec(sql);
+      if(name==='030_sequential_invoice_numbers.sql') await renumberExistingInvoices({
+        query: ((sql:string,params?:unknown[]) => engine.query(sql,params)) as PoolClient['query'],
+      });
       await engine.query('INSERT INTO schema_migrations(name,checksum) VALUES($1,$2)', [name, checksum]);
     }
     await engine.exec('COMMIT');

@@ -105,7 +105,7 @@ export class DashboardService {
       // Reversals are dated money movements; an earlier payment reversed in this
       // period correctly reduces this period's net receipts.
       const payments = await client.query<{payments_received_minor:string}>(`SELECT COALESCE(-SUM(e.amount_minor),0)::text AS payments_received_minor
-        FROM ledger_entries e LEFT JOIN ledger_entries original ON original.id=e.reversal_of
+        FROM account_ledger_entries e LEFT JOIN ledger_entries original ON original.id=e.reversal_of
         WHERE e.organization_id=$1 AND e.effective_date BETWEEN $2::date AND $3::date
         AND (e.kind='payment' OR (e.kind='reversal' AND original.kind='payment'))`,
       [active.organization_id, period.start, period.end]);
@@ -174,7 +174,7 @@ export class DashboardService {
       UNION ALL
       SELECT 'ledger-'||e.id::text,CASE WHEN e.kind='payment' THEN 'payment.received' ELSE 'payment.reversed' END,
         e.created_at,e.id::text,e.customer_id::text,NULL::text
-      FROM ledger_entries e LEFT JOIN ledger_entries original ON original.id=e.reversal_of
+      FROM account_ledger_entries e LEFT JOIN ledger_entries original ON original.id=e.reversal_of
       WHERE e.organization_id=$1 AND (e.kind='payment' OR (e.kind='reversal' AND original.kind='payment'))
     ) SELECT events.*,c.name AS customer_name,c.customer_code FROM events JOIN customers c ON c.id::text=events.customer_id AND c.organization_id=$1
       WHERE (events.created_at AT TIME ZONE $4)::date BETWEEN $2::date AND $3::date
@@ -203,7 +203,7 @@ export class DashboardService {
       const base = `WITH ${positionCtes}, running AS (
         SELECT e.*,SUM(e.amount_minor) OVER (PARTITION BY e.customer_id ORDER BY e.effective_date,e.id ROWS UNBOUNDED PRECEDING) AS running_balance_minor,
           original.kind AS original_kind
-        FROM ledger_entries e LEFT JOIN ledger_entries original ON original.id=e.reversal_of WHERE e.organization_id=$1
+        FROM account_ledger_entries e LEFT JOIN ledger_entries original ON original.id=e.reversal_of WHERE e.organization_id=$1
       ), filtered AS (
         SELECT e.*,c.name AS customer_name,c.customer_code,p.balance AS current_balance_minor FROM running e
         JOIN customers c ON c.id=e.customer_id AND c.organization_id=e.organization_id JOIN balances p ON p.id=e.customer_id

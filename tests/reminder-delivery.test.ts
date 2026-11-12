@@ -4,6 +4,7 @@ import { afterEach,beforeEach,describe,it } from 'node:test';
 import { AccessService } from '../apps/api/src/access/access.service';
 import { BookingsService } from '../apps/api/src/bookings/bookings.service';
 import { LedgerService } from '../apps/api/src/ledger/ledger.service';
+import { PaymentsService } from '../apps/api/src/payments/payments.service';
 import { AccountDeletionService } from '../apps/api/src/users/account-deletion.service';
 import { EmailDeliveryService,parseResendWebhook,verifyResendSignature } from '../apps/api/src/notifications/email-delivery.service';
 import { NotificationsService } from '../apps/api/src/notifications/notifications.service';
@@ -75,7 +76,7 @@ describe('automatic reminders and delivery tracking',()=>{
     const row=(await queued())[0];assert.equal(row.state,'sent');assert.equal(row.delivery_status,'accepted');assert.ok(row.provider_message_id);
     assert.equal(await reminders.schedule(new Date(`${addDays(today,1)}T18:00:00Z`)),0);
     assert.equal(await reminders.schedule(new Date(`${addDays(today,7)}T18:00:00Z`)),1);
-    assert.match(calls[0].body,/current balance/);
+    assert.match(calls[0].body,/current account balance/);
     assert.equal((await reminders.history(seed.admin)).summary.sent,1);
   });
 
@@ -86,6 +87,19 @@ describe('automatic reminders and delivery tracking',()=>{
     const counts=await Promise.all([reminders.schedule(new Date(`${today}T04:00:00Z`)),second.schedule(new Date(`${today}T04:00:00Z`))]);
     assert.equal(counts.reduce((sum,value)=>sum+value,0),1);
     await Promise.all([reminders.deliver(),second.deliver()]);assert.equal(calls.length,1);
+  });
+
+  it('suppresses queued and future booking reminders once independent account payments settle the whole account',async()=>{
+    for(let index=0;index<2;index++) await bookings.create(seed.admin,seed.customerId,{reference:`ACCOUNT-REMINDER-${randomUUID()}`,
+      departure_at:`${addDays(today,14)}T12:00:00Z`,required_services:[],amount:'100',effective_date:addDays(today,-4),
+      schedule_basis:'reminders',instalments:[{due_date:addDays(today,-1),amount:'100'}],idempotency_key:randomUUID()});
+    await enable();assert.equal(await reminders.schedule(scanDate),1);
+    assert.ok((await queued())[0].body.includes(`/o/${seed.orgId}`));assert.doesNotMatch((await queued())[0].body,/\/bookings\//);
+    const payments=new PaymentsService(database.db,access);
+    const payment=await payments.submit(seed.customerMember,seed.customerId,null,{amount:'200',payment_date:today,idempotency_key:randomUUID()},[]);
+    await payments.approve(seed.admin,seed.customerId,null,payment.id);
+    assert.equal(await reminders.deliver(),0);assert.equal(calls.length,0);assert.equal((await queued())[0].state,'cancelled');
+    assert.equal(await reminders.schedule(new Date(`${addDays(today,7)}T18:00:00Z`)),0);
   });
 
   it('persists provider failures and retries the same immutable body and provider key after restart',async()=>{
@@ -113,6 +127,33 @@ describe('automatic reminders and delivery tracking',()=>{
     await makeBooking();await enable();await reminders.schedule(scanDate);
     await new LedgerService(database.db,access).post(seed.admin,seed.customerId,{kind:'payment',amount:'100',effective_date:today,description:'Settled',idempotency_key:randomUUID()});
     assert.equal(await reminders.deliver(),0);assert.equal((await queued())[0].state,'cancelled');assert.equal(calls.length,0);
+  });
+
+  it('uses booking payments for reminder-only plans and cancels a queued reminder when its amount becomes complete',async()=>{
+    const trip=await bookings.create(seed.admin,seed.customerId,{reference:`REMIND-${randomUUID()}`,departure_at:`${addDays(today,14)}T12:00:00Z`,
+      required_services:[],amount:'100',effective_date:today,schedule_basis:'reminders',
+      instalments:[{due_date:today,amount:'40'},{due_date:addDays(today,2),amount:'60'}],idempotency_key:randomUUID()});
+    await new LedgerService(database.db,access).post(seed.admin,seed.customerId,{kind:'payment',amount:'10',effective_date:today,
+      description:'Partial account credit',idempotency_key:randomUUID()});
+    await enable();assert.equal(await reminders.schedule(scanDate),1,'A reminder remains eligible while the account and scheduled amount are still outstanding.');
+    const payments=new PaymentsService(database.db,access);
+    const pending=await payments.submit(seed.customerMember,seed.customerId,trip.id,{amount:'40',payment_date:today,idempotency_key:randomUUID()},[]);
+    await payments.approve(seed.admin,seed.customerId,trip.id,pending.id,{});
+    assert.equal(await reminders.deliver(),0);assert.equal((await queued())[0].state,'cancelled');assert.equal(calls.length,0);
+    const next=await bookings.get(seed.admin,seed.customerId,trip.id);
+    assert.equal(next.remaining_minor,'6000');assert.equal(next.instalments[0].remaining_minor,'0');assert.equal(next.instalments[1].remaining_minor,'6000');
+  });
+
+  it('sends a still-due reminder after partial payment using a balance link without a stale amount',async()=>{
+    const trip=await bookings.create(seed.admin,seed.customerId,{reference:`PARTIAL-${randomUUID()}`,departure_at:`${addDays(today,14)}T12:00:00Z`,
+      required_services:[],amount:'100',effective_date:today,schedule_basis:'reminders',
+      instalments:[{due_date:today,amount:'100'}],idempotency_key:randomUUID()});
+    await enable();await reminders.schedule(scanDate);
+    const payments=new PaymentsService(database.db,access),pending=await payments.submit(seed.customerMember,seed.customerId,trip.id,
+      {amount:'25',payment_date:today,idempotency_key:randomUUID()},[]);
+    await payments.approve(seed.admin,seed.customerId,trip.id,pending.id,{});
+    assert.equal(await reminders.deliver(),1);assert.match(calls[0].body,/current account balance/);assert.doesNotMatch(calls[0].body,/GBP|£100/);
+    assert.equal((await bookings.get(seed.admin,seed.customerId,trip.id)).instalments[0].remaining_minor,'7500');
   });
 
   it('skips archived accounts, cancelled bookings and customer opt-outs',async()=>{

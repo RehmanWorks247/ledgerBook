@@ -7,6 +7,7 @@ import { config } from '../config';
 import { DatabaseService } from '../database/database.service';
 import { UUID_PATTERN } from '../ledger/money';
 import { renderInvoicePdf } from './invoice-pdf';
+import { nextInvoiceNumber } from './invoice-number';
 import type { InvoiceMetadata, InvoiceReason, InvoiceSnapshot, InvoiceStatus } from './invoice.types';
 
 export type { InvoiceMetadata, InvoiceReason, InvoiceSnapshot, InvoiceStatus } from './invoice.types';
@@ -59,7 +60,7 @@ export async function issueBookingInvoice(client: PoolClient, context: IssueCont
     `SELECT coalesce(sum(p.amount_minor),0)::text AS paid_minor,count(*)::int AS payment_count,
       max(p.payment_date)::text AS latest_payment_date FROM booking_payments p
       WHERE p.organization_id=$1 AND p.customer_id=$2 AND p.booking_id=$3 AND p.status='approved'
-        AND p.ledger_entry_id IS NOT NULL
+        AND p.deleted_at IS NULL AND p.ledger_entry_id IS NOT NULL
         AND NOT EXISTS(SELECT 1 FROM ledger_entries r WHERE r.reversal_of=p.ledger_entry_id)`, scopeParams(context));
   const instalments = await client.query<{ due_date: string; amount_minor: string }>(
     `SELECT due_date::text AS due_date,amount_minor::text AS amount_minor FROM booking_instalments
@@ -73,15 +74,15 @@ export async function issueBookingInvoice(client: PoolClient, context: IssueCont
   const paid = BigInt(approved.rows[0].paid_minor);
   const balance = total - paid;
   const status: InvoiceStatus = cancelled ? 'cancelled' : balance < 0n ? 'overpaid' : balance === 0n ? 'paid' : paid > 0n ? 'partially_paid' : 'unpaid';
-  const number = `INV-${context.bookingId.replaceAll('-', '').toUpperCase()}-V${version}`;
+  const number = await nextInvoiceNumber(client);
   const details: InvoiceMetadata = {
     id: randomUUID(), invoice_number: number, version, reason: context.reason,
     issued_at: new Date(sequence.rows[0].issued_at).toISOString(), total_minor: total.toString(),
     paid_minor: paid.toString(), balance_minor: balance.toString(), currency: current.currency, status,
-    filename: `${number.toLowerCase()}.pdf`,
+    filename: `${number}.pdf`,
   };
   const snapshot: InvoiceSnapshot = {
-    ...details, template_version: 2,
+    ...details, template_version: 3,
     organization: { id: context.organizationId, name: current.organization_name },
     customer: { id: context.customerId, name: current.customer_name, email: current.customer_email, phone: current.customer_phone, customer_code: current.customer_code },
     booking: {

@@ -34,14 +34,14 @@ export function DeleteCompanyDialog({ company, organizationId, onClose, onDelete
       if (mounted.current) setBusy(false);
     }
   }
-  return <CompanyDialog title="Delete company?" description={`Delete ${company.company_name} from the Companies table? This cannot be undone.`}
+  return <CompanyDialog title="Delete record?" description={`Delete ${company.customer_name || "this customer record"} from ${company.company_name}? This cannot be undone.`}
     busy={busy} onClose={onClose} compact>
     <ErrorNotice message={error} />
-    {conflict && <div className="notice company-conflict"><p>This record changed in another session. Refresh the table and review its latest details before deleting.</p><button type="button" className="button secondary small" onClick={onRefresh}>Refresh companies</button></div>}
+    {conflict && <div className="notice company-conflict"><p>This record changed in another session. Refresh the table and review its latest details before deleting.</p><button type="button" className="button secondary small" onClick={onRefresh}>Refresh records</button></div>}
     <form onSubmit={remove} aria-busy={busy}>
       <div className="form-actions">
         <button type="button" className="button secondary" autoFocus disabled={busy} onClick={onClose}>Cancel</button>
-        <button className="button danger-button" disabled={busy || conflict}><Trash2 size={16} />{busy ? "Deleting…" : "Delete company"}</button>
+        <button className="button danger-button" disabled={busy || conflict}><Trash2 size={16} />{busy ? "Deleting…" : "Delete record"}</button>
       </div>
     </form>
   </CompanyDialog>;

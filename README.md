@@ -11,9 +11,12 @@ the exact workspace name and preserves other workspaces and sign-in identities.
 See [workspace behavior, deletion, and deployment](docs/workspaces.md).
 
 Administrators can use **Companies**, just above Settings in the sidebar, for a
-standalone table with one row per company. Add or edit the company and hotel
-details, customer name, dates, room type, voucher, manual amounts, and remarks.
-Search the table or filter by booking date, check-in, or check-out. These records
+grid of **Muhabiya Hotels**, **Aden Golden**, and **Al Subaee**. Open a card to
+add or edit its customer records: hotel details, customer name, dates, room type,
+voucher, room quantity, and remarks. **Add Voucher** records the full voucher
+total; quantity is informational. Each company has one separate paid amount,
+with voucher totals, unpaid and balance calculated across all its vouchers. Search within each company or filter by
+booking date, check-in, or check-out. These records
 do not create bookings, customer accounts, payments, or ledger entries. See
 [Companies fields and API](docs/companies.md).
 
@@ -55,6 +58,11 @@ npm run local:stop
 ```
 
 `npm start` and `pnpm start` also run the local launcher; `pnpm stop` and `pnpm status` manage it. Background logs are in `.local/local.log`. Restart after source changes so the React build is refreshed. Accounts and ledger data survive restarts. Stop before backing up the database or provisioning an administrator; two processes cannot open it together.
+
+For local payment/reminder testing without sending customer email, start with
+`npm run local:start -- --file-email`. This saves application emails privately in
+`.local/mail` for that run and leaves the saved email configuration unchanged.
+Stop an already-running instance before switching this launch option.
 
 Create the first administrator in the Clerk dashboard with an email address you control, then provision its application membership. Stop LedgerBook before opening its local database with this command:
 

@@ -21,6 +21,7 @@ import {
 } from "lucide-react";
 import {
   errorMessage,
+  type Membership,
 } from "../api";
 import { AuthContext, OrganizationContext, useOrganization } from "../state";
 import {
@@ -37,6 +38,13 @@ import { CurrencyProvider, LedgerCurrencyNotice } from '../currency';
 import { CreateWorkspaceDialog } from "../workspaces/CreateWorkspaceDialog";
 import { workspaceBadgeStyle } from "../workspaces/model";
 import "../workspaces/workspaces.css";
+
+function landingPage(member: Membership) {
+  const root = `/o/${member.organization_id}`;
+  return member.role === "customer" && member.customer_id
+    ? `${root}/users/${member.customer_id}`
+    : root;
+}
 
 export function OrganizationPicker({ managed = false }: { managed?: boolean }) {
   const { session } = useContext(AuthContext);
@@ -55,7 +63,7 @@ export function OrganizationPicker({ managed = false }: { managed?: boolean }) {
   }, [memberships, query]);
   if (memberships.length > 0 && (!canManageWorkspaces || (!managed && memberships.length === 1)))
     return (
-      <Navigate to={`/o/${session!.memberships[0].organization_id}`} replace />
+      <Navigate to={landingPage(memberships[0])} replace />
     );
   return (
     <main className="workspace-picker">
@@ -80,7 +88,7 @@ export function OrganizationPicker({ managed = false }: { managed?: boolean }) {
         <div className="workspace-list workspace-management-list">
           {filtered.slice(0, visibleCount).map((member) => (
             <article className="workspace-management-card" key={member.id}>
-              <Link className="workspace-card" to={`/o/${member.organization_id}`}>
+              <Link className="workspace-card" to={landingPage(member)}>
                 <span className="workspace-icon" style={workspaceBadgeStyle(member.organization_color)} aria-hidden="true">{member.organization_name.slice(0, 1).toUpperCase()}</span>
                 <div className="workspace-card-copy">
                   <h2>{member.organization_name}</h2>
@@ -143,6 +151,7 @@ export function Shell() {
   }, [role]);
   if (!member) return <Navigate to="/" replace />;
   const root = `/o/${orgId}`;
+  const home = landingPage(member);
   return (
     <OrganizationContext.Provider value={member}>
       <CurrencyProvider key={member.id}>
@@ -151,7 +160,7 @@ export function Shell() {
           Skip to main content
         </a>
         <aside className={`sidebar ${menuOpen ? "open" : ""}`}>
-          <Link to={root} className="brand-link">
+          <Link to={home} className="brand-link">
             <Brand />
           </Link>
           <button
@@ -180,6 +189,12 @@ export function Shell() {
               const link = event.target.closest<HTMLAnchorElement>("a");
               if (link) preloadSidebarPage(link.pathname);
             }}>
+            {member.role === "customer" && member.customer_id && (
+              <NavLink to={`${root}/users/${member.customer_id}`}>
+                <CalendarDays size={19} className="icon-warning" />
+                My bookings
+              </NavLink>
+            )}
             <NavLink to={root} end>
               <LayoutDashboard size={19} />
               {member.role === "admin" ? "Overview" : "My account"}
@@ -202,15 +217,10 @@ export function Shell() {
                 Payment reviews
               </NavLink>
             )}
-            {member.role === "admin" ? (
+            {member.role === "admin" && (
               <NavLink to={`${root}/users`}>
                 <FolderOpen size={19} className="icon-warning" />
                 Customer records
-              </NavLink>
-            ) : member.customer_id && (
-              <NavLink to={`${root}/users/${member.customer_id}`}>
-                <CalendarDays size={19} className="icon-warning" />
-                My bookings
               </NavLink>
             )}
             {member.role === "admin" && (
@@ -264,7 +274,7 @@ export function Shell() {
             >
               <Menu />
             </button>
-            <Link to={root} className="topbar-brand">
+            <Link to={home} className="topbar-brand">
               <Brand />
             </Link>
             {member.role === "admin" && <span className="breadcrumb">

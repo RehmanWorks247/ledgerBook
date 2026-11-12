@@ -6,7 +6,7 @@ import { readFile } from 'node:fs/promises';
 const origin = 'http://127.0.0.1:4312';
 const writeHeaders = { Origin: origin, 'X-CSRF-Protection': '1' };
 type Workspace = { id: string; name: string; description: string; color: string; version: number };
-let seed: { orgId: string };
+let seed: { orgId: string; customerId: string };
 let adminCookies: Awaited<ReturnType<BrowserContext['cookies']>>;
 let customerCookies: Awaited<ReturnType<BrowserContext['cookies']>>;
 const fixtures = new WeakMap<BrowserContext, Set<string>>();
@@ -164,11 +164,11 @@ test('admins create, customize, switch, and permanently delete a workspace on de
   await page.screenshot({ path: '.local/e2e/workspaces-mobile.png', fullPage: true });
 });
 
-test('customers open their account without workspace navigation or settings on desktop and mobile', async ({ page, context }) => {
+test('customers land on bookings without workspace navigation or settings on desktop and mobile', async ({ page, context }) => {
   await authenticate(context, true);
   await page.goto('/workspaces');
-  await expect(page).toHaveURL(`/o/${seed.orgId}`);
-  await expect(page.getByRole('heading', { name: 'Account details', exact: true })).toBeVisible();
+  await expect(page).toHaveURL(`/o/${seed.orgId}/users/${seed.customerId}`);
+  await expect(page.getByRole('heading', { name: 'My bookings', exact: true })).toBeVisible();
   await expect(page.locator('.workspace-card, .organization-label, .breadcrumb')).toHaveCount(0);
   await expect(page.locator('a[href="/workspaces"]')).toHaveCount(0);
   await expect(page.getByText(/workspace/i)).toHaveCount(0);

@@ -1,5 +1,20 @@
 # Booking invoices
 
+Invoice numbers use one unique increasing sequence: `Inv-up001`, `Inv-up002`,
+`Inv-up003` (continuing to `Inv-up1000` and beyond). Each issued version has its
+own number. Internal UUIDs remain stable for links and authorization. Failed
+transactions may leave gaps; numbers are never reused.
+
+Migration `030_sequential_invoice_numbers.sql` and its transactional data hook
+renumber existing invoices in issue order and regenerate their saved PDFs from
+their saved snapshots. Only the invoice number and filename change in each
+snapshot; financial values, issue dates and identities are preserved. An audit
+event maps each previous number to its replacement. No emails are sent.
+After this explicit one-time renumbering, ordinary invoice immutability continues.
+
+Invoice history offers **Preview** and **Download**. Preview opens the same
+authenticated PDF in the in-app viewer with page and zoom controls.
+
 Every new administrator-created booking commits an invoice PDF, a financial snapshot, and a queued customer confirmation in the same database transaction as its charge and schedule. The confirmation carries that exact PDF. Approving a customer payment creates a new invoice version and attaches it to the existing approval email. Email-provider calls run in the durable worker after commit.
 
 ## Financial behavior
@@ -7,13 +22,13 @@ Every new administrator-created booking commits an invoice PDF, a financial snap
 - Only approved payments explicitly linked to this booking count as paid. Pending/rejected receipt evidence, reversed payments, and unallocated account-level ledger payments do not count.
 - Amounts use integer minor units and `BigInt` calculations, never floating-point money. Booking accounting is GBP with two decimals, consistent with the existing booking contract.
 - Booking edits, payment approvals/reversals, direct booking-charge reversals, and cancellations append versions. Retries replay their existing event and cannot create another version. Concurrent changes serialize on the account and booking locks.
-- Overpayment is displayed as customer credit. Cancellation/reversal sets the collectible booking total to zero and retains approved money as credit; the snapshot also retains the original booking amount.
+- Overpayment is displayed as customer credit. Cancellation/reversal sets the collectible booking total to zero; the historical snapshot retains approved money and the original booking amount. Cancelled bookings and their linked payments are excluded from current account totals and reports.
 - PDFs and snapshots are immutable. A later customer name, booking reference, payment, or template change cannot rewrite an earlier invoice. Ordinary update/delete is rejected by the database; authorized permanent account/workspace deletion purges invoices with their booking.
 - A pre-existing booking receives one `legacy_snapshot` at its first invoice-history visit or immediately before its first subsequent invoice-producing mutation. This records the current state; the application does not invent historical invoice versions or email old bookings during migration.
 
 ## UI and API
 
-Booking details include an invoice-history table, latest first, with total, paid, balance, issue time and PDF downloads. Approved payments refresh this history. The bookings list's **Booking status → Include cancelled** option opens read-only invoice history for cancelled bookings.
+Administrator booking details include an invoice-history table, latest first, with total, paid, balance, issue time, PDF preview and downloads. Approved payments and saved booking edits refresh this history. The administrator bookings list's **Booking status → Include cancelled** option opens read-only invoice history for cancelled bookings.
 
 Both endpoints require a live organization membership and access to the exact customer/booking:
 
@@ -32,7 +47,9 @@ The invoice is persisted before email delivery. A provider outage leaves the not
 
 ## Template and deployment
 
-The renderer is `apps/api/src/invoices/invoice-pdf.ts`. Template version 2 follows the supplied payment invoice: the original Umrah Packages UK logo and company contact details, black-and-gold angled bands, guest details, a two-column booking table and total/received/balance amounts. The company branding is fixed to the supplied PDF, as requested; it does not come from the workspace name. The issue date, customer name/email/phone, booking reference, departure, selected services and financial amounts come from the immutable snapshot. The phone is captured at issuance; blank optional contact fields are omitted.
+The renderer is `apps/api/src/invoices/invoice-pdf.ts`. Template version 3 follows the supplied payment invoice: the original Umrah Packages UK logo and company contact details, black-and-gold angled bands, guest details, a two-column booking table, an included-services checklist and total/received/balance amounts. The company branding is fixed to the supplied PDF, as requested; it does not come from the workspace name. The issue date, customer name/email/phone, booking reference, departure, selected services and financial amounts come from the immutable snapshot. The phone is captured at issuance; blank optional contact fields are omitted.
+
+**Included services** shows only the checkboxes selected in the create/edit booking form, using the same labels and order: Flight Tickets, Makkah Hotel, Madinah Hotel, Transfers, Visas and Extras. Each selected item has a vector-drawn ticked checkbox in a two-column panel. Unchecked services are omitted; selecting none omits the entire panel. Saving a booking edit captures the revised selection in the new invoice version while earlier PDFs retain their original selection.
 
 The PDF omits internal reasons, customer codes, audit explanations, version commentary and instalment schedules. The invoice number remains in a small footer. Credits are labelled explicitly, and cancelled/reversed bookings retain a visible status. The booking table uses **Description / Details** because passenger quantities, named hotels and room details are not stored by the booking model. Those sample values and empty address fields are omitted. Long fields continue on branded pages without overwriting the footer. Existing saved PDFs remain unchanged; new invoice versions use the new template.
 
@@ -48,6 +65,7 @@ Deploy with migration `020_booking_invoices.sql` before starting this applicatio
 - `tests/invoice-email.simulation.ts`: real HTTP through the committed local Resend stand-in, including failure/retry and attachment identity.
 - `apps/web/tests/invoices.test.ts`: pagination, stale responses, revoked access, download validation and rendering.
 - `e2e/invoices.spec.ts`: actual browser downloads, approval refresh without reload, customer access, mobile layout and cancelled invoice history.
+- `e2e/invoice-services.spec.ts`: create/edit checkbox selections in downloaded PDFs, automatic history refresh, clearing all services and preserving earlier PDFs.
 
 Set `TEST_DATABASE_URL` to an isolated PostgreSQL instance when checking production row locks. The default PGlite tests exercise SQL and triggers but use a single queued connection. No live-provider or production deployment is implied by these local checks.
 

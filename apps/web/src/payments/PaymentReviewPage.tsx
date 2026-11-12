@@ -5,7 +5,8 @@ import { Empty, ErrorNotice, TableSkeleton, PageHeading, Pagination } from "../c
 import { Navigate } from "../router";
 import { useOrganization } from "../state";
 import { PaymentDetailsDialog, PaymentTable } from "./PaymentTable";
-import type { Payment, PaymentReviewResponse, PaymentReviewStatus } from "./model";
+import { paymentHistoryNotices, type Payment, type PaymentHistoryAction, type PaymentReviewResponse, type PaymentReviewStatus } from "./model";
+import "../pages/Bookings.css";
 
 const statuses = [{ value: "pending", label: "Pending review" }, { value: "approved", label: "Approved" }, { value: "rejected", label: "Rejected" }, { value: "all", label: "All payments" }] as const;
 const sorts = [{ value: "oldest", label: "Oldest first" }, { value: "newest", label: "Newest first" }, { value: "amount_desc", label: "Amount: high to low" }, { value: "amount_asc", label: "Amount: low to high" }];
@@ -25,6 +26,7 @@ function PaymentReviewContents() {
   const member = useOrganization();
   const [initial] = useState(() => new URLSearchParams(window.location.search));
   const [status, setStatus] = useState<PaymentReviewStatus>(() => statuses.find(item => item.value === initial.get("status"))?.value || "pending");
+  const [trash, setTrash] = useState(() => initial.get("deleted") === "deleted");
   const [search, setSearch] = useState(() => (initial.get("q") || "").slice(0, 200));
   const [query, setQuery] = useState(search);
   const [from, setFrom] = useState(() => initialDate(initial.get("from")));
@@ -41,7 +43,8 @@ function PaymentReviewContents() {
     const timer = window.setTimeout(() => { setQuery(search.trim()); setPage(1); }, 250);
     return () => window.clearTimeout(timer);
   }, [search, query]);
-  const queryParams = new URLSearchParams({ status, sort, page: String(page), page_size: String(size) });
+  const queryParams = new URLSearchParams({ status: trash ? "all" : status, sort, page: String(page), page_size: String(size) });
+  if (trash) queryParams.set("deleted", "deleted");
   if (query) queryParams.set("q", query);
   if (from && !invalidDates) queryParams.set("from", from);
   if (to && !invalidDates) queryParams.set("to", to);
@@ -54,15 +57,17 @@ function PaymentReviewContents() {
   function clearFilters() { setSearch(""); setQuery(""); setFrom(""); setTo(""); setPage(1); }
   function reviewed(payment: Payment) {
     setSelected(null);
-    setNotice(payment.status === "approved" ? `Payment for ${payment.booking_reference} approved and recorded. The customer’s confirmation email is queued.` : `Payment for ${payment.booking_reference} rejected. The review note is visible to the customer.`);
+    const label = payment.booking_reference ? `Payment for ${payment.booking_reference}` : "Account payment";
+    setNotice(payment.status === "approved" ? `${label} approved and recorded. The customer’s confirmation email is queued.` : `${label} rejected. The review note is visible to the customer.`);
     refresh();
   }
+  function changed(action: PaymentHistoryAction) { setSelected(null); setNotice(paymentHistoryNotices[action]); refresh(); }
   return <div className="payment-review-page">
     <PageHeading title="Payment reviews" description="Find a payment, check its receipts and record your decision." actions={<button type="button" className="button secondary" aria-label="Refresh payment submissions" disabled={resource.loading} onClick={refresh}><RefreshCw size={15} />Refresh</button>} />
     {notice && <div className="notice success payment-result-notice" role="status"><span>{notice}</span><button type="button" className="icon-button" aria-label="Dismiss payment notification" onClick={() => setNotice("")}><X size={16} /></button></div>}
     {!!emailStatus.data?.retrying && <div className="notice" role="status">{emailStatus.data.retrying} notification email{emailStatus.data.retrying === 1 ? " is" : "s are"} waiting to retry. Payment records are saved.</div>}
     <section className="panel payment-review-panel" aria-label="Payment review queue">
-      <div className="payment-status-tabs" role="group" aria-label="Payment status">{statuses.map(item => <button type="button" key={item.value} aria-pressed={status === item.value} onClick={() => { setStatus(item.value); setPage(1); }}><span>{item.label}</span>{resource.data?.counts && <span className="payment-tab-count">{resource.data.counts[item.value]}</span>}</button>)}</div>
+      <div className="payment-status-tabs" role="group" aria-label="Payment status">{statuses.map(item => <button type="button" key={item.value} aria-pressed={!trash && status === item.value} onClick={() => { setTrash(false); setStatus(item.value); setPage(1); }}><span>{item.label}</span>{!trash && resource.data?.counts && <span className="payment-tab-count">{resource.data.counts[item.value]}</span>}</button>)}<button type="button" aria-pressed={trash} onClick={() => { setTrash(true); setPage(1); }}>Trash</button></div>
       <div className="payment-query-toolbar" role="search" aria-label="Find payment submissions">
         <label className="payment-query-search"><span>Search payments</span><div><Search size={16} aria-hidden="true" /><input type="search" value={search} maxLength={200} placeholder="ID, name, booking, date, amount…" onChange={event => setSearch(event.target.value)} aria-describedby="payment-search-help" /></div></label>
         <label>Payment from<input type="date" value={from} max={to || undefined} aria-invalid={invalidDates || undefined} onChange={event => { setFrom(event.target.value); setPage(1); }} /></label>
@@ -71,11 +76,11 @@ function PaymentReviewContents() {
       </div>
       <div className="payment-query-summary"><p id="payment-search-help"><SlidersHorizontal size={13} aria-hidden="true" /><span>Search IDs, names, email, dates, amounts, notes and receipt names.</span></p>{filtered && <button type="button" className="text-link" onClick={clearFilters}><X size={13} />Clear filters</button>}</div>
       {invalidDates ? <div className="payment-state"><ErrorNotice message="Payment from must be on or before payment to." /></div> : resource.error ? <div className="payment-state"><ErrorNotice message={resource.error} /><button type="button" className="button secondary" onClick={resource.refresh}>Try again</button></div> : !resource.data ? <TableSkeleton columns={["Customer", "Booking", "Payment date", "Amount", "Status", "Actions"]} label="Loading payment reviews" /> : <div aria-busy={resource.loading}>
-        {!resource.data.items.length ? <div className="payment-empty"><Empty title={filtered ? "No matching payments" : status === "pending" ? "You’re all caught up" : "No payments here yet"} detail={filtered ? "Try another ID, name or date range, or clear your filters." : status === "pending" ? "New payment submissions will appear here for review." : "Payments will appear here as customers submit receipts and decisions are recorded."} />{filtered && <button type="button" className="button secondary" onClick={clearFilters}>Clear filters</button>}{status !== "all" && <button type="button" className="text-link" onClick={() => { setStatus("all"); setPage(1); }}>Search all statuses</button>}</div> : <PaymentTable payments={resource.data.items} organizationId={member.organization_id} timeZone={resource.data.time_zone} canReview showCustomer onOpen={payment => setSelected({ payment, timeZone: resource.data!.time_zone })} />}
+        {!resource.data.items.length ? <div className="payment-empty"><Empty title={filtered ? "No matching payments" : trash ? "Payment trash is empty" : status === "pending" ? "You’re all caught up" : "No payments here yet"} detail={filtered ? "Try another ID, name or date range, or clear your filters." : trash ? "Payments moved to trash can be restored or permanently deleted here." : status === "pending" ? "New payment submissions will appear here for review." : "Payments will appear here as customers submit receipts and decisions are recorded."} />{filtered && <button type="button" className="button secondary" onClick={clearFilters}>Clear filters</button>}{!trash && status !== "all" && <button type="button" className="text-link" onClick={() => { setStatus("all"); setPage(1); }}>Search all statuses</button>}</div> : <PaymentTable payments={resource.data.items} organizationId={member.organization_id} timeZone={resource.data.time_zone} canReview showCustomer onOpen={payment => setSelected({ payment, timeZone: resource.data!.time_zone })} />}
         <div className="payment-table-footer"><label>Rows<select aria-label="Payments per page" value={size} onChange={event => { setSize(Number(event.target.value)); setPage(1); }}>{[10, 25, 50, 100].map(value => <option key={value} value={value}>{value}</option>)}</select></label><Pagination page={resource.data.page} total={resource.data.total} size={resource.data.page_size} onPage={setPage} /></div>
         <p className="payment-timezone">Dates shown in {resource.data.time_zone}. Payment dates use the date supplied by the customer.</p>
       </div>}
     </section>
-    {selected && <PaymentDetailsDialog payment={selected.payment} organizationId={member.organization_id} timeZone={selected.timeZone} canReview onClose={() => setSelected(null)} onReviewed={reviewed} />}
+    {selected && <PaymentDetailsDialog payment={selected.payment} organizationId={member.organization_id} timeZone={selected.timeZone} canReview onClose={() => setSelected(null)} onReviewed={reviewed} onChanged={changed} onRefresh={refresh} />}
   </div>;
 }

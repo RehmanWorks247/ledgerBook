@@ -179,6 +179,7 @@ export function App() {
             <Route path="account" element={<AccountRedirect />} />
             <Route path="settings" element={<Settings />} />
             <Route path="companies" element={<CompaniesPage />} />
+            <Route path="companies/:companySlug" element={<CompaniesPage />} />
             <Route path="users" element={<UserDirectory />} />
             <Route path="users/:customerId" element={<UserRecord />} />
             <Route path="users/:customerId/bookings/:bookingId" element={<BookingPage />} />

@@ -70,6 +70,11 @@
 .payment-dialog-body .payment-receipt { max-width: none; }
 .payment-dialog-body .payment-receipt img { height: 220px; }
 .payment-dialog-body .payment-confirmation textarea { width: 100%; padding: 9px 10px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--surface); color: var(--text); resize: vertical; }
+.payment-management { border-top: 1px solid var(--line); padding-top: 18px; margin-top: 18px; }
+.payment-management input { width: 100%; min-width: 0; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--surface); color: var(--text); padding: 9px 10px; }
+.payment-management .form-columns > label { min-width: 0; }
+.payment-management input:disabled { color: var(--muted); background: var(--surface-subtle); }
+#booking-payment-form { scroll-margin-top: 85px; }
 .payment-dialog-footer { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 12px 22px; background: var(--surface-subtle); border-top: 1px solid var(--line); }
 .payment-dialog-footer > span { font-size: 10px; color: var(--muted); overflow-wrap: anywhere; }
 .payment-dialog-footer code { display: block; margin-top: 3px; font-size: 10px; color: var(--text-secondary); }
@@ -110,3 +115,8 @@
   .payment-dialog-body .payment-receipt img { height: 160px; }
   .payment-dialog-body .payment-actions .button { min-height: 40px; }
 }
+
+.admin-payment-entry { padding: 18px; border-bottom: 1px solid var(--line); }
+.admin-payment-entry .admin-payment-form { margin: 0; }
+.admin-payment-form .payment-actions { margin-top: 16px; flex-wrap: wrap; }
+.admin-payment-form select { max-width: 100%; }

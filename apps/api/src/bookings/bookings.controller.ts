@@ -26,6 +26,10 @@ export class BookingsController {
     await this.rate.consume('booking-create',req.user.id,60,3600);
     return this.bookings.create(await this.access.membership(req.user.id,orgId,true),customerId,body);
   }
+  @Get('payment-options')
+  async paymentOptions(@Req() req:AuthRequest,@Param('orgId',ParseUUIDPipe) orgId:string,@Param('customerId',ParseUUIDPipe) customerId:string,@Query('booking_id') bookingId:string|undefined) {
+    return this.bookings.paymentOptions(await this.access.membership(req.user.id,orgId,true),customerId,bookingId);
+  }
   @Get(':bookingId')
   async get(@Req() req:AuthRequest,@Param('orgId',ParseUUIDPipe) orgId:string,@Param('customerId',ParseUUIDPipe) customerId:string,@Param('bookingId',ParseUUIDPipe) bookingId:string) {
     return this.bookings.get(await this.access.membership(req.user.id,orgId),customerId,bookingId);

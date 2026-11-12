@@ -19,20 +19,31 @@ export const MAX_BOOKING_PAYMENTS = 100;
 export const MAX_BOOKING_RECEIPT_BYTES = 100 * 1024 * 1024;
 export type PaymentUpload = { originalname:string; mimetype:string; buffer:Buffer; size:number };
 type Receipt = {name:string;content:Buffer;mimeType:'image/webp'|'application/pdf';originalSha256:string;originalName:string;originalMime:string};
-type PaymentRow = QueryResultRow & {id:string;organization_id:string;customer_id:string;booking_id:string;
+type PaymentRow = QueryResultRow & {id:string;organization_id:string;customer_id:string;booking_id:string|null;
   amount_minor:string;currency:string;payment_date:string;note:string;status:'pending'|'approved'|'rejected';
   submitted_at:Date|string;reviewed_at:Date|string|null;reviewed_by:string|null;rejection_reason:string|null;
-  ledger_entry_id:string|null;request_hash:string;booking_reference:string;customer_name:string;customer_code:string;submitted_by:string};
+  ledger_entry_id:string|null;request_hash:string;booking_reference:string|null;customer_name:string;customer_code:string;submitted_by:string;
+  source:'booking_instalment'|'customer_receipt';version:number;deleted_at:Date|string|null;deletion_reason:string|null;restore_credit:boolean|null;reversed:boolean};
 const paymentColumns = `p.id,p.organization_id,p.customer_id,p.booking_id,p.amount_minor::text AS amount_minor,p.currency,
   p.payment_date::text AS payment_date,p.note,p.status,p.submitted_at,p.reviewed_at,p.reviewed_by,p.rejection_reason,
-  p.ledger_entry_id::text AS ledger_entry_id,p.request_hash,p.submitted_by,b.reference AS booking_reference,c.name AS customer_name,c.customer_code`;
-const paymentJoins = `FROM booking_payments p JOIN bookings b ON b.id=p.booking_id AND b.organization_id=p.organization_id
+  p.ledger_entry_id::text AS ledger_entry_id,p.request_hash,p.submitted_by,p.source,p.version,p.deleted_at,p.deletion_reason,p.restore_credit,
+  EXISTS(SELECT 1 FROM ledger_entries reversed WHERE reversed.reversal_of=p.ledger_entry_id) AS reversed,
+  b.reference AS booking_reference,c.name AS customer_name,c.customer_code`;
+const paymentJoins = `FROM booking_payments p LEFT JOIN bookings b ON b.id=p.booking_id AND b.organization_id=p.organization_id
   JOIN customers c ON c.id=p.customer_id AND c.organization_id=p.organization_id`;
 const submitSchema = z.object({amount:z.string().max(24),payment_date:z.string().refine(validDate,'Enter a valid payment date.'),
   note:z.string().trim().max(1000).default(''),idempotency_key:z.uuid()}).strict();
+const linkSchema=z.object({payment_entry_id:z.string().regex(/^[1-9]\d{0,18}$/)
+  .refine(value=>/^[1-9]\d{0,18}$/.test(value)&&BigInt(value)<=9_223_372_036_854_775_807n,'Choose a valid existing payment.'),idempotency_key:z.uuid()}).strict();
+type RecordedPaymentInput={operation:'record';amount:string;payment_date:string;note:string;idempotency_key:string}
+  | {operation:'link';payment_entry_id:string;idempotency_key:string};
 const queryInteger = (maximum:number) => z.union([z.number(),z.string().regex(/^\d+$/).transform(Number)])
   .pipe(z.number().int().min(1).max(maximum));
+const listQuerySchema=z.object({deleted:z.enum(['active','deleted']).default('active')}).strict();
+const historyOperationSchema=z.object({version:z.number().int().min(1),reason:z.string().trim().min(1).max(1000)});
+const historyEditSchema=historyOperationSchema.extend({amount:z.string().max(24),payment_date:z.string().refine(validDate,'Enter a valid payment date.'),note:z.string().trim().max(1000)}).strict();
 const reviewQuerySchema = z.object({
+  deleted:z.enum(['active','deleted']).default('active'),
   status:z.enum(['pending','approved','rejected','all']).default('pending'),
   q:z.string().trim().max(200).default(''),
   from:z.string().refine(validDate,'Enter a valid start date.').optional(),
@@ -68,9 +79,9 @@ export class PaymentsService {
   constructor(@Inject(DatabaseService) private readonly db:DatabaseService,
     @Inject(AccessService) private readonly access:AccessService) {}
 
-  private async context(client:PoolClient,member:Membership,customerId:string,bookingId:string,mode:'read'|'submit'|'review'='read') {
-    uuid(bookingId,'booking');
-    if(mode==='submit') {
+  private async context(client:PoolClient,member:Membership,customerId:string,bookingId:string|null,mode:'read'|'submit'|'review'|'history'|'record'='read') {
+    if(bookingId!==null) uuid(bookingId,'booking');
+    if(mode!=='read') {
       uuid(customerId,'customer');
       // Account disable/deletion locks organization -> customer -> membership.
       // Match that order before taking the customer's lock: membership() also
@@ -84,16 +95,20 @@ export class PaymentsService {
         [member.organization_id,customerId,member.user_id]);
       if(!locked.rows.length) throw new NotFoundException('Customer account was not found.');
     }
-    const active=await this.access.membership(member.user_id,member.organization_id,mode==='review',client);
+    const active=await this.access.membership(member.user_id,member.organization_id,mode==='review'||mode==='history'||mode==='record',client);
     const customer=await this.access.customer(active,customerId,client,mode!=='read');
     if(mode==='submit' && active.role!=='customer') throw new ForbiddenException('Only the customer can submit payment evidence.');
+    if(mode!=='read' && mode!=='history' && customer.status!=='active') throw new ConflictException('Restore this customer before submitting or reviewing payments.');
+    if(mode!=='read' && (active.currency!=='GBP' || active.currency_exponent!==2)) {
+      throw new ConflictException('Payments require a GBP accounting workspace.');
+    }
+    if(bookingId===null) return {active,customer,booking:null};
     const result=await client.query(`SELECT b.*,b.total_minor::text AS total_minor FROM bookings b
       WHERE b.organization_id=$1 AND b.customer_id=$2 AND b.id=$3 ${mode!=='read'?'FOR UPDATE':''}`,[active.organization_id,customerId,bookingId]);
     const booking=result.rows[0];
     if(!booking) throw new NotFoundException('Booking was not found for this customer.');
-    if(mode!=='read' && booking.deleted_at) throw new ConflictException('This booking has been cancelled.');
-    if(mode!=='read' && customer.status!=='active') throw new ConflictException('Restore this customer before submitting or reviewing payments.');
-    if(mode!=='read' && (active.currency!=='GBP' || active.currency_exponent!==2 || booking.currency!=='GBP')) {
+    if(mode!=='read' && mode!=='history' && booking.deleted_at) throw new ConflictException('This booking has been cancelled.');
+    if(mode!=='read' && booking.currency!=='GBP') {
       throw new ConflictException('Booking payments require a GBP accounting workspace.');
     }
     return {active,customer,booking};
@@ -105,13 +120,13 @@ export class PaymentsService {
   }
 
   /** Called before multipart buffering; submit repeats authorization inside its write transaction. */
-  async authorizeUpload(member:Membership,customerId:string,bookingId:string) {
+  async authorizeUpload(member:Membership,customerId:string,bookingId:string|null) {
     await this.db.transaction(async client=>{const {booking}=await this.context(client,member,customerId,bookingId,'submit');
-      await this.assertChargeActive(client,booking.charge_entry_id);});
+      if(booking) await this.assertChargeActive(client,booking.charge_entry_id);});
   }
 
   private async normalizeFiles(files:PaymentUpload[]):Promise<Receipt[]> {
-    if(!Array.isArray(files) || files.length<1 || files.length>MAX_RECEIPTS) throw new BadRequestException('Attach between one and five receipt files.');
+    if(!Array.isArray(files) || files.length>MAX_RECEIPTS) throw new BadRequestException('Attach at most five receipt files.');
     const receipts:Receipt[]=[];
     const hashes=new Set<string>();
     // Decode sequentially so one request never expands five large images at once.
@@ -161,23 +176,27 @@ export class PaymentsService {
       [rows[0].organization_id,rows.map(row=>row.id)]);
     return rows.map(({request_hash:_hash,organization_id:_organization,submitted_by:_submitter,...row})=>({...row,
       receipts:receipts.rows.filter(receipt=>receipt.payment_id===row.id).map(({payment_id:_payment,...receipt})=>({...receipt,
-        url:`/api/organizations/${_organization}/customers/${row.customer_id}/bookings/${row.booking_id}/payments/${row.id}/receipts/${receipt.id}`}))}));
+        url:`/api/organizations/${_organization}/customers/${row.customer_id}${row.booking_id?`/bookings/${row.booking_id}`:''}/payments/${row.id}/receipts/${receipt.id}`}))}));
   }
 
-  private async find(client:PoolClient,orgId:string,customerId:string,bookingId:string,paymentId:string,lock=false) {
+  private async find(client:PoolClient,orgId:string,customerId:string,bookingId:string|null,paymentId:string,lock=false) {
     uuid(paymentId,'payment');
     const result=await client.query<PaymentRow>(`SELECT ${paymentColumns} ${paymentJoins}
-      WHERE p.organization_id=$1 AND p.customer_id=$2 AND p.booking_id=$3 AND p.id=$4 ${lock?'FOR UPDATE OF p':''}`,
+      WHERE p.organization_id=$1 AND p.customer_id=$2 AND p.booking_id IS NOT DISTINCT FROM $3::uuid AND p.id=$4 ${lock?'FOR UPDATE OF p':''}`,
       [orgId,customerId,bookingId,paymentId]);
-    if(!result.rows[0]) throw new NotFoundException('Payment submission was not found in this booking.');
+    if(!result.rows[0]) throw new NotFoundException('Payment submission was not found in this account or booking.');
     return result.rows[0];
   }
 
-  async list(member:Membership,customerId:string,bookingId:string) {
+  async list(member:Membership,customerId:string,bookingId:string|null,rawQuery:unknown={}) {
+    const query=parse(listQuerySchema,rawQuery);
     return this.db.transaction(async client=>{
       const {active}=await this.context(client,member,customerId,bookingId);
+      if(query.deleted==='deleted' && active.role!=='admin') throw new ForbiddenException('Only administrators can view deleted payment history.');
       const result=await client.query<PaymentRow>(`SELECT ${paymentColumns} ${paymentJoins}
-        WHERE p.organization_id=$1 AND p.customer_id=$2 AND p.booking_id=$3 ORDER BY p.submitted_at DESC,p.id`,[active.organization_id,customerId,bookingId]);
+        WHERE p.organization_id=$1 AND p.customer_id=$2 AND ($3::uuid IS NULL OR p.booking_id=$3)
+        AND ($3::uuid IS NOT NULL OR b.deleted_at IS NULL)
+        AND p.deleted_at IS ${query.deleted==='deleted'?'NOT ':''}NULL ORDER BY p.submitted_at DESC,p.id`,[active.organization_id,customerId,bookingId]);
       return {items:await this.serialize(client,result.rows),time_zone:config.businessTimeZone};
     });
   }
@@ -188,7 +207,8 @@ export class PaymentsService {
     return this.db.transaction(async client=>{
       const active=await this.access.membership(member.user_id,member.organization_id,true,client);
       const values:unknown[]=[active.organization_id];
-      const conditions=['p.organization_id=$1'];
+      const conditions=['p.organization_id=$1',`p.deleted_at IS ${query.deleted==='deleted'?'NOT ':''}NULL`];
+      if(query.deleted==='active') conditions.push('b.deleted_at IS NULL');
       const parameter=(value:unknown)=>{values.push(value);return `$${values.length}`;};
       if(query.from) conditions.push(`p.payment_date>=${parameter(query.from)}::date`);
       if(query.to) conditions.push(`p.payment_date<=${parameter(query.to)}::date`);
@@ -231,35 +251,117 @@ export class PaymentsService {
     });
   }
 
-  async submit(member:Membership,customerId:string,bookingId:string,raw:unknown,files:PaymentUpload[]) {
+  /** Confirm received money separately from the reminder schedule. */
+  async record(member:Membership,customerId:string,bookingId:string,raw:unknown) {
+    const data=parse(submitSchema,raw),amount=parseMoney(data.amount,2).toString();
+    if(data.payment_date>businessDate()) throw new BadRequestException('Payment date cannot be in the future.');
+    return this.saveRecordedPayment(member,customerId,bookingId,{...data,amount,operation:'record'});
+  }
+
+  /** Allocate one whole, unassigned customer payment without posting it again. */
+  async link(member:Membership,customerId:string,bookingId:string,raw:unknown) {
+    return this.saveRecordedPayment(member,customerId,bookingId,{...parse(linkSchema,raw),operation:'link'});
+  }
+
+  private async saveRecordedPayment(member:Membership,customerId:string,bookingId:string,data:RecordedPaymentInput) {
+    const fingerprint=digest(JSON.stringify({organization:member.organization_id,customer:customerId,booking:bookingId,
+      user:member.user_id,...data,idempotency_key:undefined}));
+    return this.db.transaction(async client=>{
+      const {active,booking}=await this.context(client,member,customerId,bookingId,'record');
+      // Customer locks serialize payment allocation, and the key lock also
+      // protects accidental reuse for a different customer in this workspace.
+      await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[`record-payment:${active.organization_id}:${data.idempotency_key}`]);
+      const prior=await client.query<{id:string;request_hash:string}>(`SELECT id,request_hash FROM booking_payments
+        WHERE organization_id=$1 AND idempotency_key=$2`,[active.organization_id,data.idempotency_key]);
+      if(prior.rows[0]) {
+        if(prior.rows[0].request_hash!==fingerprint) throw new ConflictException('This request was already used for a different payment.');
+        const payment=await this.find(client,active.organization_id,customerId,bookingId,prior.rows[0].id);
+        if(payment.deleted_at) throw new ConflictException('This payment was deleted. Restore it from payment history instead of recording it again.');
+        return (await this.serialize(client,[payment]))[0];
+      }
+      const purged=await client.query(`SELECT 1 FROM audit_events WHERE organization_id=$1 AND action='payment.permanently_deleted'
+        AND metadata->'before'->>'idempotency_key'=$2`,[active.organization_id,data.idempotency_key]);
+      if(purged.rows.length) throw new ConflictException('This payment was permanently deleted. Start a new record for a new payment.');
+      await this.assertChargeActive(client,booking.charge_entry_id);
+      let amount:string,paymentDate:string,note:string,entryId:string|undefined;
+      if(data.operation==='link') {
+        const result=await client.query<{id:string;amount_minor:string;payment_date:string;description:string;payment_id:string|null;booking_id:string|null}>(
+          `SELECT e.id::text,(-e.amount_minor)::text AS amount_minor,e.effective_date::text AS payment_date,e.description,
+            p.id AS payment_id,p.booking_id FROM ledger_entries e LEFT JOIN booking_payments p ON p.ledger_entry_id=e.id
+          WHERE e.id=$1 AND e.organization_id=$2 AND e.customer_id=$3 AND e.kind='payment' AND e.currency='GBP'
+            AND e.amount_minor<0 AND NOT EXISTS(SELECT 1 FROM ledger_entries r WHERE r.reversal_of=e.id)`,
+          [data.payment_entry_id,active.organization_id,customerId]);
+        const entry=result.rows[0];
+        if(!entry) throw new BadRequestException('Choose an available payment from this customer account.');
+        if(entry.payment_id) throw new ConflictException(entry.booking_id===bookingId?
+          'This payment is already recorded for this booking.':'This payment is already assigned to another booking.');
+        if(entry.payment_date>businessDate()) throw new BadRequestException('Payment date cannot be in the future.');
+        amount=entry.amount_minor;paymentDate=entry.payment_date;note=entry.description;entryId=entry.id;
+      } else {amount=data.amount;paymentDate=data.payment_date;note=data.note;}
+      await ensureBookingInvoice(client,{organizationId:active.organization_id,customerId,bookingId,actorId:active.user_id});
+      const id=randomUUID();
+      if(!entryId) {
+        const entry=await client.query<{id:string}>(`INSERT INTO ledger_entries(organization_id,customer_id,kind,amount_minor,currency,effective_date,
+          description,reference,created_by,idempotency_key,request_hash)
+          VALUES($1,$2,'payment',$3,'GBP',$4,$5,$6,$7,$8,$9) RETURNING id::text AS id`,
+          [active.organization_id,customerId,(-BigInt(amount)).toString(),paymentDate,`Payment for booking ${booking.reference}`,
+            booking.reference,active.user_id,randomUUID(),fingerprint]);
+        entryId=entry.rows[0].id;
+        await this.audit(client,active,'ledger.posted',entryId,{customer_id:customerId,booking_id:bookingId,payment_id:id,kind:'payment'});
+      }
+      await client.query(`INSERT INTO booking_payments(id,organization_id,customer_id,booking_id,amount_minor,payment_date,note,status,
+        submitted_by,idempotency_key,request_hash,reviewed_by,reviewed_at,ledger_entry_id,source)
+        VALUES($1,$2,$3,$4,$5,$6,$7,'approved',NULL,$8,$9,$10,now(),$11,'booking_instalment')`,
+        [id,active.organization_id,customerId,bookingId,amount,paymentDate,note,data.idempotency_key,fingerprint,active.user_id,entryId]);
+      await client.query('UPDATE bookings SET version=version+1,updated_at=now() WHERE id=$1',[bookingId]);
+      await this.audit(client,active,data.operation==='link'?'payment.linked':'payment.recorded',id,
+        {customer_id:customerId,booking_id:bookingId,entry_id:entryId,amount_minor:amount,payment_date:paymentDate,source:'booking_instalment'});
+      await issueBookingInvoice(client,{organizationId:active.organization_id,customerId,bookingId,actorId:active.user_id,
+        reason:'payment_approved',eventKey:`payment-${data.operation}:${id}`});
+      return (await this.serialize(client,[await this.find(client,active.organization_id,customerId,bookingId,id)]))[0];
+    });
+  }
+
+  async submit(member:Membership,customerId:string,bookingId:string|null,raw:unknown,files:PaymentUpload[]) {
     const data=parse(submitSchema,raw);
     const amount=parseMoney(data.amount,2);
     if(data.payment_date>businessDate()) throw new BadRequestException('Payment date cannot be in the future.');
     // Direct service callers receive the same authorization-before-decoding guarantee as HTTP callers.
     await this.authorizeUpload(member,customerId,bookingId);
-    const receipts=await this.normalizeFiles(files);
+    const receipts=await this.normalizeFiles(files??[]);
     const fingerprint=digest(JSON.stringify({organization:member.organization_id,customer:customerId,booking:bookingId,
       user:member.user_id,amount:amount.toString(),date:data.payment_date,note:data.note,
       receipts:receipts.map(receipt=>({sha:receipt.originalSha256,name:receipt.originalName,mime:receipt.originalMime}))}));
     return this.db.transaction(async client=>{
       const {active,customer,booking}=await this.context(client,member,customerId,bookingId,'submit');
+      await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[`record-payment:${active.organization_id}:${data.idempotency_key}`]);
       const prior=await client.query<{id:string;request_hash:string}>(`SELECT id,request_hash FROM booking_payments WHERE organization_id=$1 AND idempotency_key=$2`,[active.organization_id,data.idempotency_key]);
       if(prior.rows[0]) {
         if(prior.rows[0].request_hash!==fingerprint) throw new ConflictException('This submission key was already used for a different payment.');
-        return (await this.serialize(client,[await this.find(client,active.organization_id,customerId,bookingId,prior.rows[0].id)]))[0];
+        const previous=await this.find(client,active.organization_id,customerId,bookingId,prior.rows[0].id);
+        if(previous.deleted_at) throw new ConflictException('This payment submission was deleted by an administrator.');
+        return (await this.serialize(client,[previous]))[0];
       }
-      await this.assertChargeActive(client,booking.charge_entry_id);
+      const purged=await client.query(`SELECT 1 FROM audit_events WHERE organization_id=$1 AND action='payment.permanently_deleted'
+        AND metadata->'before'->>'idempotency_key'=$2`,[active.organization_id,data.idempotency_key]);
+      if(purged.rows.length) throw new ConflictException('This payment submission was permanently deleted. Use a new submission for a new payment.');
+      if(booking) await this.assertChargeActive(client,booking.charge_entry_id);
       const limits=await client.query<{total:number;pending:number}>(`SELECT count(*)::integer AS total,count(*) FILTER (WHERE status='pending')::integer AS pending
-        FROM booking_payments WHERE booking_id=$1`,[bookingId]);
-      if(limits.rows[0].pending>=MAX_PENDING_PAYMENTS) throw new ConflictException('This booking already has ten payments awaiting review. Wait for the administrator to review them.');
-      if(limits.rows[0].total>=MAX_BOOKING_PAYMENTS) throw new ConflictException('This booking has reached its payment submission limit. Contact the administrator.');
-      const used=await client.query<{bytes:string}>(`SELECT coalesce(sum(size),0)::text AS bytes FROM booking_payment_receipts WHERE booking_id=$1`,[bookingId]);
+        FROM booking_payments WHERE organization_id=$1 AND customer_id=$2 AND booking_id IS NOT DISTINCT FROM $3::uuid
+          AND source='customer_receipt' AND deleted_at IS NULL`,[active.organization_id,customerId,bookingId]);
+      const scope=booking?'booking':'account';
+      if(limits.rows[0].pending>=MAX_PENDING_PAYMENTS) throw new ConflictException(`This ${scope} already has ten payments awaiting review. Wait for the administrator to review them.`);
+      if(limits.rows[0].total>=MAX_BOOKING_PAYMENTS) throw new ConflictException(`This ${scope} has reached its payment submission limit. Contact the administrator.`);
+      const used=await client.query<{bytes:string}>(`SELECT coalesce(sum(size),0)::text AS bytes FROM booking_payment_receipts
+        WHERE organization_id=$1 AND customer_id=$2 AND booking_id IS NOT DISTINCT FROM $3::uuid`,[active.organization_id,customerId,bookingId]);
       if(BigInt(used.rows[0].bytes)+BigInt(receipts.reduce((sum,receipt)=>sum+receipt.content.length,0))>BigInt(MAX_BOOKING_RECEIPT_BYTES)) {
-        throw new ConflictException('This booking has reached its receipt storage limit. Contact the administrator.');
+        throw new ConflictException(`This ${scope} has reached its receipt storage limit. Contact the administrator.`);
       }
       const duplicate=await client.query(`SELECT 1 FROM booking_payment_receipts r JOIN booking_payments p ON p.id=r.payment_id
-        WHERE r.booking_id=$1 AND r.original_sha256=ANY($2::text[]) AND p.status IN ('pending','approved') LIMIT 1`,[bookingId,receipts.map(receipt=>receipt.originalSha256)]);
-      if(duplicate.rows.length) throw new ConflictException('A receipt is already attached to a pending or approved payment in this booking. Check its existing status.');
+        WHERE r.organization_id=$1 AND r.customer_id=$2 AND ($3::uuid IS NULL OR r.booking_id=$3 OR r.booking_id IS NULL)
+          AND r.original_sha256=ANY($4::text[]) AND p.status IN ('pending','approved') AND p.deleted_at IS NULL LIMIT 1`,
+        [active.organization_id,customerId,bookingId,receipts.map(receipt=>receipt.originalSha256)]);
+      if(duplicate.rows.length) throw new ConflictException(`A receipt is already attached to a pending or approved payment in this ${scope}. Check its existing status.`);
       const id=randomUUID();
       const inserted=await client.query<{submitted_at:Date}>(`INSERT INTO booking_payments(id,organization_id,customer_id,booking_id,amount_minor,payment_date,note,submitted_by,idempotency_key,request_hash)
         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING submitted_at`,[id,active.organization_id,customerId,bookingId,amount.toString(),data.payment_date,data.note,active.user_id,data.idempotency_key,fingerprint]);
@@ -267,70 +369,137 @@ export class PaymentsService {
         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,[randomUUID(),active.organization_id,customerId,bookingId,id,receipt.name,receipt.content.length,receipt.content,receipt.originalSha256,receipt.mimeType]);
       await this.audit(client,active,'payment.submitted',id,{customer_id:customerId,booking_id:bookingId,amount_minor:amount.toString(),receipt_count:receipts.length});
       const submittedAt=new Date(inserted.rows[0].submitted_at).toISOString();
-      const link=`${config.appUrl}/o/${active.organization_id}/users/${customerId}/bookings/${bookingId}`;
+      const link=booking?`${config.appUrl}/o/${active.organization_id}/users/${customerId}/bookings/${bookingId}`:
+        `${config.appUrl}/o/${active.organization_id}/payment-reviews?q=${id}`;
       // Insert all administrator intents in one query, regardless of team size.
       await client.query(`INSERT INTO payment_email_outbox(organization_id,recipient,subject,body,dedupe_key)
         SELECT m.organization_id,u.email,$2,$3,$4||u.email FROM memberships m JOIN users u ON u.id=m.user_id
         WHERE m.organization_id=$1 AND m.role='admin' AND m.is_active AND m.deleted_at IS NULL
-        ON CONFLICT (dedupe_key) DO NOTHING`,[active.organization_id,'Payment receipt submitted',
-        `${customer.name} uploaded ${receipts.length} payment receipt file(s).\n\nBooking: ${booking.reference}\nAmount: GBP ${formatMoney(amount,2)}\nPayment date: ${data.payment_date}\nUploaded at: ${submittedAt}\n\nOpen the booking to check the current review status. If still pending, verify the payment before approving:\n${link}`,`payment-submitted:${id}:`]);
+        ON CONFLICT (dedupe_key) DO NOTHING`,[active.organization_id,receipts.length?'Payment receipt submitted':'Payment submitted for review',
+        `${customer.name} ${receipts.length?`uploaded ${receipts.length} payment receipt file(s)`:'submitted payment details without an attachment'}.\n\n${booking?`Booking: ${booking.reference}`:`Account: ${customer.name}`}\nAmount: GBP ${formatMoney(amount,2)}\nPayment date: ${data.payment_date}\nUploaded at: ${submittedAt}\n\nOpen ${booking?'the booking':'payment review'} to check the current review status. If still pending, verify the payment before approving:\n${link}`,`payment-submitted:${id}:`]);
       await queueCustomerPaymentEmail(client,{kind:'received',organizationId:active.organization_id,organizationName:active.organization_name!,
-        customerId,customerName:customer.name,recipient:customer.email,bookingId,bookingReference:booking.reference,
-        paymentId:id,submittedBy:active.user_id,amountMinor:amount.toString(),currency:booking.currency,paymentDate:data.payment_date,receiptCount:receipts.length});
+        customerId,customerName:customer.name,recipient:customer.email,bookingId,bookingReference:booking?.reference??null,
+        paymentId:id,submittedBy:active.user_id,amountMinor:amount.toString(),currency:active.currency!,paymentDate:data.payment_date,receiptCount:receipts.length});
       return (await this.serialize(client,[await this.find(client,active.organization_id,customerId,bookingId,id)]))[0];
     });
   }
 
-  async approve(member:Membership,customerId:string,bookingId:string,paymentId:string,raw:unknown={}) {
+  async approve(member:Membership,customerId:string,bookingId:string|null,paymentId:string,raw:unknown={}) {
     parse(z.object({}).strict(),raw??{});
     return this.db.transaction(async client=>{
       const {active,customer,booking}=await this.context(client,member,customerId,bookingId,'review');
       const payment=await this.find(client,active.organization_id,customerId,bookingId,paymentId,true);
+      if(payment.deleted_at) throw new ConflictException('Restore this payment before reviewing it.');
       if(payment.status==='approved') return (await this.serialize(client,[payment]))[0];
       if(payment.status!=='pending') throw new ConflictException('A rejected payment cannot be approved. Ask the customer to submit new evidence.');
-      await this.assertChargeActive(client,booking.charge_entry_id);
-      await ensureBookingInvoice(client,{organizationId:active.organization_id,customerId,bookingId,actorId:active.user_id});
+      if(booking && bookingId) {
+        await this.assertChargeActive(client,booking.charge_entry_id);
+        await ensureBookingInvoice(client,{organizationId:active.organization_id,customerId,bookingId,actorId:active.user_id});
+      }
       const entry=await client.query<{id:string}>(`INSERT INTO ledger_entries(organization_id,customer_id,kind,amount_minor,currency,effective_date,description,reference,created_by,idempotency_key,request_hash)
         VALUES($1,$2,'payment',$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id::text AS id`,
         [active.organization_id,customerId,(-BigInt(payment.amount_minor)).toString(),payment.currency,payment.payment_date,
-          `Approved payment for booking ${booking.reference}`,booking.reference,active.user_id,randomUUID(),digest(`booking-payment:${payment.id}`)]);
-      await client.query(`UPDATE booking_payments SET status='approved',reviewed_by=$1,reviewed_at=now(),ledger_entry_id=$2 WHERE id=$3`,[active.user_id,entry.rows[0].id,payment.id]);
+          booking?`Approved payment for booking ${booking.reference}`:'Approved account payment',booking?.reference??'',active.user_id,randomUUID(),digest(`booking-payment:${payment.id}`)]);
+      await client.query(`UPDATE booking_payments SET version=version+1,status='approved',reviewed_by=$1,reviewed_at=now(),ledger_entry_id=$2 WHERE id=$3`,[active.user_id,entry.rows[0].id,payment.id]);
       await this.audit(client,active,'payment.approved',payment.id,{customer_id:customerId,booking_id:bookingId,entry_id:entry.rows[0].id});
       await this.audit(client,active,'ledger.posted',entry.rows[0].id,{customer_id:customerId,kind:'payment',booking_id:bookingId,payment_id:payment.id});
       await cancelUnsentPaymentReviewEmails(client,active.organization_id,[payment.id]);
-      const invoice=await issueBookingInvoice(client,{organizationId:active.organization_id,customerId,bookingId,actorId:active.user_id,
-        reason:'payment_approved',eventKey:`payment-approved:${payment.id}`});
+      const invoice=bookingId?await issueBookingInvoice(client,{organizationId:active.organization_id,customerId,bookingId,actorId:active.user_id,
+        reason:'payment_approved',eventKey:`payment-approved:${payment.id}`}):null;
       await queueCustomerPaymentEmail(client,{kind:'approved',organizationId:active.organization_id,organizationName:active.organization_name!,
-        customerId,customerName:customer.name,recipient:customer.email,bookingId,bookingReference:booking.reference,
-        paymentId:payment.id,submittedBy:payment.submitted_by,amountMinor:payment.amount_minor,currency:payment.currency,paymentDate:payment.payment_date,invoiceId:invoice.id});
+        customerId,customerName:customer.name,recipient:customer.email,bookingId,bookingReference:booking?.reference??null,
+        paymentId:payment.id,submittedBy:payment.submitted_by,amountMinor:payment.amount_minor,currency:payment.currency,paymentDate:payment.payment_date,invoiceId:invoice?.id});
       return (await this.serialize(client,[await this.find(client,active.organization_id,customerId,bookingId,payment.id)]))[0];
     });
   }
 
-  async reject(member:Membership,customerId:string,bookingId:string,paymentId:string,raw:unknown) {
+  async reject(member:Membership,customerId:string,bookingId:string|null,paymentId:string,raw:unknown) {
     const {reason}=parse(z.object({reason:z.string().trim().min(1).max(1000)}).strict(),raw);
     return this.db.transaction(async client=>{
       const {active,customer,booking}=await this.context(client,member,customerId,bookingId,'review');
       const payment=await this.find(client,active.organization_id,customerId,bookingId,paymentId,true);
+      if(payment.deleted_at) throw new ConflictException('Restore this payment before reviewing it.');
       if(payment.status==='rejected' && payment.rejection_reason===reason) return (await this.serialize(client,[payment]))[0];
-      if(payment.status!=='pending') throw new ConflictException('This payment has already been reviewed. Refresh the booking.');
-      await client.query(`UPDATE booking_payments SET status='rejected',reviewed_by=$1,reviewed_at=now(),rejection_reason=$2 WHERE id=$3`,[active.user_id,reason,payment.id]);
+      if(payment.status!=='pending') throw new ConflictException('This payment has already been reviewed. Refresh the payment history.');
+      await client.query(`UPDATE booking_payments SET version=version+1,status='rejected',reviewed_by=$1,reviewed_at=now(),rejection_reason=$2 WHERE id=$3`,[active.user_id,reason,payment.id]);
       await this.audit(client,active,'payment.rejected',payment.id,{customer_id:customerId,booking_id:bookingId,reason});
       await cancelUnsentPaymentReviewEmails(client,active.organization_id,[payment.id]);
       await queueCustomerPaymentEmail(client,{kind:'rejected',organizationId:active.organization_id,organizationName:active.organization_name!,
-        customerId,customerName:customer.name,recipient:customer.email,bookingId,bookingReference:booking.reference,
+        customerId,customerName:customer.name,recipient:customer.email,bookingId,bookingReference:booking?.reference??null,
         paymentId:payment.id,submittedBy:payment.submitted_by,amountMinor:payment.amount_minor,currency:payment.currency,paymentDate:payment.payment_date,reason});
       return (await this.serialize(client,[await this.find(client,active.organization_id,customerId,bookingId,payment.id)]))[0];
     });
   }
 
-  async receipt(member:Membership,customerId:string,bookingId:string,paymentId:string,receiptId:string) {
+  /** History management never edits posted money: every correction is a reversal and optional new payment. */
+  async manage(member:Membership,customerId:string,bookingId:string|null,paymentId:string,operation:'edit'|'delete'|'restore'|'permanent-delete',raw:unknown) {
+    const data=parse(operation==='edit'?historyEditSchema:operation==='permanent-delete'?
+      historyOperationSchema.extend({confirmation:z.literal('DELETE')}).strict():historyOperationSchema.strict(),raw);
+    const edit=operation==='edit'?parse(historyEditSchema,raw):null;
+    const amount=edit?parseMoney(edit.amount,2).toString():null;
+    if(edit && edit.payment_date>businessDate()) throw new BadRequestException('Payment date cannot be in the future.');
+    return this.db.transaction(async client=>{
+      const {active,customer,booking}=await this.context(client,member,customerId,bookingId,'history');
+      uuid(paymentId,'payment');
+      if(operation==='permanent-delete') {
+        const prior=await client.query(`SELECT 1 FROM audit_events WHERE organization_id=$1 AND action='payment.permanently_deleted'
+          AND object_id=$2 AND metadata->>'customer_id'=$3 AND metadata->>'booking_id' IS NOT DISTINCT FROM $4::text AND (metadata->>'version')::integer=$5`,
+        [active.organization_id,paymentId,customerId,bookingId,data.version]);
+        if(prior.rows.length) return {id:paymentId,deleted:true};
+      }
+      const payment=await this.find(client,active.organization_id,customerId,bookingId,paymentId,true);
+      if(payment.version!==data.version) throw new ConflictException('This payment changed in another session. Refresh it before saving.');
+      if((operation==='edit'||operation==='delete') && payment.deleted_at) throw new ConflictException('Restore this payment before editing or deleting it again.');
+      if((operation==='restore'||operation==='permanent-delete') && !payment.deleted_at) throw new ConflictException('Move this payment to trash first.');
+      const financialEdit=Boolean(edit && payment.status==='approved' && (amount!==payment.amount_minor || edit.payment_date!==payment.payment_date));
+      if(financialEdit && payment.reversed) throw new ConflictException('This payment was already reversed. Record a new payment instead of changing its amount or date.');
+      if(financialEdit || (operation==='restore' && payment.status==='approved' && payment.restore_credit)) {
+        if(booking?.deleted_at || customer.status!=='active') throw new ConflictException('Restore the customer and any linked booking before restoring or replacing a payment.');
+        if(booking) await this.assertChargeActive(client,booking.charge_entry_id);
+      }
+      const financesChanged=payment.status==='approved' && (financialEdit||(operation==='restore'&&payment.restore_credit)||(operation==='delete'&&!payment.reversed));
+      if(financesChanged && bookingId) await ensureBookingInvoice(client,{organizationId:active.organization_id,customerId,bookingId,actorId:active.user_id});
+      if(payment.status==='approved' && !payment.reversed && (financialEdit||operation==='delete')) {
+        const reversal=await client.query<{id:string}>(`INSERT INTO ledger_entries(organization_id,customer_id,kind,amount_minor,currency,effective_date,
+          description,reference,created_by,reversal_of,idempotency_key,request_hash)
+          VALUES($1,$2,'reversal',$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id::text AS id`,
+        [active.organization_id,customerId,payment.amount_minor,payment.currency,payment.payment_date>businessDate()?payment.payment_date:businessDate(),
+          `Payment ${operation}: ${data.reason}`.slice(0,1000),booking?.reference??'',active.user_id,payment.ledger_entry_id,randomUUID(),digest(`history:${payment.id}:${payment.version}:${operation}:reverse`)]);
+        await this.audit(client,active,'ledger.reversed',reversal.rows[0].id,{customer_id:customerId,booking_id:bookingId,payment_id:payment.id,
+          reversal_of:payment.ledger_entry_id,reason:data.reason});
+      }
+      let entryId=payment.ledger_entry_id;
+      if(payment.status==='approved' && (financialEdit||(operation==='restore'&&payment.restore_credit))) {
+        const entry=await client.query<{id:string}>(`INSERT INTO ledger_entries(organization_id,customer_id,kind,amount_minor,currency,effective_date,
+          description,reference,created_by,idempotency_key,request_hash)
+          VALUES($1,$2,'payment',$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id::text AS id`,
+        [active.organization_id,customerId,(-BigInt(amount??payment.amount_minor)).toString(),payment.currency,edit?.payment_date??payment.payment_date,
+          `Payment ${operation}: ${data.reason}`.slice(0,1000),booking?.reference??'',active.user_id,randomUUID(),digest(`history:${payment.id}:${payment.version}:${operation}:post`)]);
+        entryId=entry.rows[0].id;
+        await this.audit(client,active,'ledger.posted',entryId,{customer_id:customerId,booking_id:bookingId,payment_id:payment.id,kind:'payment',reason:data.reason});
+      }
+      await client.query('SELECT manage_booking_payment($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)',
+        [active.user_id,active.organization_id,customerId,bookingId,paymentId,data.version,operation,amount??payment.amount_minor,
+          edit?.payment_date??payment.payment_date,edit?.note??payment.note,entryId,data.reason]);
+      // Cancel uncompleted notices without changing sent messages or queuing new mail.
+      await client.query(`UPDATE payment_email_outbox SET state='cancelled',delivery_status='cancelled',delivery_updated_at=now(),
+        lease_token=NULL,lease_until=NULL,last_error='Payment history changed before notification delivery.'
+        WHERE organization_id=$1 AND split_part(dedupe_key,':',2)=$2 AND state IN ('pending','processing')`,[active.organization_id,paymentId]);
+      if(financesChanged && bookingId) await issueBookingInvoice(client,{organizationId:active.organization_id,customerId,bookingId,actorId:active.user_id,
+        reason:operation==='delete'?'payment_reversed':'payment_approved',eventKey:`payment-${operation}:${payment.id}:v${payment.version+1}`});
+      if(operation==='permanent-delete') return {id:paymentId,deleted:true};
+      return (await this.serialize(client,[await this.find(client,active.organization_id,customerId,bookingId,payment.id)]))[0];
+    });
+  }
+
+  async receipt(member:Membership,customerId:string,bookingId:string|null,paymentId:string,receiptId:string) {
     uuid(receiptId,'receipt');
     return this.db.transaction(async client=>{
       const {active}=await this.context(client,member,customerId,bookingId);
-      await this.find(client,active.organization_id,customerId,bookingId,paymentId);
+      const payment=await this.find(client,active.organization_id,customerId,bookingId,paymentId);
+      if(payment.deleted_at && active.role!=='admin') throw new NotFoundException('Receipt was not found in this payment submission.');
       const result=await client.query<{name:string;mime_type:string;size:number;content:Buffer|Uint8Array}>(`SELECT name,mime_type,size,content FROM booking_payment_receipts
-        WHERE organization_id=$1 AND customer_id=$2 AND booking_id=$3 AND payment_id=$4 AND id=$5`,[active.organization_id,customerId,bookingId,paymentId,receiptId]);
+        WHERE organization_id=$1 AND customer_id=$2 AND booking_id IS NOT DISTINCT FROM $3::uuid AND payment_id=$4 AND id=$5`,[active.organization_id,customerId,bookingId,paymentId,receiptId]);
       if(!result.rows[0]) throw new NotFoundException('Receipt was not found in this payment submission.');
       return {...result.rows[0],content:Buffer.from(result.rows[0].content)};
     });

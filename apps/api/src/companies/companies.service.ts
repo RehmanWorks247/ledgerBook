@@ -5,12 +5,16 @@ import { AccessService } from '../access/access.service';
 import { parseBody } from '../auth/auth.controller';
 import { DatabaseService } from '../database/database.service';
 import {
-  companyAmount, companyFields, createCompanySchema, deleteCompanySchema, listCompaniesSchema,
-  moneyFields, updateCompanySchema, validateStay, type CompanyInput,
+  companyAmount, companyPaidAmount, companyFields, createCompanySchema, deleteCompanySchema, exportCompanySchema, listCompaniesSchema,
+  moneyFields, updateCompanySchema, updateCompanyPaidSchema, validateStay, type CompanyInput,
 } from './companies.schema';
 
 type MoneyField = typeof moneyFields[number];
 type StoredFields = Omit<CompanyInput, MoneyField> & Record<`${MoneyField}_minor`, string | null>;
+interface VoucherTotals {
+  total_minor: string | null; paid_minor: string; balance_minor: string | null;
+  unpaid_minor: string | null; unpriced_count: number; voucher_count: number; paid_version: number | null;
+}
 export interface Company extends StoredFields {
   id: string;
   organization_id: string;
@@ -31,11 +35,11 @@ const columns = ['id', 'organization_id', ...companyFields.map(field => {
 function snapshot(row: CompanyRow): Company {
   return { ...row, created_at: new Date(row.created_at).toISOString(), updated_at: new Date(row.updated_at).toISOString() };
 }
-function storedValues(fields: Partial<CompanyInput>, exponent: number): Record<string, string | null> {
+function storedValues(fields: Partial<CompanyInput>, exponent: number): Record<string, string | number | null> {
   return Object.fromEntries(companyFields.filter(field => fields[field] !== undefined).map(field => [storedColumn(field),
-    moneyFields.includes(field as MoneyField) ? companyAmount(fields[field]!, exponent, field === 'balance') : fields[field]!]));
+    field === 'voucher_price' ? companyAmount(fields[field]!, exponent) : fields[field]!]));
 }
-const changedMessage = 'This company changed in another session. Reload it before saving or deleting.';
+const changedMessage = 'This voucher changed in another session. Reload it before saving or deleting.';
 
 @Injectable()
 export class CompaniesService {
@@ -46,10 +50,27 @@ export class CompaniesService {
 
   async list(userId: string, orgId: string, raw: unknown) {
     const query = parseBody(listCompaniesSchema, raw);
+    return this.read(userId, orgId, query);
+  }
+
+  async export(userId: string, orgId: string, raw: unknown) {
+    const query = parseBody(exportCompanySchema, raw);
+    const data = await this.read(userId, orgId, listCompaniesSchema.parse(query), true);
+    return {
+      company_name: query.company_name, items: data.items, total: data.total,
+      currency: 'SAR', currency_exponent: data.currency_exponent, totals: data.totals,
+    };
+  }
+
+  private async read(userId: string, orgId: string, query: ReturnType<typeof listCompaniesSchema.parse>, all = false) {
     return this.db.transaction(async client => {
       const member = await this.access.membership(userId, orgId, true, client);
       const values: unknown[] = [orgId];
       const conditions = ['organization_id=$1'];
+      if (query.company_name) {
+        values.push(query.company_name);
+        conditions.push(`lower(company_name)=lower($${values.length}::text)`);
+      }
       if (query.search) {
         // Escape LIKE metacharacters so entered percentages and underscores are literal.
         values.push(`%${query.search.replace(/[\\%_]/g, '\\$&')}%`);
@@ -59,15 +80,33 @@ export class CompaniesService {
       if (query.start) { values.push(query.start); conditions.push(`${query.date_field}>=$${values.length}::date`); }
       if (query.end) { values.push(query.end); conditions.push(`${query.date_field}<=$${values.length}::date`); }
       const where = conditions.join(' AND ');
-      // One statement keeps the count and page consistent when another admin edits the register.
-      const result = await client.query<{ total: number; items: CompanyRow[] }>(`WITH filtered AS (
+      // Company totals deliberately ignore table filters and pagination: the
+      // independently entered paid amount belongs to the entire company.
+      const companyNameIndex = values.length + 1;
+      const result = await client.query<{ total: number; items: CompanyRow[]; totals: VoucherTotals }>(`WITH filtered AS (
           SELECT ${columns} FROM companies WHERE ${where}
-        ), page AS (SELECT * FROM filtered ORDER BY created_at DESC,id DESC LIMIT $${values.length + 1} OFFSET $${values.length + 2})
-        SELECT (SELECT count(*)::int FROM filtered) AS total,coalesce((SELECT jsonb_agg(page ORDER BY created_at DESC,id DESC) FROM page),'[]'::jsonb) AS items`,
-      [...values, query.page_size, (query.page - 1) * query.page_size]);
+        ), page AS (SELECT * FROM filtered ORDER BY created_at DESC,id DESC LIMIT $${values.length + 2} OFFSET $${values.length + 3}),
+        company_total AS (
+          SELECT count(*)::int AS voucher_count,count(*) FILTER (WHERE voucher_price_minor IS NULL)::int AS unpriced_count,
+            CASE WHEN count(*) FILTER (WHERE voucher_price_minor IS NULL)>0 THEN NULL ELSE coalesce(sum(voucher_price_minor),0) END AS total_minor
+          FROM companies WHERE organization_id=$1 AND ($${companyNameIndex}::text IS NULL OR lower(company_name)=lower($${companyNameIndex}::text))
+        ), company_paid AS (
+          SELECT coalesce(sum(paid_minor),0) AS paid_minor,coalesce(max(version),0) AS paid_version
+          FROM company_balances WHERE organization_id=$1 AND ($${companyNameIndex}::text IS NULL OR company_key=lower($${companyNameIndex}::text))
+        )
+        SELECT (SELECT count(*)::int FROM filtered) AS total,
+          coalesce((SELECT jsonb_agg(page ORDER BY created_at DESC,id DESC) FROM page),'[]'::jsonb) AS items,
+          (SELECT jsonb_build_object('total_minor',t.total_minor::text,'paid_minor',p.paid_minor::text,
+            'balance_minor',(t.total_minor-p.paid_minor)::text,
+            'unpaid_minor',CASE WHEN t.total_minor IS NULL THEN NULL ELSE greatest(t.total_minor-p.paid_minor,0)::text END,
+            'unpriced_count',t.unpriced_count,'voucher_count',t.voucher_count,
+            'paid_version',CASE WHEN $${companyNameIndex}::text IS NULL THEN NULL ELSE p.paid_version END)
+          FROM company_total t CROSS JOIN company_paid p) AS totals`,
+      [...values, query.company_name ?? null, all ? null : query.page_size, all ? 0 : (query.page - 1) * query.page_size]);
       return {
         items: result.rows[0].items.map(snapshot), total: result.rows[0].total, page: query.page, page_size: query.page_size,
         currency: member.currency, currency_exponent: member.currency_exponent,
+        totals: result.rows[0].totals,
       };
     });
   }
@@ -90,9 +129,10 @@ export class CompaniesService {
         return previous.response;
       }
       const names = Object.keys(fields);
-      const row = (await client.query<CompanyRow>(`INSERT INTO companies(id,organization_id,${names.join(',')})
-        VALUES($1,$2,${names.map((_, index) => `$${index + 3}`).join(',')}) RETURNING ${columns}`,
-      [randomUUID(), orgId, ...Object.values(fields)])).rows[0];
+      const id = randomUUID();
+      await client.query(`INSERT INTO companies(id,organization_id,${names.join(',')})
+        VALUES($1,$2,${names.map((_, index) => `$${index + 3}`).join(',')})`, [id, orgId, ...Object.values(fields)]);
+      const row = (await client.query<CompanyRow>(`SELECT ${columns} FROM companies WHERE organization_id=$1 AND id=$2`, [orgId, id])).rows[0];
       const response = snapshot(row);
       await client.query(`INSERT INTO company_create_requests(organization_id,idempotency_key,company_id,request_hash,response)
         VALUES($1,$2,$3,$4,$5::jsonb)`, [orgId, data.idempotency_key, row.id, requestHash, JSON.stringify(response)]);
@@ -111,11 +151,32 @@ export class CompaniesService {
       const fields = storedValues(data, member.currency_exponent!);
       const changes = Object.keys(fields).filter(field => fields[field] !== existing[field]);
       if (!changes.length) return snapshot(existing);
-      const updated = (await client.query<CompanyRow>(`UPDATE companies SET
-        ${changes.map((field, index) => `${field}=$${index + 4}`).join(',')},version=version+1,updated_at=now()
-        WHERE organization_id=$1 AND id=$2 AND version=$3 RETURNING ${columns}`,
-      [orgId, id, data.expected_version, ...changes.map(field => fields[field])])).rows[0];
+      await client.query(`UPDATE companies SET
+        ${[...changes.map((field, index) => `${field}=$${index + 4}`),'version=version+1','updated_at=now()'].join(',')}
+        WHERE organization_id=$1 AND id=$2 AND version=$3`,
+      [orgId, id, data.expected_version, ...changes.map(field => fields[field])]);
+      const updated = (await client.query<CompanyRow>(`SELECT ${columns} FROM companies WHERE organization_id=$1 AND id=$2`, [orgId, id])).rows[0];
       return snapshot(updated);
+    });
+  }
+
+  async updatePaid(userId: string, orgId: string, raw: unknown) {
+    const data = parseBody(updateCompanyPaidSchema, raw);
+    return this.db.transaction(async client => {
+      const member = await this.access.membership(userId, orgId, true, client);
+      const paid = companyPaidAmount(data.paid, member.currency_exponent!);
+      const key = (await client.query<{ key: string }>('SELECT lower($1::text) AS key', [data.company_name])).rows[0].key;
+      await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [`company-paid:${orgId}:${key}`]);
+      const existing = (await client.query<{ paid_minor: string; version: number }>(
+        'SELECT paid_minor::text,version FROM company_balances WHERE organization_id=$1 AND company_key=$2 FOR UPDATE', [orgId, key])).rows[0];
+      if ((existing?.version ?? 0) !== data.expected_version)
+        throw new ConflictException('The company paid amount changed in another session. Refresh company totals before saving.');
+      if (existing?.paid_minor === paid) return { company_name: data.company_name, ...existing };
+      const saved = (await client.query<{ paid_minor: string; version: number }>(`INSERT INTO company_balances(organization_id,company_key,paid_minor)
+        VALUES($1,$2,$3) ON CONFLICT(organization_id,company_key) DO UPDATE
+        SET paid_minor=excluded.paid_minor,version=company_balances.version+1,updated_at=now()
+        RETURNING paid_minor::text,version`, [orgId, key, paid])).rows[0];
+      return { company_name: data.company_name, ...saved };
     });
   }
 

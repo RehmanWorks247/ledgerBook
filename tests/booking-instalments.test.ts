@@ -51,7 +51,16 @@ describe('booking instalment rounding over HTTP', () => {
     for (const amount of ['54.99', '65.01', '0', '-1', '60.001']) {
       const input = request(amount), response = await send(input);
       assert.equal(response.status, 400);
-      if (['54.99', '65.01'].includes(amount)) assert.match((await response.json()).message, /within £5.00/);
+      if (['54.99', '65.01'].includes(amount)) {
+        const error = await response.json();
+        assert.match(error.message, /within £5.00/);
+        assert.match(error.message, /Total so far: GBP/);
+        assert.equal(error.required_minor, '10000');
+        assert.equal(error.scheduled_minor, amount === '54.99' ? '9499' : '10501');
+        assert.equal(error.adjustment_minor, '1');
+        assert.equal(error.minimum_minor, '9500');
+        assert.equal(error.maximum_minor, '10500');
+      }
       const charge = await database.db.query('SELECT count(*)::int AS count FROM ledger_entries WHERE reference=$1', [input.reference]);
       assert.equal(charge.rows[0].count, 0);
       const booking = await database.db.query('SELECT count(*)::int AS count FROM bookings WHERE reference=$1', [input.reference]);

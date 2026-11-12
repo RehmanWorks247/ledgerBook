@@ -98,7 +98,9 @@ describe('booking payment evidence, approvals and transactional notifications', 
       assert.ok(message.body.includes(trip.reference));
       assert.ok(message.body.includes(businessDate()));
       assert.match(message.body,/GBP 25\.00/);
-      assert.ok(message.body.includes(`${config.appUrl}/o/${seed.orgId}/users/${seed.customerId}/bookings/${trip.id}`));
+      assert.ok(message.body.includes(message.recipient==='customer@example.test'?`${config.appUrl}/o/${seed.orgId}`:
+        `${config.appUrl}/o/${seed.orgId}/users/${seed.customerId}/bookings/${trip.id}`));
+      if(message.recipient==='customer@example.test') assert.ok(!message.body.includes(`/bookings/${trip.id}`));
       assert.equal(message.state,'pending');assert.equal(message.attempts,0);assert.equal(message.sent_at,null);
     }
   });
@@ -182,7 +184,8 @@ describe('booking payment evidence, approvals and transactional notifications', 
     assert.ok(decision.body.includes(reason));
     assert.ok(decision.body.includes(trip.reference));
     assert.match(decision.body,/GBP 25\.00/);
-    assert.ok(decision.body.includes(`${config.appUrl}/o/${seed.orgId}/users/${seed.customerId}/bookings/${trip.id}`));
+    assert.ok(decision.body.includes(`${config.appUrl}/o/${seed.orgId}`));
+    assert.ok(!decision.body.includes(`/bookings/${trip.id}`));
     assert.equal(decision.state,'pending');assert.equal(decision.attempts,0);assert.equal(decision.sent_at,null);
     assert.equal(messages.find(message=>message.dedupe_key.startsWith('payment-submitted:'))!.state,'cancelled');
     assert.equal(messages.find(message=>message.dedupe_key.startsWith('payment-received:'))!.state,'pending');
@@ -254,7 +257,6 @@ describe('booking payment evidence, approvals and transactional notifications', 
       {...valid,buffer:Buffer.alloc(5 * 1024 * 1024 + 1),size:5 * 1024 * 1024 + 1},
     ];
     for (const invalid of badImages) await rejectsStatus(payments.submit(seed.customerMember,seed.customerId,trip.id,request(),[invalid]),400);
-    await rejectsStatus(payments.submit(seed.customerMember,seed.customerId,trip.id,request(),[]),400);
     await rejectsStatus(payments.submit(seed.customerMember,seed.customerId,trip.id,request(),await Promise.all(Array.from({length:6},() => image()))),400);
     await rejectsStatus(payments.submit(seed.customerMember,seed.customerId,trip.id,request(),[valid,badImages[4]]),400);
     assert.equal((await payments.list(seed.customerMember,seed.customerId,trip.id)).items.length,0);
@@ -372,11 +374,11 @@ describe('booking payment evidence, approvals and transactional notifications', 
   it('enforces evidence and completed-review immutability for direct database callers too', async () => {
     const trip = await booking();
     const emptyId = randomUUID();
-    await assert.rejects(database.db.query(`INSERT INTO booking_payments
+    await database.db.query(`INSERT INTO booking_payments
       (id,organization_id,customer_id,booking_id,amount_minor,payment_date,submitted_by,idempotency_key,request_hash)
       VALUES($1,$2,$3,$4,2500,$5,$6,$7,$8)`,
-      [emptyId,seed.orgId,seed.customerId,trip.id,businessDate(),seed.customerUserId,randomUUID(),'0'.repeat(64)]),/receipt evidence/);
-    assert.equal((await database.db.query('SELECT 1 FROM booking_payments WHERE id=$1',[emptyId])).rows.length,0);
+      [emptyId,seed.orgId,seed.customerId,trip.id,businessDate(),seed.customerUserId,randomUUID(),'0'.repeat(64)]);
+    assert.equal((await database.db.query('SELECT 1 FROM booking_payments WHERE id=$1',[emptyId])).rows.length,1);
     const payment = await payments.submit(seed.customerMember,seed.customerId,trip.id,request(),[await image()]);
     const receiptId = payment.receipts[0].id;
     await assert.rejects(database.db.query("UPDATE booking_payments SET note='Altered evidence' WHERE id=$1",[payment.id]),/immutable/);

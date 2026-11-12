@@ -36,7 +36,7 @@ const decoratedCustomer = (extraColumns = '') => `SELECT c.*${extraColumns}, COA
        WHEN i.id IS NOT NULL THEN 'pending' ELSE 'not_invited' END AS invitation_status,
   i.delivery_status
   FROM customers c
-  LEFT JOIN LATERAL (SELECT SUM(amount_minor) AS balance_minor FROM ledger_entries e
+  LEFT JOIN LATERAL (SELECT SUM(amount_minor) AS balance_minor FROM account_ledger_entries e
     WHERE e.organization_id=c.organization_id AND e.customer_id=c.id) b ON true
   LEFT JOIN memberships m ON m.organization_id=c.organization_id AND m.customer_id=c.id AND m.deleted_at IS NULL
   LEFT JOIN LATERAL (SELECT id,revoked_at,accepted_at,expires_at,delivery_status FROM invitations

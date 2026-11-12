@@ -163,7 +163,7 @@ test("invoice paths cannot escape the booking and download filenames remain loca
 test("invoice rows expose historical amounts, local issue dates, credit and lazy accessible PDF actions", () => {
   const html = renderToStaticMarkup(h(InvoiceTable, {
     invoices: [invoice, { ...invoice, id: "invoice-2", version: 2, reason: "payment_reversed", status: "overpaid", total_minor: "900719925474099312", paid_minor: "900719925474099412", balance_minor: "-100" }],
-    timeZone: "Asia/Karachi", currencyExponent: 2, downloading: "", onDownload: () => undefined,
+    timeZone: "Asia/Karachi", currencyExponent: 2, downloading: "", onDownload: () => undefined, onPreview: () => undefined,
   }));
   assert.match(html, /<caption/);
   assert.match(html, /Version 3 · Latest/);
@@ -175,5 +175,6 @@ test("invoice rows expose historical amounts, local issue dates, credit and lazy
   assert.match(html, /−GBP 1\.00/);
   assert.match(html, /Credit/);
   assert.match(html, /aria-label="Download INV-2026-001 version 3 as PDF"/);
+  assert.match(html, /aria-label="Preview INV-2026-001 version 3"/);
   assert.doesNotMatch(html, /href=|<iframe|<object|<embed/, "PDFs must be fetched with session headers only after a click");
 });

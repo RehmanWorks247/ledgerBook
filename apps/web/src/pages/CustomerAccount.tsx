@@ -1,9 +1,14 @@
-import { ArrowRight, BookOpen, CalendarDays, ReceiptText, RefreshCw, Wallet } from "lucide-react";
-import { useResource, type Statement } from "../api";
+import { useRef, useState } from "react";
+import { ArrowRight, Banknote, BookOpen, ReceiptText, RefreshCw, Wallet, X } from "lucide-react";
+import { dateLabel, money as paymentMoney, useResource, type Statement } from "../api";
 import { Empty, ErrorNotice, DashboardSkeleton, PageHeading, Stat } from "../components";
 import { useLedgerMoney } from "../currency";
 import { Link } from "../router";
 import { useOrganization } from "../state";
+import { ReceiptUploadForm } from "../payments/BookingPayments";
+import { PaymentDetailsDialog, PaymentStatusBadge } from "../payments/PaymentTable";
+import { paymentsPath, type Payment, type PaymentsResponse } from "../payments/model";
+import "./Bookings.css";
 import "./CustomerAccount.css";
 
 export function CustomerAccount() {
@@ -16,9 +21,21 @@ function AccountOverview({ customerId }: { customerId: string }) {
   const member = useOrganization();
   const root = `/o/${member.organization_id}`;
   const money = useLedgerMoney();
+  const [paying, setPaying] = useState(false);
+  const [notice, setNotice] = useState("");
+  const [selected, setSelected] = useState<Payment | null>(null);
+  const paymentButton = useRef<HTMLButtonElement>(null);
   const { data, loading, error, refresh } = useResource<Statement>(
     `/organizations/${member.organization_id}/customers/${customerId}/statement?page_size=1`, { cache: true },
   );
+  const payments = useResource<PaymentsResponse>(paymentsPath({ organizationId: member.organization_id, customerId }));
+  function refreshAccount() { refresh(); payments.refresh(); }
+  function closePaymentForm() { setPaying(false); requestAnimationFrame(() => paymentButton.current?.focus()); }
+  function submitted() {
+    closePaymentForm();
+    setNotice("Payment submitted for review. Your account balance will update after approval.");
+    refreshAccount();
+  }
 
   if (error) return <>
     <PageHeading title="My account" />
@@ -31,8 +48,10 @@ function AccountOverview({ customerId }: { customerId: string }) {
   const format = (value: string) => money(value, data.currency, data.currency_exponent);
   return <article className="customer-account">
     <PageHeading eyebrow="My account" title={data.customer.name} description="Your account at a glance." actions={
-      <button className="button secondary" disabled={loading} onClick={refresh}><RefreshCw size={16} aria-hidden="true" />{loading ? "Updating…" : "Refresh balance"}</button>
+      <div className="customer-account-actions"><button ref={paymentButton} className="button" disabled={paying} aria-expanded={paying} aria-controls="account-payment-form" onClick={() => { setNotice(""); setPaying(true); }}><Banknote size={17} aria-hidden="true" />Make a payment</button><button className="button secondary" disabled={loading || payments.loading} onClick={refreshAccount}><RefreshCw size={16} aria-hidden="true" />{loading ? "Updating…" : "Refresh balance"}</button></div>
     } />
+    {notice && <div className="notice success payment-result-notice" role="status"><span>{notice}</span><button type="button" className="icon-button" aria-label="Dismiss payment notification" onClick={() => setNotice("")}><X size={16} /></button></div>}
+    {paying && <div className="customer-account-payment"><ReceiptUploadForm organizationId={member.organization_id} customerId={customerId} timeZone={payments.data?.time_zone || member.time_zone || "UTC"} paymentRequest={1} onSubmitted={submitted} onCancel={closePaymentForm} /></div>}
     <section className="panel customer-account-details" aria-labelledby="account-details-title">
       <h2 id="account-details-title">Account details</h2>
       <dl>
@@ -53,13 +72,16 @@ function AccountOverview({ customerId }: { customerId: string }) {
       </div>
       <p className="customer-account-note">New payment receipts count towards your paid amount after they are approved.</p>
     </section>
-    <section className="panel customer-account-next" aria-labelledby="account-bookings-title">
-      <div>
-        <h2 id="account-bookings-title">Your bookings and documents</h2>
-        <p>Open a booking to see your trip details, download documents or send a payment receipt.</p>
-      </div>
-      <Link className="button" to={`${root}/users/${customerId}`}><CalendarDays size={18} aria-hidden="true" />My bookings<ArrowRight size={16} aria-hidden="true" /></Link>
-    </section>
+    {payments.error ? <div className="customer-account-payment-error"><ErrorNotice message={payments.error} /><button type="button" className="text-link" onClick={payments.refresh}>Try loading payment history again</button></div> : !!payments.data?.items.length && <section className="customer-account-history" aria-labelledby="account-payment-history-title" aria-busy={payments.loading}>
+      <div className="customer-account-section-heading"><h2 id="account-payment-history-title">Payment history</h2><p>Payments count towards your account balance after approval.</p></div>
+      <div className="customer-account-payment-grid">{payments.data.items.map(payment => <article key={payment.id} className="panel customer-account-payment-card" aria-label={`${paymentMoney(payment.amount_minor, payment.currency, 2)} payment ${payment.reversed ? "reversed" : payment.status}`}>
+        <div><strong>{paymentMoney(payment.amount_minor, payment.currency, 2)}</strong><PaymentStatusBadge status={payment.status} reversed={payment.reversed} deleted_at={payment.deleted_at} /></div>
+        <time dateTime={payment.payment_date}>{dateLabel(payment.payment_date)}</time>
+        {payment.note && <p>{payment.note}</p>}
+        <button type="button" className="text-link" onClick={() => setSelected(payment)}>View payment<ArrowRight size={15} aria-hidden="true" /></button>
+      </article>)}</div>
+    </section>}
     <Link className="text-link customer-account-statement" to={`${root}/customers/${customerId}`}><BookOpen size={16} aria-hidden="true" />View account statement</Link>
+    {selected && <PaymentDetailsDialog payment={selected} organizationId={member.organization_id} timeZone={payments.data?.time_zone || member.time_zone || "UTC"} canReview={false} onClose={() => setSelected(null)} onReviewed={() => { setSelected(null); refreshAccount(); }} onRefresh={refreshAccount} />}
   </article>;
 }

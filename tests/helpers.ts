@@ -29,6 +29,7 @@ export interface TestSeed {
 export interface TestDatabase {
   db: DatabaseService;
   close(): Promise<void>;
+  applyMigration(sql:string): Promise<void>;
   seed(): Promise<TestSeed>;
 }
 
@@ -37,12 +38,13 @@ export interface TestDatabase {
  * exercises real SQL, foreign keys and triggers; TEST_DATABASE_URL additionally
  * exercises independent connections and PostgreSQL's production row locks.
  */
-export async function setupTestDatabase(): Promise<TestDatabase> {
+export async function setupTestDatabase(options:{throughMigration?:number}={}): Promise<TestDatabase> {
   const directory = resolve('apps/api/src/database/migrations');
-  const names = (await readdir(directory)).filter((name) => /^\d+.*\.sql$/.test(name)).sort();
+  const names = (await readdir(directory)).filter((name) => /^\d+.*\.sql$/.test(name) && (options.throughMigration===undefined || Number(name.split('_')[0])<=options.throughMigration)).sort();
   const migration = (await Promise.all(names.map((name) => readFile(resolve(directory, name), 'utf8')))).join('\n');
   let db: DatabaseService;
   let close: () => Promise<void>;
+  let applyMigration:(sql:string)=>Promise<void>;
 
   if (process.env.TEST_DATABASE_URL) {
     const schema = `test_${randomUUID().replaceAll('-', '')}`;
@@ -59,6 +61,7 @@ export async function setupTestDatabase(): Promise<TestDatabase> {
       await admin.end();
       throw error;
     }
+    applyMigration=async(sql)=>{await db.query(sql);};
     close = async () => {
       await db.close();
       await admin.query(`DROP SCHEMA "${schema}" CASCADE`);
@@ -104,10 +107,11 @@ export async function setupTestDatabase(): Promise<TestDatabase> {
       close: async () => { await queue; await engine.close(); },
       onModuleDestroy: async () => undefined,
     } as unknown as DatabaseService;
+    applyMigration=(sql)=>serial(async()=>{await engine.exec(sql);});
     close = () => db.close();
   }
 
-  return { db, close, seed: () => seedDatabase(db) };
+  return { db, close, applyMigration, seed: () => seedDatabase(db) };
 }
 
 async function seedDatabase(db: DatabaseService): Promise<TestSeed> {

@@ -1,3 +1,9 @@
+export const companyDirectory = [
+  { slug: "muhabiya-hotels", name: "Muhabiya Hotels" },
+  { slug: "aden-golden", name: "Aden Golden" },
+  { slug: "al-subaee", name: "Al Subaee" },
+] as const;
+
 export type Company = {
   id: string;
   organization_id: string;
@@ -6,13 +12,11 @@ export type Company = {
   customer_name: string;
   check_in: string | null;
   check_out: string | null;
+  quantity: number;
   room_type: string;
   booking_date: string | null;
   voucher_number: string;
   voucher_price_minor: string | null;
-  paid_minor: string | null;
-  unpaid_minor: string | null;
-  balance_minor: string | null;
   remarks: string;
   created_at: string;
   updated_at: string;
@@ -26,7 +30,10 @@ export type CompanyList = {
   page_size: number;
   currency: string;
   currency_exponent: number;
+  totals: { total_minor: string | null; paid_minor: string; balance_minor: string | null; unpaid_minor: string | null; unpriced_count: number; voucher_count: number; paid_version: number | null };
 };
+
+export type CompanyExport = Omit<CompanyList, "page" | "page_size"> & { company_name: string };
 
 export const companyDateFields = [
   { value: "booking_date", label: "Booking date" },
@@ -37,10 +44,7 @@ export const companyDateFields = [
 export type CompanyDateField = typeof companyDateFields[number]["value"];
 
 export const companyMoneyFields = [
-  { name: "voucher_price", label: "Voucher price", minor: "voucher_price_minor" },
-  { name: "paid", label: "Paid", minor: "paid_minor" },
-  { name: "unpaid", label: "Un-Paid", minor: "unpaid_minor" },
-  { name: "balance", label: "Balance", minor: "balance_minor" },
+  { name: "voucher_price", label: "Voucher total", minor: "voucher_price_minor" },
 ] as const;
 
 export type CompanyFields = {
@@ -49,13 +53,11 @@ export type CompanyFields = {
   customer_name: string;
   check_in: string;
   check_out: string;
+  quantity: string;
   room_type: string;
   booking_date: string;
   voucher_number: string;
   voucher_price: string;
-  paid: string;
-  unpaid: string;
-  balance: string;
   remarks: string;
 };
 
@@ -75,13 +77,11 @@ export function companyFields(company: Company | undefined, exponent: number): C
     customer_name: company?.customer_name || "",
     check_in: company?.check_in || "",
     check_out: company?.check_out || "",
+    quantity: String(company?.quantity ?? 1),
     room_type: company?.room_type || "",
     booking_date: company?.booking_date || "",
     voucher_number: company?.voucher_number || "",
     voucher_price: companyDecimal(company?.voucher_price_minor, exponent),
-    paid: companyDecimal(company?.paid_minor, exponent),
-    unpaid: companyDecimal(company?.unpaid_minor, exponent),
-    balance: companyDecimal(company?.balance_minor, exponent),
     remarks: company?.remarks || "",
   };
 }
@@ -106,6 +106,14 @@ function amountValue(value: string, label: string, exponent: number, signed: boo
   return input;
 }
 
+export function companyPaidPayload(value: string, exponent: number): string {
+  const input = value.trim();
+  const match = /^(\d{1,27})(?:\.(\d{1,3}))?$/.exec(input);
+  if (!match || ![0, 2, 3].includes(exponent) || (match[2] || "").length > exponent)
+    throw new Error(`Enter a nonnegative paid amount${exponent ? ` with up to ${exponent} decimal places` : " in whole units"}.`);
+  return input;
+}
+
 export function companyPayload(fields: CompanyFields, exponent: number) {
   const companyName = fields.company_name.trim();
   if (!companyName) throw new Error("Enter a company name.");
@@ -120,19 +128,19 @@ export function companyPayload(fields: CompanyFields, exponent: number) {
   const checkIn = dateValue(fields.check_in, "Check-in");
   const checkOut = dateValue(fields.check_out, "Check-out");
   if (checkIn && checkOut && checkIn > checkOut) throw new Error("Check-out must be on or after check-in.");
+  if (!/^\d+$/.test(fields.quantity) || Number(fields.quantity) < 1 || Number(fields.quantity) > 1000000)
+    throw new Error("Quantity must be a whole number between 1 and 1,000,000.");
   return {
     company_name: companyName,
     hotel_name: fields.hotel_name.trim(),
     customer_name: fields.customer_name.trim(),
     check_in: checkIn,
     check_out: checkOut,
+    quantity: Number(fields.quantity),
     room_type: fields.room_type.trim(),
     booking_date: dateValue(fields.booking_date, "Booking date"),
     voucher_number: fields.voucher_number.trim(),
-    voucher_price: amountValue(fields.voucher_price, "Voucher price", exponent, false),
-    paid: amountValue(fields.paid, "Paid", exponent, false),
-    unpaid: amountValue(fields.unpaid, "Un-Paid", exponent, false),
-    balance: amountValue(fields.balance, "Balance", exponent, true),
+    voucher_price: amountValue(fields.voucher_price, "Voucher total", exponent, false),
     remarks: fields.remarks.trim(),
   };
 }

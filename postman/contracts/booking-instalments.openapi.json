@@ -1,0 +1,1893 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "LedgerBook booking payment reminders",
+    "version": "1.2.0",
+    "description": "Local booking contract. New reminder-only plans use schedule_basis=reminders: dates and positive amounts, optional partial or empty plans, and no payment writes. Actual payments stay in payment history. Existing legacy and remaining_balance contracts remain supported."
+  },
+  "servers": [
+    {
+      "url": "/api"
+    }
+  ],
+  "security": [
+    {
+      "clerkBearer": []
+    },
+    {
+      "localSession": []
+    },
+    {
+      "productionSession": []
+    }
+  ],
+  "paths": {
+    "/organizations/{orgId}/customers/{customerId}/bookings": {
+      "parameters": [
+        {
+          "name": "orgId",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        {
+          "name": "customerId",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      ],
+      "post": {
+        "operationId": "createBookingWithInstalments",
+        "summary": "Create a booking with optional payment reminders",
+        "description": "Reminder mode creates the booking charge and optional reminders; it never creates, links or reverses payments. New clients send schedule_basis=reminders with date/amount rows only. Partial and empty plans are allowed; total reminder amounts above remaining debt are rejected. Later confirmed payments reduce the earliest reminder first; full payment completes every reminder. Reversing a payment received before the saved plan may expose additional unscheduled debt. Customer account credit or other-booking payments never settle reminder rows. Administrator only. Atomically creates the GBP charge, booking, schedule, payment links, folders and invoice snapshot. With schedule_basis=remaining_balance, explicitly selected existing credits and newly paid rows reduce the target for unpaid rows. Existing credits are never posted again. Empty input defaults to one row for a positive remaining balance; fully paid bookings need no due row. Paid history is retained as linked completed rows to prevent double allocation. Legacy requests without schedule_basis validate all rows against instalment_total or amount. Identical key/payload retries return the existing booking; changed payload returns 409.",
+        "parameters": [
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uri"
+            },
+            "description": "The configured application origin; use the same origin as the signed-in browser.",
+            "example": "http://127.0.0.1:4312"
+          },
+          {
+            "name": "X-CSRF-Protection",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "const": "1"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateBooking"
+              },
+              "examples": {
+                "mixedAdvancePayments": {
+                  "summary": "\u00a35,000 plan: one new \u00a31,000 payment plus one existing \u00a31,000 payment",
+                  "value": {
+                    "reference": "ADVANCE-5000",
+                    "departure_at": "2027-01-20T10:30:00Z",
+                    "required_services": [
+                      "flight"
+                    ],
+                    "amount": "5000.00",
+                    "instalment_total": "5000.00",
+                    "effective_date": "2020-01-01",
+                    "instalments": [
+                      {
+                        "due_date": "2020-01-01",
+                        "amount": "1000.00",
+                        "paid": true,
+                        "paid_date": "2020-01-01"
+                      },
+                      {
+                        "due_date": "2020-01-02",
+                        "amount": "1000.00",
+                        "paid": true,
+                        "payment_entry_id": "102"
+                      },
+                      {
+                        "due_date": "2020-01-03",
+                        "amount": "1000.00",
+                        "paid": false
+                      },
+                      {
+                        "due_date": "2099-01-04",
+                        "amount": "1000.00"
+                      },
+                      {
+                        "due_date": "2099-01-05",
+                        "amount": "1000.00"
+                      }
+                    ],
+                    "idempotency_key": "a7ce1a32-bdc4-4f10-86b2-f509e854e765"
+                  }
+                },
+                "remainingAfterSelectedPayment": {
+                  "summary": "\u00a35000 booking, selected \u00a32000 payment, five upcoming \u00a3600 instalments",
+                  "value": {
+                    "reference": "UMRAH-REMAINING",
+                    "departure_at": "2026-12-12T10:30:00Z",
+                    "required_services": [
+                      "flight",
+                      "visas"
+                    ],
+                    "amount": "5000.00",
+                    "effective_date": "2026-11-11",
+                    "schedule_basis": "remaining_balance",
+                    "existing_payment_entry_ids": [
+                      "101"
+                    ],
+                    "instalments": [
+                      {
+                        "due_date": "2026-11-15",
+                        "amount": "600.00"
+                      },
+                      {
+                        "due_date": "2026-11-20",
+                        "amount": "600.00"
+                      },
+                      {
+                        "due_date": "2026-11-25",
+                        "amount": "600.00"
+                      },
+                      {
+                        "due_date": "2026-11-30",
+                        "amount": "600.00"
+                      },
+                      {
+                        "due_date": "2026-12-05",
+                        "amount": "600.00"
+                      }
+                    ],
+                    "idempotency_key": "35831d67-d592-433a-9545-3837cf007397"
+                  }
+                },
+                "reminderOnly": {
+                  "summary": "Optional reminder dates and amounts; payments are separate",
+                  "value": {
+                    "reference": "REMINDER-1000",
+                    "departure_at": "2027-01-20T10:30:00Z",
+                    "required_services": [],
+                    "amount": "1000.00",
+                    "effective_date": "2020-01-01",
+                    "schedule_basis": "reminders",
+                    "instalments": [
+                      {
+                        "due_date": "2027-01-01",
+                        "amount": "350.00"
+                      },
+                      {
+                        "due_date": "2027-01-15",
+                        "amount": "350.00"
+                      }
+                    ],
+                    "idempotency_key": "9ecf3970-f236-44ed-ae60-830325bc54b6"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created booking, or the existing booking returned for an identical retry.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Booking"
+                },
+                "example": {
+                  "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+                  "organization_id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+                  "customer_id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+                  "reference": "ADVANCE-5000",
+                  "departure_at": "2027-01-20T10:30:00Z",
+                  "required_services": [
+                    "flight"
+                  ],
+                  "total_minor": "500000",
+                  "instalment_total_minor": "500000",
+                  "currency": "GBP",
+                  "currency_exponent": 2,
+                  "charge_entry_id": "103",
+                  "effective_date": "2020-01-01",
+                  "time_zone": "Asia/Karachi",
+                  "version": 1,
+                  "paid_minor": "200000",
+                  "remaining_minor": "300000",
+                  "overpaid_minor": "0",
+                  "instalments": [
+                    {
+                      "id": "11111111-1111-4111-8111-111111111111",
+                      "due_date": "2020-01-01",
+                      "amount_minor": "100000",
+                      "paid": true,
+                      "paid_date": "2020-01-01",
+                      "payment_entry_id": "104",
+                      "payment_source": "booking_instalment"
+                    },
+                    {
+                      "id": "22222222-2222-4222-8222-222222222222",
+                      "due_date": "2020-01-02",
+                      "amount_minor": "100000",
+                      "paid": true,
+                      "paid_date": "2020-01-02",
+                      "payment_entry_id": "102",
+                      "payment_source": "booking_instalment"
+                    },
+                    {
+                      "id": "33333333-3333-4333-8333-333333333333",
+                      "due_date": "2020-01-03",
+                      "amount_minor": "100000",
+                      "paid": false,
+                      "paid_date": null,
+                      "payment_entry_id": null,
+                      "payment_source": null
+                    },
+                    {
+                      "id": "44444444-4444-4444-8444-444444444444",
+                      "due_date": "2099-01-04",
+                      "amount_minor": "100000",
+                      "paid": false,
+                      "paid_date": null,
+                      "payment_entry_id": null,
+                      "payment_source": null
+                    },
+                    {
+                      "id": "55555555-5555-4555-8555-555555555555",
+                      "due_date": "2099-01-05",
+                      "amount_minor": "100000",
+                      "paid": false,
+                      "paid_date": null,
+                      "payment_entry_id": null,
+                      "payment_source": null
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid fields, dates, money, payment assignment, or schedule total. Correct the input before retrying.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InstalmentTotalMismatch"
+                    },
+                    {
+                      "$ref": "#/components/schemas/RemindersExceedBalance"
+                    }
+                  ]
+                },
+                "examples": {
+                  "outsideTolerance": {
+                    "summary": "One penny below the permitted schedule range",
+                    "value": {
+                      "message": "Instalments must total within \u00a35.00 above or below the instalment calculation total. Total so far: GBP 4994.99. Required: GBP 5000.00. Allowed range: GBP 4995.00\u20135005.00. Add at least GBP 0.01.",
+                      "code": "INSTALMENT_TOTAL_MISMATCH",
+                      "required_minor": "500000",
+                      "scheduled_minor": "499499",
+                      "difference_minor": "-501",
+                      "minimum_minor": "499500",
+                      "maximum_minor": "500500",
+                      "adjustment_minor": "1"
+                    }
+                  },
+                  "mismatchedExistingPayment": {
+                    "value": {
+                      "statusCode": 400,
+                      "message": "The existing payment must match the whole instalment amount exactly.",
+                      "error": "Bad Request"
+                    }
+                  },
+                  "futurePaidDate": {
+                    "value": {
+                      "statusCode": 400,
+                      "message": "A paid instalment cannot have a future date received.",
+                      "error": "Bad Request"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sign-in required. Obtain a valid session before retrying.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Administrator access is required for mutations and payment options; booking reads also allow the owning customer. Invalid Origin/CSRF headers reject mutations.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Booking or customer was not found within this organization and membership scope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Stale version, conflicting idempotency key, cancelled/inactive booking context, existing payment already assigned, or prohibited paid-row correction. Refresh state and resolve the conflict before a new submission.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "examples": {
+                  "alreadyAssigned": {
+                    "value": {
+                      "statusCode": 409,
+                      "message": "That payment is already assigned to an instalment.",
+                      "error": "Conflict"
+                    }
+                  },
+                  "paidRowRemoval": {
+                    "value": {
+                      "statusCode": 409,
+                      "message": "Mark the paid instalment as due and save before removing it. Reload the booking to edit its recorded payment.",
+                      "error": "Conflict"
+                    }
+                  },
+                  "staleVersion": {
+                    "value": {
+                      "statusCode": 409,
+                      "message": "This booking changed in another session. Refresh it before saving.",
+                      "error": "Conflict"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Booking-create rate limit exceeded (60 attempts per actor per hour); wait before retrying.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/organizations/{orgId}/customers/{customerId}/bookings/{bookingId}": {
+      "parameters": [
+        {
+          "name": "orgId",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        {
+          "name": "customerId",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        {
+          "name": "bookingId",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "getBookingWithInstalmentPayments",
+        "summary": "Read a booking, its schedule and received-money totals",
+        "description": "Administrators and the owning customer can read an active booking. Instalments are ordered by due date, then creation order/ID. paid_minor includes every approved, unreversed payment linked to this booking; remaining_minor=max(total_minor-paid_minor,0), overpaid_minor=max(paid_minor-total_minor,0). These use the booking charge, not instalment_total_minor. Reversed instalment payments return paid=false and null payment metadata.",
+        "responses": {
+          "200": {
+            "description": "Booking with current instalment/payment state.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Booking"
+                },
+                "example": {
+                  "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+                  "organization_id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+                  "customer_id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+                  "reference": "ADVANCE-5000",
+                  "departure_at": "2027-01-20T10:30:00Z",
+                  "required_services": [
+                    "flight"
+                  ],
+                  "total_minor": "500000",
+                  "instalment_total_minor": "500000",
+                  "currency": "GBP",
+                  "currency_exponent": 2,
+                  "charge_entry_id": "103",
+                  "effective_date": "2020-01-01",
+                  "time_zone": "Asia/Karachi",
+                  "version": 1,
+                  "paid_minor": "200000",
+                  "remaining_minor": "300000",
+                  "overpaid_minor": "0",
+                  "instalments": [
+                    {
+                      "id": "11111111-1111-4111-8111-111111111111",
+                      "due_date": "2020-01-01",
+                      "amount_minor": "100000",
+                      "paid": true,
+                      "paid_date": "2020-01-01",
+                      "payment_entry_id": "104",
+                      "payment_source": "booking_instalment"
+                    },
+                    {
+                      "id": "22222222-2222-4222-8222-222222222222",
+                      "due_date": "2020-01-02",
+                      "amount_minor": "100000",
+                      "paid": true,
+                      "paid_date": "2020-01-02",
+                      "payment_entry_id": "102",
+                      "payment_source": "booking_instalment"
+                    },
+                    {
+                      "id": "33333333-3333-4333-8333-333333333333",
+                      "due_date": "2020-01-03",
+                      "amount_minor": "100000",
+                      "paid": false,
+                      "paid_date": null,
+                      "payment_entry_id": null,
+                      "payment_source": null
+                    },
+                    {
+                      "id": "44444444-4444-4444-8444-444444444444",
+                      "due_date": "2099-01-04",
+                      "amount_minor": "100000",
+                      "paid": false,
+                      "paid_date": null,
+                      "payment_entry_id": null,
+                      "payment_source": null
+                    },
+                    {
+                      "id": "55555555-5555-4555-8555-555555555555",
+                      "due_date": "2099-01-05",
+                      "amount_minor": "100000",
+                      "paid": false,
+                      "paid_date": null,
+                      "payment_entry_id": null,
+                      "payment_source": null
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid path identifier.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sign-in required. Obtain a valid session before retrying.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Administrator access is required for mutations and payment options; booking reads also allow the owning customer. Invalid Origin/CSRF headers reject mutations.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Booking or customer was not found within this organization and membership scope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "operationId": "updateBookingInstalments",
+        "summary": "Edit booking details and payment reminders",
+        "description": "Reminder mode changes only dates/amounts and booking details; unchanged booking totals and all payments remain untouched. expected_paid_minor and expected_payment_snapshot are required; stale payment snapshots return 409. Existing paid legacy rows remain in payment history. New clients send schedule_basis=reminders with date/amount rows only. Partial and empty plans are allowed; total reminder amounts above remaining debt are rejected. Later confirmed payments reduce the earliest reminder first; full payment completes every reminder. Reversing a payment received before the saved plan may expose additional unscheduled debt. Customer account credit or other-booking payments never settle reminder rows. Administrator only; full editable payload, expected_version and reason are required. Include persisted instalment IDs. Unchanged paid rows are retained without another credit. Changing a booking_instalment-source paid amount/date or marking it due reverses its original payment; a still-paid corrected row receives a replacement. The reversal is dated no earlier than the original payment or current business date, and a replacement uses the actual corrected paid_date. This also applies to staff-linked existing ledger payments. Receipt-approved source rows permit due-date edits but must be corrected in payment history before paid status/amount/date changes. Legacy requests reject omitted paid rows. To remove a paid row deliberately, mark it due and save its correction before removing it in another edit. Legacy matching rows without IDs can remain unchanged. Total changes reverse/replace the charge; calculation-total-only changes do not. All changes are atomic and audited. Identical key/body retries return the original committed response even after later changes. With schedule_basis=remaining_balance, only unpaid rows count against the booking amount less final approved unreversed payments; selected existing_payment_entry_ids link whole available credits. Omitted rows that are still actively paid are retained. Previously unallocated approved booking payments become completed rows when a plan is explicitly saved, preventing their money from reducing the new unpaid schedule twice. No existing records are rewritten on deployment.",
+        "parameters": [
+          {
+            "name": "Origin",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uri"
+            },
+            "description": "The configured application origin; use the same origin as the signed-in browser.",
+            "example": "http://127.0.0.1:4312"
+          },
+          {
+            "name": "X-CSRF-Protection",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "const": "1"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateBooking"
+              },
+              "examples": {
+                "retainPaidRows": {
+                  "summary": "Move a due date while preserving both recorded payments",
+                  "value": {
+                    "reference": "ADVANCE-5000",
+                    "departure_at": "2027-01-20T10:30:00Z",
+                    "required_services": [
+                      "flight"
+                    ],
+                    "amount": "5000.00",
+                    "instalment_total": "5000.00",
+                    "effective_date": "2020-01-01",
+                    "instalments": [
+                      {
+                        "id": "11111111-1111-4111-8111-111111111111",
+                        "due_date": "2020-01-01",
+                        "amount": "1000.00",
+                        "paid": true,
+                        "paid_date": "2020-01-01",
+                        "payment_entry_id": "104"
+                      },
+                      {
+                        "id": "22222222-2222-4222-8222-222222222222",
+                        "due_date": "2020-01-02",
+                        "amount": "1000.00",
+                        "paid": true,
+                        "paid_date": "2020-01-02",
+                        "payment_entry_id": "102"
+                      },
+                      {
+                        "id": "33333333-3333-4333-8333-333333333333",
+                        "due_date": "2020-01-03",
+                        "amount": "1000.00",
+                        "paid": false
+                      },
+                      {
+                        "id": "44444444-4444-4444-8444-444444444444",
+                        "due_date": "2099-01-04",
+                        "amount": "1000.00",
+                        "paid": false
+                      },
+                      {
+                        "id": "55555555-5555-4555-8555-555555555555",
+                        "due_date": "2099-02-05",
+                        "amount": "1000.00",
+                        "paid": false
+                      }
+                    ],
+                    "idempotency_key": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+                    "expected_version": 1,
+                    "reason": "Retain received payments and move the final due date."
+                  }
+                },
+                "reminderOnly": {
+                  "summary": "Optional reminder dates and amounts; payments are separate",
+                  "value": {
+                    "reference": "REMINDER-1000",
+                    "departure_at": "2027-01-20T10:30:00Z",
+                    "required_services": [],
+                    "amount": "1000.00",
+                    "effective_date": "2020-01-01",
+                    "schedule_basis": "reminders",
+                    "instalments": [
+                      {
+                        "due_date": "2027-01-01",
+                        "amount": "350.00"
+                      },
+                      {
+                        "due_date": "2027-01-15",
+                        "amount": "350.00"
+                      }
+                    ],
+                    "idempotency_key": "9ecf3970-f236-44ed-ae60-830325bc54b6",
+                    "expected_version": 2,
+                    "expected_paid_minor": "30000",
+                    "expected_payment_snapshot": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                    "reason": "Set two payment reminders"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Committed booking state with an incremented version; identical retries replay this response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Booking"
+                },
+                "example": {
+                  "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+                  "organization_id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+                  "customer_id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+                  "reference": "ADVANCE-5000",
+                  "departure_at": "2027-01-20T10:30:00Z",
+                  "required_services": [
+                    "flight"
+                  ],
+                  "total_minor": "500000",
+                  "instalment_total_minor": "500000",
+                  "currency": "GBP",
+                  "currency_exponent": 2,
+                  "charge_entry_id": "103",
+                  "effective_date": "2020-01-01",
+                  "time_zone": "Asia/Karachi",
+                  "version": 2,
+                  "paid_minor": "200000",
+                  "remaining_minor": "300000",
+                  "overpaid_minor": "0",
+                  "instalments": [
+                    {
+                      "id": "11111111-1111-4111-8111-111111111111",
+                      "due_date": "2020-01-01",
+                      "amount_minor": "100000",
+                      "paid": true,
+                      "paid_date": "2020-01-01",
+                      "payment_entry_id": "104",
+                      "payment_source": "booking_instalment"
+                    },
+                    {
+                      "id": "22222222-2222-4222-8222-222222222222",
+                      "due_date": "2020-01-02",
+                      "amount_minor": "100000",
+                      "paid": true,
+                      "paid_date": "2020-01-02",
+                      "payment_entry_id": "102",
+                      "payment_source": "booking_instalment"
+                    },
+                    {
+                      "id": "33333333-3333-4333-8333-333333333333",
+                      "due_date": "2020-01-03",
+                      "amount_minor": "100000",
+                      "paid": false,
+                      "paid_date": null,
+                      "payment_entry_id": null,
+                      "payment_source": null
+                    },
+                    {
+                      "id": "44444444-4444-4444-8444-444444444444",
+                      "due_date": "2099-01-04",
+                      "amount_minor": "100000",
+                      "paid": false,
+                      "paid_date": null,
+                      "payment_entry_id": null,
+                      "payment_source": null
+                    },
+                    {
+                      "id": "55555555-5555-4555-8555-555555555555",
+                      "due_date": "2099-02-05",
+                      "amount_minor": "100000",
+                      "paid": false,
+                      "paid_date": null,
+                      "payment_entry_id": null,
+                      "payment_source": null
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid fields, dates, money, payment assignment, or schedule total. Correct the input before retrying.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InstalmentTotalMismatch"
+                    },
+                    {
+                      "$ref": "#/components/schemas/RemindersExceedBalance"
+                    }
+                  ]
+                },
+                "examples": {
+                  "outsideTolerance": {
+                    "summary": "One penny below the permitted schedule range",
+                    "value": {
+                      "message": "Instalments must total within \u00a35.00 above or below the instalment calculation total. Total so far: GBP 4994.99. Required: GBP 5000.00. Allowed range: GBP 4995.00\u20135005.00. Add at least GBP 0.01.",
+                      "code": "INSTALMENT_TOTAL_MISMATCH",
+                      "required_minor": "500000",
+                      "scheduled_minor": "499499",
+                      "difference_minor": "-501",
+                      "minimum_minor": "499500",
+                      "maximum_minor": "500500",
+                      "adjustment_minor": "1"
+                    }
+                  },
+                  "mismatchedExistingPayment": {
+                    "value": {
+                      "statusCode": 400,
+                      "message": "The existing payment must match the whole instalment amount exactly.",
+                      "error": "Bad Request"
+                    }
+                  },
+                  "futurePaidDate": {
+                    "value": {
+                      "statusCode": 400,
+                      "message": "A paid instalment cannot have a future date received.",
+                      "error": "Bad Request"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sign-in required. Obtain a valid session before retrying.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Administrator access is required for mutations and payment options; booking reads also allow the owning customer. Invalid Origin/CSRF headers reject mutations.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Booking or customer was not found within this organization and membership scope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Stale version, conflicting idempotency key, cancelled/inactive booking context, existing payment already assigned, or prohibited paid-row correction. Refresh state and resolve the conflict before a new submission.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "examples": {
+                  "alreadyAssigned": {
+                    "value": {
+                      "statusCode": 409,
+                      "message": "That payment is already assigned to an instalment.",
+                      "error": "Conflict"
+                    }
+                  },
+                  "paidRowRemoval": {
+                    "value": {
+                      "statusCode": 409,
+                      "message": "Mark the paid instalment as due and save before removing it. Reload the booking to edit its recorded payment.",
+                      "error": "Conflict"
+                    }
+                  },
+                  "staleVersion": {
+                    "value": {
+                      "statusCode": 409,
+                      "message": "This booking changed in another session. Refresh it before saving.",
+                      "error": "Conflict"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Booking-management rate limit exceeded (120 attempts per actor per hour); wait before retrying.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/organizations/{orgId}/customers/{customerId}/bookings/payment-options": {
+      "parameters": [
+        {
+          "name": "orgId",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        {
+          "name": "customerId",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "listAvailableInstalmentPayments",
+        "summary": "List whole existing customer payments available to link",
+        "description": "Administrator only. Returns unreversed, nonfuture payments for the same organization/customer, either unassigned to a booking or approved for the optional booking_id and not yet assigned to an instalment. A payment already attached to a row is excluded. Results are ordered newest payment date/entry first and are not paginated. Availability and exact amount/date matching are checked again when the booking is saved. An existing payment can be assigned once, in full; partial allocations are unsupported. already_recorded_for_booking identifies payments already included in that booking's paid_minor so clients avoid double counting.",
+        "parameters": [
+          {
+            "name": "booking_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Current booking when editing. Omit for a new booking; if supplied, it must be accessible for this customer."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Available whole payments.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaymentOptions"
+                },
+                "example": {
+                  "items": [
+                    {
+                      "id": "102",
+                      "amount_minor": "100000",
+                      "payment_date": "2020-01-02",
+                      "description": "Previously received instalment",
+                      "reference": "BANK-102",
+                      "already_recorded_for_booking": false
+                    },
+                    {
+                      "id": "101",
+                      "amount_minor": "50000",
+                      "payment_date": "2020-01-01",
+                      "description": "Approved receipt for this booking",
+                      "reference": "RECEIPT-101",
+                      "already_recorded_for_booking": true
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid booking_id or path identifier.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sign-in required. Obtain a valid session before retrying.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Administrator access is required for mutations and payment options; booking reads also allow the owning customer. Invalid Origin/CSRF headers reject mutations.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Booking or customer was not found within this organization and membership scope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "clerkBearer": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "description": "Used when AUTH_PROVIDER=clerk."
+      },
+      "localSession": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "ledgerbook_session",
+        "description": "Local-auth nonproduction session cookie."
+      },
+      "productionSession": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "__Host-ledgerbook",
+        "description": "Local-auth production session cookie."
+      }
+    },
+    "schemas": {
+      "Amount": {
+        "type": "string",
+        "pattern": "^\\s*[0-9]{1,18}(?:\\.[0-9]{1,2})?\\s*$",
+        "description": "Positive GBP decimal text, up to 1,000,000,000,000.00. At most two fractional digits; zero, negatives, commas and exponent notation are rejected. Surrounding whitespace is trimmed.",
+        "examples": [
+          "1000.00"
+        ]
+      },
+      "CreateInstalment": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "due_date",
+          "amount"
+        ],
+        "properties": {
+          "due_date": {
+            "type": "string",
+            "format": "date",
+            "description": "Calendar date from 1900-01-01 through 9999-12-31."
+          },
+          "amount": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "paid": {
+            "type": "boolean",
+            "description": "New rows default to due; PATCH omission retains a matched row status. Paid rows count as received money and are excluded from the remaining-balance schedule sum. Legacy mode includes paid rows in its full-schedule sum."
+          },
+          "paid_date": {
+            "type": "string",
+            "format": "date",
+            "description": "Actual date received, no later than the current business date. Required for a new paid row unless payment_entry_id supplies it. When supplied for an existing payment, it must match that entry. Omit for unpaid rows."
+          },
+          "payment_entry_id": {
+            "type": "string",
+            "pattern": "^[1-9][0-9]{0,18}$",
+            "description": "Positive ledger-entry ID as decimal text, at most 9223372036854775807. Optional existing customer payment to link without posting a second credit. Requires paid=true and an exact whole-instalment amount match. Omit for unpaid rows."
+          }
+        }
+      },
+      "EditInstalment": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "due_date",
+          "amount"
+        ],
+        "properties": {
+          "due_date": {
+            "type": "string",
+            "format": "date",
+            "description": "Calendar date from 1900-01-01 through 9999-12-31."
+          },
+          "amount": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "paid": {
+            "type": "boolean",
+            "description": "New rows default to due; PATCH omission retains a matched row status. Paid rows count as received money and are excluded from the remaining-balance schedule sum. Legacy mode includes paid rows in its full-schedule sum."
+          },
+          "paid_date": {
+            "type": "string",
+            "format": "date",
+            "description": "Actual date received, no later than the current business date. Required for a new paid row unless payment_entry_id supplies it. When supplied for an existing payment, it must match that entry. Omit for unpaid rows."
+          },
+          "payment_entry_id": {
+            "type": "string",
+            "pattern": "^[1-9][0-9]{0,18}$",
+            "description": "Positive ledger-entry ID as decimal text, at most 9223372036854775807. Optional existing customer payment to link without posting a second credit. Requires paid=true and an exact whole-instalment amount match. Omit for unpaid rows."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Persisted instalment ID from GET. Required to deliberately change recorded paid rows; cannot belong to another booking."
+          }
+        }
+      },
+      "CreateBooking": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "reference",
+          "departure_at",
+          "amount",
+          "effective_date",
+          "idempotency_key"
+        ],
+        "properties": {
+          "reference": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160,
+            "description": "Nonblank booking reference; trimmed."
+          },
+          "departure_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "ISO date-time with an explicit UTC offset or Z."
+          },
+          "required_services": {
+            "type": "array",
+            "maxItems": 6,
+            "items": {
+              "type": "string",
+              "enum": [
+                "flight",
+                "makkah",
+                "madinah",
+                "transfers",
+                "visas",
+                "extras"
+              ]
+            },
+            "default": []
+          },
+          "amount": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "instalment_total": {
+            "type": "string",
+            "pattern": "^\\s*[0-9]{1,18}(?:\\.[0-9]{1,2})?\\s*$",
+            "description": "Legacy positive GBP calculation target. Omission uses amount. Without schedule_basis, the full schedule must be within \u00a35 of this target. Remaining-balance mode requires this field to be omitted or equal to amount; its actual target is derived from booking amount less received payments.",
+            "examples": [
+              "1000.00"
+            ]
+          },
+          "effective_date": {
+            "type": "string",
+            "format": "date",
+            "description": "Charge date. For a charge correction, cannot precede the current charge\u2019s effective date. Also supplies the due date of an implicit remaining-balance row when instalments is empty."
+          },
+          "idempotency_key": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Use the same UUID and identical payload when retrying an uncertain response. Reusing a key with different input returns 409."
+          },
+          "instalments": {
+            "type": "array",
+            "maxItems": 1000,
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/CreateInstalment"
+            },
+            "description": "In reminder mode: zero to 100 positive date/amount rows. Their sum may be below, but cannot exceed, the current remaining booking balance. Empty means no reminders. Rows represent the outstanding amounts at save time; confirmed money is not deducted again. Legacy modes retain their prior rules."
+          },
+          "schedule_basis": {
+            "type": "string",
+            "enum": [
+              "reminders",
+              "remaining_balance"
+            ],
+            "description": "Use reminders for date/amount notices with no financial side effects. remaining_balance retains the older payment-linked plan; omission retains the legacy contract. A saved reminder plan must continue to use reminders."
+          },
+          "existing_payment_entry_ids": {
+            "type": "array",
+            "maxItems": 100,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "pattern": "^[1-9][0-9]{0,18}$",
+              "description": "Positive ledger-entry ID as decimal text, at most 9223372036854775807."
+            },
+            "description": "A nonempty selection requires schedule_basis=remaining_balance. Explicitly selected whole available payments belonging to this customer. Entries assigned to another booking, reversed entries and future payments are rejected. Links money without posting a duplicate credit; unselected customer payments are excluded from this booking\u2019s paid total and plan target."
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "required": [
+                "schedule_basis"
+              ],
+              "properties": {
+                "schedule_basis": {
+                  "const": "remaining_balance"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "instalments": {
+                  "contains": {
+                    "not": {
+                      "required": [
+                        "paid"
+                      ],
+                      "properties": {
+                        "paid": {
+                          "const": true
+                        }
+                      }
+                    }
+                  },
+                  "minContains": 0,
+                  "maxContains": 100
+                }
+              }
+            },
+            "else": {
+              "properties": {
+                "instalments": {
+                  "maxItems": 100
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "required": [
+                "existing_payment_entry_ids"
+              ],
+              "properties": {
+                "existing_payment_entry_ids": {
+                  "minItems": 1
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "schedule_basis"
+              ]
+            }
+          },
+          {
+            "if": {
+              "required": [
+                "schedule_basis"
+              ],
+              "properties": {
+                "schedule_basis": {
+                  "const": "reminders"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "instalments": {
+                  "type": "array",
+                  "maxItems": 100,
+                  "items": {
+                    "$ref": "#/components/schemas/CreateReminder"
+                  }
+                }
+              },
+              "not": {
+                "anyOf": [
+                  {
+                    "required": [
+                      "instalment_total"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "existing_payment_entry_ids"
+                    ]
+                  }
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "UpdateBooking": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "reference",
+          "departure_at",
+          "required_services",
+          "amount",
+          "effective_date",
+          "instalments",
+          "expected_version",
+          "reason",
+          "idempotency_key"
+        ],
+        "properties": {
+          "reference": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160,
+            "description": "Nonblank booking reference; trimmed."
+          },
+          "departure_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "ISO date-time with an explicit UTC offset or Z."
+          },
+          "required_services": {
+            "type": "array",
+            "maxItems": 6,
+            "items": {
+              "type": "string",
+              "enum": [
+                "flight",
+                "makkah",
+                "madinah",
+                "transfers",
+                "visas",
+                "extras"
+              ]
+            }
+          },
+          "amount": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "instalment_total": {
+            "type": "string",
+            "pattern": "^\\s*[0-9]{1,18}(?:\\.[0-9]{1,2})?\\s*$",
+            "description": "Legacy positive GBP calculation target. Omission uses amount. Without schedule_basis, the full schedule must be within \u00a35 of this target. Remaining-balance mode requires this field to be omitted or equal to amount; its actual target is derived from booking amount less received payments.",
+            "examples": [
+              "1000.00"
+            ]
+          },
+          "effective_date": {
+            "type": "string",
+            "format": "date",
+            "description": "Charge date. For a charge correction, cannot precede the current charge\u2019s effective date. Also supplies the due date of an implicit remaining-balance row when instalments is empty."
+          },
+          "idempotency_key": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Use the same UUID and identical payload when retrying an uncertain response. Reusing a key with different input returns 409."
+          },
+          "instalments": {
+            "type": "array",
+            "maxItems": 1000,
+            "items": {
+              "$ref": "#/components/schemas/EditInstalment"
+            },
+            "description": "In reminder mode: zero to 100 positive date/amount rows. Their sum may be below, but cannot exceed, the current remaining booking balance. Empty means no reminders. Rows represent the outstanding amounts at save time; confirmed money is not deducted again. Legacy modes retain their prior rules."
+          },
+          "expected_version": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000,
+            "description": "Nonblank reason for the audited change; trimmed."
+          },
+          "schedule_basis": {
+            "type": "string",
+            "enum": [
+              "reminders",
+              "remaining_balance"
+            ],
+            "description": "Use reminders for date/amount notices with no financial side effects. remaining_balance retains the older payment-linked plan; omission retains the legacy contract. A saved reminder plan must continue to use reminders."
+          },
+          "existing_payment_entry_ids": {
+            "type": "array",
+            "maxItems": 100,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "pattern": "^[1-9][0-9]{0,18}$",
+              "description": "Positive ledger-entry ID as decimal text, at most 9223372036854775807."
+            },
+            "description": "A nonempty selection requires schedule_basis=remaining_balance. Explicitly selected whole available payments belonging to this customer. Entries assigned to another booking, reversed entries and future payments are rejected. Links money without posting a duplicate credit; unselected customer payments are excluded from this booking\u2019s paid total and plan target."
+          },
+          "expected_paid_minor": {
+            "type": "string",
+            "pattern": "^[0-9]{1,20}$",
+            "description": "Echo the paid_minor from the booking snapshot opened for editing."
+          },
+          "expected_payment_snapshot": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "description": "Echo payment_snapshot from GET. Detects changed payment allocation even if the total received stayed equal."
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "required": [
+                "schedule_basis"
+              ],
+              "properties": {
+                "schedule_basis": {
+                  "const": "remaining_balance"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "instalments": {
+                  "contains": {
+                    "not": {
+                      "required": [
+                        "paid"
+                      ],
+                      "properties": {
+                        "paid": {
+                          "const": true
+                        }
+                      }
+                    }
+                  },
+                  "minContains": 0,
+                  "maxContains": 100
+                }
+              }
+            },
+            "else": {
+              "properties": {
+                "instalments": {
+                  "maxItems": 100
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "required": [
+                "existing_payment_entry_ids"
+              ],
+              "properties": {
+                "existing_payment_entry_ids": {
+                  "minItems": 1
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "schedule_basis"
+              ]
+            }
+          },
+          {
+            "if": {
+              "required": [
+                "schedule_basis"
+              ],
+              "properties": {
+                "schedule_basis": {
+                  "const": "reminders"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "instalments": {
+                  "type": "array",
+                  "maxItems": 100,
+                  "items": {
+                    "$ref": "#/components/schemas/EditReminder"
+                  }
+                }
+              },
+              "not": {
+                "anyOf": [
+                  {
+                    "required": [
+                      "instalment_total"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "existing_payment_entry_ids"
+                    ]
+                  }
+                ]
+              },
+              "required": [
+                "expected_paid_minor",
+                "expected_payment_snapshot"
+              ]
+            }
+          },
+          {
+            "if": {
+              "not": {
+                "required": [
+                  "schedule_basis"
+                ]
+              }
+            },
+            "then": {
+              "properties": {
+                "instalments": {
+                  "minItems": 1
+                }
+              }
+            }
+          }
+        ]
+      },
+      "Instalment": {
+        "type": "object",
+        "required": [
+          "id",
+          "due_date",
+          "amount_minor",
+          "paid",
+          "paid_date",
+          "payment_entry_id",
+          "payment_source"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "due_date": {
+            "type": "string",
+            "format": "date",
+            "description": "Calendar date from 1900-01-01 through 9999-12-31."
+          },
+          "amount_minor": {
+            "type": "string",
+            "pattern": "^[0-9]+$",
+            "description": "Nonnegative GBP pennies as decimal text; never use floating-point money."
+          },
+          "paid": {
+            "type": "boolean"
+          },
+          "paid_date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date"
+          },
+          "payment_entry_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "pattern": "^[1-9][0-9]{0,18}$"
+          },
+          "payment_source": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "booking_instalment",
+              "customer_receipt",
+              null
+            ],
+            "description": "Staff-recorded/linked advance payment or approved customer receipt. Null when unpaid or reversed."
+          },
+          "remaining_minor": {
+            "type": "string",
+            "pattern": "^[0-9]+$",
+            "description": "In reminder mode, authoritative remaining amount from the same calculation used by dashboard and reminder delivery."
+          },
+          "payment_status": {
+            "type": "string",
+            "enum": [
+              "Completed",
+              "Overdue",
+              "Due"
+            ],
+            "description": "Returned for reminder rows. Today is Due; becomes Overdue on the following business date."
+          }
+        }
+      },
+      "Booking": {
+        "type": "object",
+        "required": [
+          "id",
+          "organization_id",
+          "customer_id",
+          "reference",
+          "departure_at",
+          "required_services",
+          "total_minor",
+          "instalment_total_minor",
+          "currency",
+          "currency_exponent",
+          "charge_entry_id",
+          "effective_date",
+          "time_zone",
+          "version",
+          "paid_minor",
+          "remaining_minor",
+          "overpaid_minor",
+          "instalments",
+          "schedule_basis",
+          "reminder_paid_baseline_minor",
+          "payment_snapshot"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "organization_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "customer_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "reference": {
+            "type": "string"
+          },
+          "departure_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "required_services": {
+            "type": "array",
+            "maxItems": 6,
+            "items": {
+              "type": "string",
+              "enum": [
+                "flight",
+                "makkah",
+                "madinah",
+                "transfers",
+                "visas",
+                "extras"
+              ]
+            }
+          },
+          "total_minor": {
+            "type": "string",
+            "pattern": "^[0-9]+$",
+            "description": "Nonnegative GBP pennies as decimal text; never use floating-point money."
+          },
+          "instalment_total_minor": {
+            "type": "string",
+            "pattern": "^[0-9]+$",
+            "description": "Legacy persisted calculation value, retained for compatibility. New remaining-balance forms derive their target from total_minor minus paid_minor."
+          },
+          "currency": {
+            "type": "string",
+            "const": "GBP"
+          },
+          "currency_exponent": {
+            "type": "integer",
+            "const": 2
+          },
+          "charge_entry_id": {
+            "type": "string",
+            "pattern": "^[1-9][0-9]{0,18}$",
+            "description": "Positive ledger-entry ID as decimal text, at most 9223372036854775807."
+          },
+          "effective_date": {
+            "type": "string",
+            "format": "date",
+            "description": "Calendar date from 1900-01-01 through 9999-12-31."
+          },
+          "time_zone": {
+            "type": "string",
+            "description": "Configured IANA business time zone; use it for today's paid-date and overdue comparisons."
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "paid_minor": {
+            "type": "string",
+            "pattern": "^[0-9]+$",
+            "description": "Nonnegative GBP pennies as decimal text; never use floating-point money."
+          },
+          "remaining_minor": {
+            "type": "string",
+            "pattern": "^[0-9]+$",
+            "description": "Nonnegative GBP pennies as decimal text; never use floating-point money."
+          },
+          "overpaid_minor": {
+            "type": "string",
+            "pattern": "^[0-9]+$",
+            "description": "Nonnegative GBP pennies as decimal text; never use floating-point money."
+          },
+          "instalments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Instalment"
+            }
+          },
+          "schedule_basis": {
+            "type": "string",
+            "enum": [
+              "legacy",
+              "remaining_balance",
+              "reminders"
+            ]
+          },
+          "reminder_paid_baseline_minor": {
+            "type": "string",
+            "pattern": "^[0-9]+$",
+            "description": "Confirmed received amount when this reminder plan was last saved. Per-payment snapshots prevent historical money being deducted twice."
+          },
+          "payment_snapshot": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "description": "Current confirmed payment snapshot. Echo as expected_payment_snapshot on reminder edits."
+          }
+        }
+      },
+      "PaymentOption": {
+        "type": "object",
+        "required": [
+          "id",
+          "amount_minor",
+          "payment_date",
+          "description",
+          "reference",
+          "already_recorded_for_booking"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[1-9][0-9]{0,18}$",
+            "description": "Positive ledger-entry ID as decimal text, at most 9223372036854775807."
+          },
+          "amount_minor": {
+            "type": "string",
+            "pattern": "^[0-9]+$",
+            "description": "Nonnegative GBP pennies as decimal text; never use floating-point money."
+          },
+          "payment_date": {
+            "type": "string",
+            "format": "date",
+            "description": "Calendar date from 1900-01-01 through 9999-12-31."
+          },
+          "description": {
+            "type": "string"
+          },
+          "reference": {
+            "type": "string"
+          },
+          "already_recorded_for_booking": {
+            "type": "boolean"
+          }
+        }
+      },
+      "PaymentOptions": {
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PaymentOption"
+            }
+          }
+        }
+      },
+      "Error": {
+        "type": "object",
+        "required": [
+          "message"
+        ],
+        "properties": {
+          "message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            ]
+          },
+          "statusCode": {
+            "type": "integer"
+          },
+          "error": {
+            "type": "string"
+          }
+        }
+      },
+      "InstalmentTotalMismatch": {
+        "type": "object",
+        "required": [
+          "message",
+          "code",
+          "required_minor",
+          "scheduled_minor",
+          "difference_minor",
+          "minimum_minor",
+          "maximum_minor",
+          "adjustment_minor"
+        ],
+        "properties": {
+          "message": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string",
+            "const": "INSTALMENT_TOTAL_MISMATCH"
+          },
+          "required_minor": {
+            "type": "string",
+            "pattern": "^[0-9]+$",
+            "description": "Required target in GBP pennies: remaining balance in remaining_balance mode, legacy calculation total otherwise."
+          },
+          "scheduled_minor": {
+            "type": "string",
+            "pattern": "^[0-9]+$",
+            "description": "Scheduled GBP pennies: sum of unpaid rows in remaining_balance mode, all rows in legacy mode."
+          },
+          "difference_minor": {
+            "type": "string",
+            "pattern": "^-?[0-9]+$",
+            "description": "Scheduled minus required, in pennies."
+          },
+          "minimum_minor": {
+            "type": "string",
+            "pattern": "^[0-9]+$",
+            "description": "Nonnegative GBP pennies as decimal text; never use floating-point money."
+          },
+          "maximum_minor": {
+            "type": "string",
+            "pattern": "^[0-9]+$",
+            "description": "Nonnegative GBP pennies as decimal text; never use floating-point money."
+          },
+          "adjustment_minor": {
+            "type": "string",
+            "pattern": "^[0-9]+$",
+            "description": "Positive amount to add (under range) or remove (over range) to reach the nearest permitted boundary."
+          }
+        }
+      },
+      "CreateReminder": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "due_date",
+          "amount"
+        ],
+        "properties": {
+          "due_date": {
+            "type": "string",
+            "format": "date",
+            "description": "Business calendar date, 1900-01-01 through 9999-12-31."
+          },
+          "amount": {
+            "$ref": "#/components/schemas/Amount"
+          }
+        }
+      },
+      "EditReminder": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "due_date",
+          "amount"
+        ],
+        "properties": {
+          "due_date": {
+            "type": "string",
+            "format": "date",
+            "description": "Business calendar date, 1900-01-01 through 9999-12-31."
+          },
+          "amount": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Existing unpaid reminder or outstanding legacy row in this booking. An active paid history row is rejected. A legacy row linked to a reversed or trashed payment is preserved as history and converted to a new unlinked reminder."
+          }
+        }
+      },
+      "RemindersExceedBalance": {
+        "type": "object",
+        "required": [
+          "code",
+          "message",
+          "remaining_minor",
+          "scheduled_minor"
+        ],
+        "properties": {
+          "code": {
+            "const": "REMINDERS_EXCEED_BALANCE"
+          },
+          "message": {
+            "type": "string"
+          },
+          "remaining_minor": {
+            "type": "string",
+            "pattern": "^[0-9]+$"
+          },
+          "scheduled_minor": {
+            "type": "string",
+            "pattern": "^[0-9]+$"
+          }
+        }
+      }
+    }
+  }
+}

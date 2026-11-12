@@ -1,13 +1,14 @@
 import { useEffect, useId, useRef, type ReactNode } from "react";
 import { X } from "lucide-react";
 
-export function CompanyDialog({ title, description, busy, onClose, children, compact = false }: {
+export function CompanyDialog({ title, description, busy, onClose, children, compact = false, wide = false }: {
   title: string;
   description: string;
   busy: boolean;
   onClose: () => void;
   children: ReactNode;
   compact?: boolean;
+  wide?: boolean;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const titleId = useId(), descriptionId = useId();
@@ -21,7 +22,7 @@ export function CompanyDialog({ title, description, busy, onClose, children, com
     };
   }, []);
   return (
-    <dialog ref={dialog} className={`entry-dialog company-dialog${compact ? " company-dialog-compact" : ""}`}
+    <dialog ref={dialog} className={`entry-dialog company-dialog${compact ? " company-dialog-compact" : ""}${wide ? " company-dialog-wide" : ""}`}
       aria-labelledby={titleId} aria-describedby={descriptionId}
       onCancel={event => { event.preventDefault(); if (!busy) onClose(); }}
       onKeyDown={event => {
@@ -38,7 +39,7 @@ export function CompanyDialog({ title, description, busy, onClose, children, com
       }}>
       <div className="dialog-heading">
         <h2 id={titleId}>{title}</h2>
-        <button type="button" className="icon-button" aria-label="Close company dialog" disabled={busy} onClick={onClose}><X size={20} /></button>
+        <button type="button" className="icon-button" aria-label="Close record dialog" disabled={busy} onClick={onClose}><X size={20} /></button>
       </div>
       <p id={descriptionId} className="company-dialog-description">{description}</p>
       {children}

@@ -50,8 +50,8 @@ describe('standalone companies HTTP workflow', () => {
     const body = input({
       company_name: `Manual company ${randomUUID()}`, hotel_name: 'Pullman Zamzam Madinah',
       customer_name: 'Syed Ahsan Yousuf', check_in: '2026-06-16', check_out: '2026-06-21',
-      room_type: '01 Dbl 01 Triple With BB', booking_date: '2026-05-21', voucher_number: '002825',
-      voucher_price: '6625.10', paid: '2500.00', unpaid: '123.45', balance: '-22.05', remarks: 'Manual balance from the company sheet.',
+      quantity: 3, room_type: 'Dbl / Triple With BB', booking_date: '2026-05-21', voucher_number: '002825',
+      voucher_price: '6625.10', remarks: 'Voucher from the company sheet.',
     });
     const response = await request(path(), 'POST', body);
     assert.equal(response.status, 201, await response.clone().text());
@@ -59,9 +59,8 @@ describe('standalone companies HTTP workflow', () => {
     assert.equal(row.organization_id, seed.orgId);
     assert.equal(row.version, 1);
     assert.equal(row.voucher_price_minor, '662510');
-    assert.equal(row.paid_minor, '250000');
-    assert.equal(row.unpaid_minor, '12345');
-    assert.equal(row.balance_minor, '-2205');
+    assert.equal('paid_minor' in row, false, 'Paid belongs to the company, not an individual voucher.');
+    assert.equal(row.quantity, 3);
     for (const field of ['company_name', 'hotel_name', 'customer_name', 'check_in', 'check_out', 'room_type', 'booking_date', 'voucher_number', 'remarks']) {
       assert.equal(row[field], body[field as keyof typeof body], field);
     }
@@ -79,16 +78,14 @@ describe('standalone companies HTTP workflow', () => {
     assert.deepEqual(found.items, [row]);
 
     const edited = await request(path(seed.orgId, row.id), 'PATCH', {
-      company_name: `${body.company_name} edited`, paid: '0', booking_date: null, remarks: 'Revised independently', expected_version: 1,
+      company_name: `${body.company_name} edited`, quantity: 8, booking_date: null, remarks: 'Revised independently', expected_version: 1,
     });
     assert.equal(edited.status, 200, await edited.clone().text());
     const updated = await edited.json();
     assert.equal(updated.version, 2);
-    assert.equal(updated.paid_minor, '0');
+    assert.equal(updated.quantity, 8);
     assert.equal(updated.booking_date, null);
     assert.equal(updated.voucher_price_minor, row.voucher_price_minor);
-    assert.equal(updated.unpaid_minor, row.unpaid_minor);
-    assert.equal(updated.balance_minor, row.balance_minor);
     const retryAfterEdit = await request(path(), 'POST', { ...body, voucher_price: '6625.1' });
     assert.equal(retryAfterEdit.status, 201);
     assert.deepEqual(await retryAfterEdit.json(), row, 'The same creation retry returns its original result after edits.');
@@ -107,14 +104,13 @@ describe('standalone companies HTTP workflow', () => {
 
   it('accepts blank optional fields and exact zero amounts, while rejecting malformed input', async () => {
     const row = await create();
-    for (const field of ['check_in', 'check_out', 'booking_date', 'voucher_price_minor', 'paid_minor', 'unpaid_minor', 'balance_minor']) {
+    for (const field of ['check_in', 'check_out', 'booking_date', 'voucher_price_minor']) {
       assert.equal(row[field], null, field);
     }
-    const zero = await create({ voucher_price: '0', paid: '0.00', unpaid: '0', balance: '0' });
-    for (const field of ['voucher_price_minor', 'paid_minor', 'unpaid_minor', 'balance_minor']) assert.equal(zero[field], '0');
-    const large = await create({ voucher_price: '1000000000000.00', balance: '-1000000000000.00' });
+    const zero = await create({ voucher_price: '0' });
+    for (const field of ['voucher_price_minor']) assert.equal(zero[field], '0');
+    const large = await create({ voucher_price: '1000000000000.00', quantity: 1000000 });
     assert.equal(large.voucher_price_minor, '100000000000000');
-    assert.equal(large.balance_minor, '-100000000000000');
     const invalid = [
       { company_name: ' ' }, { company_name: 'Bad\0name' }, { voucher_price: '-1' }, { paid: '-1' }, { unpaid: '-1' },
       { voucher_price: '1.001' }, { paid: '1e3' }, { balance: 'NaN' }, { paid: 12 },
@@ -133,20 +129,20 @@ describe('standalone companies HTTP workflow', () => {
   it('checks partial date edits against the saved stay and clears date and money fields without changing other values', async () => {
     const row = await create({
       company_name: `Cleared fields ${randomUUID()}`, check_in: '2026-07-01', check_out: '2026-07-02',
-      booking_date: '2026-06-10', voucher_price: '30', paid: '0', unpaid: '15', balance: '-5', remarks: 'Preserve this note',
+      booking_date: '2026-06-10', voucher_price: '30', remarks: 'Preserve this note',
     });
     for (const changes of [{ check_in: '2026-07-03' }, { check_out: '2026-06-30' }]) {
       assert.equal((await request(path(seed.orgId, row.id), 'PATCH', { ...changes, expected_version: 1 })).status, 400);
     }
     assert.deepEqual((await list({ search: row.company_name })).items, [row]);
     const response = await request(path(seed.orgId, row.id), 'PATCH', {
-      check_in: null, check_out: null, booking_date: null, voucher_price: null, paid: null, unpaid: null, balance: null, expected_version: 1,
+      check_in: null, check_out: null, booking_date: null, voucher_price: null, expected_version: 1,
     });
     assert.equal(response.status, 200, await response.clone().text());
     const cleared = await response.json();
     assert.equal(cleared.version, 2);
     assert.equal(cleared.remarks, 'Preserve this note');
-    for (const field of ['check_in', 'check_out', 'booking_date', 'voucher_price_minor', 'paid_minor', 'unpaid_minor', 'balance_minor']) {
+    for (const field of ['check_in', 'check_out', 'booking_date', 'voucher_price_minor']) {
       assert.equal(cleared[field], null, field);
     }
     assert.deepEqual((await list({ search: row.company_name })).items, [cleared]);
@@ -225,6 +221,124 @@ describe('standalone companies HTTP workflow', () => {
     assert.deepEqual((await list({ search: another.company_name }, seed.otherOrgId, other)).items, [another]);
   });
 
+  it('scopes customer records, search, dates and pagination to an exact company within the workspace', async () => {
+    const name = 'Muhabiya Hotels';
+    const first = await create({ company_name: name, customer_name: 'Shared customer', booking_date: '2026-06-01' });
+    const second = await create({ company_name: name.toLowerCase(), customer_name: 'Shared customer', booking_date: '2026-06-02' });
+    await create({ company_name: 'Aden Golden', customer_name: 'Shared customer', booking_date: '2026-06-01', remarks: name });
+    await create({ company_name: 'Al Subaee', customer_name: 'Shared customer', booking_date: '2026-06-01' });
+    await create({ company_name: `${name} Annex`, customer_name: 'Shared customer', booking_date: '2026-06-01' });
+    await create({ company_name: name, customer_name: 'Shared customer' }, seed.otherOrgId, other);
+    const query = { company_name: ` ${name.toUpperCase()} `, search: 'shared', page_size: '1' };
+    const pageOne = await list(query);
+    const pageTwo = await list({ ...query, page: '2' });
+    assert.equal(pageOne.total, 2);
+    assert.equal(pageTwo.total, 2);
+    assert.equal(pageOne.items.length, 1);
+    assert.equal(pageTwo.items.length, 1);
+    assert.deepEqual([...pageOne.items, ...pageTwo.items].map(row => row.id).sort(), [first.id, second.id].sort());
+    assert.deepEqual((await list({ company_name: name, start: '2026-06-02', end: '2026-06-02' })).items, [second]);
+    assert.equal((await list({ company_name: name, search: 'Aden Golden' })).total, 0);
+    assert.equal((await list({ company_name: name, page: '3', page_size: '1' })).items.length, 0);
+    assert.equal((await list({ company_name: 'Unknown company' })).total, 0);
+    for (const company_name of [' ', 'x'.repeat(201), 'bad\0name']) {
+      assert.equal((await request(`${path()}?${new URLSearchParams({ company_name })}`)).status, 400);
+    }
+    assert.equal((await request(`${path()}?${new URLSearchParams({ company_name: name })}`, 'GET', undefined, customer)).status, 403);
+  });
+
+  it('uses one company paid amount across every voucher, independent of quantity, filters and pagination', async () => {
+    const company_name = `Company totals ${randomUUID()}`;
+    const first = await create({ company_name, customer_name: 'First voucher', quantity: 5, voucher_price: '100.30', booking_date: '2026-06-01' });
+    const second = await create({ company_name, customer_name: 'Second voucher', voucher_price: '50', booking_date: '2026-06-02' });
+    const setPaid = (paid: string, version: number, name = company_name) => request(`${path()}/paid`, 'PATCH', { company_name: name, paid, expected_version: version });
+    assert.deepEqual((await list({ company_name })).totals, {
+      total_minor: '15030', paid_minor: '0', balance_minor: '15030', unpaid_minor: '15030', unpriced_count: 0, voucher_count: 2, paid_version: 0,
+    });
+    const paid = await setPaid('60.30', 0);
+    assert.equal(paid.status, 200, await paid.clone().text());
+    assert.deepEqual(await paid.json(), { company_name, paid_minor: '6030', version: 1 });
+    const totals = { total_minor: '15030', paid_minor: '6030', balance_minor: '9000', unpaid_minor: '9000', unpriced_count: 0, voucher_count: 2, paid_version: 1 };
+    const tableFilters: Record<string, string>[] = [{ page_size: '1' }, { search: 'First voucher' }, { start: '2026-06-02' }, { search: 'No matching voucher' }];
+    for (const filters of tableFilters) {
+      assert.deepEqual((await list({ company_name, ...filters })).totals, totals, 'Company totals ignore table filters and pagination.');
+    }
+    const same = await setPaid('60.3', 1, company_name.toUpperCase());
+    assert.equal(same.status, 200);
+    assert.equal((await same.json()).version, 1);
+    assert.equal((await setPaid('100', 0)).status, 409);
+    assert.equal((await request(path(seed.orgId, first.id), 'PATCH', { quantity: 9, voucher_price: '120.30', expected_version: 1 })).status, 200);
+    assert.deepEqual((await list({ company_name })).totals, { ...totals, total_minor: '17030', balance_minor: '11000', unpaid_minor: '11000' });
+    assert.equal((await setPaid('180', 1)).status, 200);
+    assert.equal((await list({ company_name })).totals.balance_minor, '-970');
+    assert.equal((await list({ company_name })).totals.unpaid_minor, '0');
+    const unknown = await create({ company_name });
+    assert.deepEqual((await list({ company_name })).totals, { ...totals, total_minor: null, paid_minor: '18000', balance_minor: null, unpaid_minor: null, unpriced_count: 1, voucher_count: 3, paid_version: 2 });
+    for (const [id, version] of [[first.id, 2], [second.id, 1], [unknown.id, 1]] as const)
+      assert.equal((await request(path(seed.orgId, id), 'DELETE', { expected_version: version })).status, 200);
+    assert.deepEqual((await list({ company_name })).totals, { ...totals, total_minor: '0', paid_minor: '18000', balance_minor: '-18000', unpaid_minor: '0', voucher_count: 0, paid_version: 2 });
+    const unconnected = await create({ company_name: `${company_name} Other`, voucher_price: '20' });
+    assert.equal((await list({ company_name: unconnected.company_name })).totals.paid_minor, '0');
+    assert.equal((await setPaid('0', 2)).status, 200, 'Company paid can be cleared independently.');
+    assert.equal((await list({ company_name })).totals.paid_minor, '0');
+  });
+
+  it('protects the company paid field from stale edits, invalid amounts, customers and other workspaces', async () => {
+    const company_name = `Paid access ${randomUUID()}`;
+    const paidPath = `${path()}/paid`;
+    const body = { company_name, paid: '10.30', expected_version: 0 };
+    assert.equal((await request(paidPath, 'PATCH', body, '')).status, 401);
+    assert.equal((await request(paidPath, 'PATCH', body, customer)).status, 403);
+    assert.equal((await request(paidPath, 'PATCH', body, other)).status, 404);
+    assert.equal((await request(paidPath, 'PATCH', body, admin, false)).status, 403);
+    for (const paid of ['', ' ', '-1', '1.001', '1e2', '1,000', 'NaN'])
+      assert.equal((await request(paidPath, 'PATCH', { ...body, paid })).status, 400);
+    assert.equal((await request(paidPath, 'PATCH', { company_name, paid: '10' })).status, 400);
+    assert.equal((await request(paidPath, 'PATCH', body)).status, 200);
+    const edits = await Promise.all(['20', '30'].map(paid => request(paidPath, 'PATCH', { company_name, paid, expected_version: 1 })));
+    assert.deepEqual(edits.map(edit => edit.status).sort(), [200, 409]);
+    assert.equal((await list({ company_name })).totals.paid_version, 2);
+    const otherPaid = await request(`${path(seed.otherOrgId)}/paid`, 'PATCH', { company_name, paid: '500', expected_version: 0 }, other);
+    assert.equal(otherPaid.status, 200);
+    assert.notEqual((await list({ company_name })).totals.paid_minor, '50000');
+    assert.equal((await list({ company_name }, seed.otherOrgId, other)).totals.paid_minor, '50000');
+    for (const fields of [{ quantity: 0 }, { quantity: 1.5 }, { quantity: '2' }, { quantity: 1000001 }, { paid: '10' }, { unpaid: '5' }, { balance: '5' }, { payments: [] }])
+      assert.equal((await request(path(), 'POST', input(fields))).status, 400);
+  });
+
+  it('exports every company voucher and shared totals in one scoped snapshot, beyond the table page limit', async () => {
+    const company_name = `Export ${randomUUID()}`;
+    const first = await create({ company_name, customer_name: '=Literal text', voucher_number: '002825', quantity: 7, voucher_price: '6625.10' });
+    await database.db.query(`INSERT INTO companies(id,organization_id,company_name,customer_name,voucher_price_minor)
+      SELECT gen_random_uuid(),$1,$2,'Export row ' || n,100 FROM generate_series(1,100) AS n`, [seed.orgId, company_name]);
+    await create({ company_name: `${company_name} Other`, customer_name: 'Different company', voucher_price: '50' });
+    await create({ company_name, customer_name: 'Different workspace', voucher_price: '50' }, seed.otherOrgId, other);
+    assert.equal((await request(`${path()}/paid`, 'PATCH', { company_name, paid: '125.25', expected_version: 0 })).status, 200);
+    const url = `${path()}/export?${new URLSearchParams({ company_name: company_name.toUpperCase() })}`;
+    const response = await request(url);
+    assert.equal(response.status, 200, await response.clone().text());
+    const exported = await response.json() as {
+      currency: string; currency_exponent: number; total: number;
+      items: { id: string; company_name: string; organization_id: string }[];
+      totals: Record<string, string | number>;
+    };
+    assert.equal(exported.currency, 'SAR');
+    assert.equal(exported.currency_exponent, 2);
+    assert.equal(exported.total, 101);
+    assert.equal(exported.items.length, 101);
+    assert.equal(exported.items.filter(row => row.id === first.id).length, 1);
+    assert.ok(exported.items.every(row => row.company_name === company_name && row.organization_id === seed.orgId));
+    assert.deepEqual(exported.totals, { total_minor: '672510', paid_minor: '12525', balance_minor: '659985', unpaid_minor: '659985', unpriced_count: 0, voucher_count: 101, paid_version: 1 });
+    assert.equal((await request(url, 'GET', undefined, '')).status, 401);
+    assert.equal((await request(url, 'GET', undefined, customer)).status, 403);
+    assert.equal((await request(url, 'GET', undefined, other)).status, 404);
+    assert.equal((await request(`${path()}/export`)).status, 400);
+    assert.equal((await request(`${url}&page=2`)).status, 400);
+    const empty = await request(`${path()}/export?${new URLSearchParams({ company_name: `Empty ${randomUUID()}` })}`);
+    assert.equal(empty.status, 200);
+    assert.equal((await empty.json()).items.length, 0);
+  });
+
   it('stays independent from customers, bookings and money movements and cascades with its own workspace', async () => {
     const tables = ['customers', 'bookings', 'ledger_entries', 'booking_payments', 'payment_email_outbox', 'reminder_email_outbox'];
     const counts = async () => {
@@ -233,8 +347,8 @@ describe('standalone companies HTTP workflow', () => {
       return result;
     };
     const before = await counts();
-    const row = await create({ customer_name: 'Free text without a customer account', voucher_price: '100', paid: '15', unpaid: '4', balance: '-7' });
-    assert.equal((await request(path(seed.orgId, row.id), 'PATCH', { paid: '30', expected_version: 1 })).status, 200);
+    const row = await create({ customer_name: 'Free text without a customer account', voucher_price: '100' });
+    assert.equal((await request(path(seed.orgId, row.id), 'PATCH', { voucher_price: '120', expected_version: 1 })).status, 200);
     assert.equal((await request(path(seed.orgId, row.id), 'DELETE', { expected_version: 2 })).status, 200);
     assert.deepEqual(await counts(), before);
     const columns = await database.db.query<{ column_name: string }>(`SELECT column_name FROM information_schema.columns
@@ -248,12 +362,14 @@ describe('standalone companies HTTP workflow', () => {
     assert.equal(workspaceResponse.status, 201, await workspaceResponse.clone().text());
     const workspace = await workspaceResponse.json();
     const scoped = await create({ company_name: 'Workspace-only company' }, workspace.id);
+    assert.equal((await request(`${path(workspace.id)}/paid`, 'PATCH', { company_name: 'Workspace-only company', paid: '50', expected_version: 0 })).status, 200);
     const preserved = await create({ company_name: `Preserved ${randomUUID()}` });
     const deleted = await request(`/organizations/${workspace.id}`, 'DELETE', {
       confirmation_name: workspaceName, expected_version: workspace.version,
     });
     assert.equal(deleted.status, 200, await deleted.clone().text());
     assert.equal((await database.db.query('SELECT 1 FROM companies WHERE id=$1', [scoped.id])).rowCount, 0);
+    assert.equal((await database.db.query('SELECT 1 FROM company_balances WHERE organization_id=$1', [workspace.id])).rowCount, 0);
     assert.equal((await request(path(workspace.id))).status, 404);
     assert.deepEqual((await list({ search: preserved.company_name })).items, [preserved]);
   });

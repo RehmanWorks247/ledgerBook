@@ -1,19 +1,31 @@
 .customer-account { min-width: 0; }
+.customer-account-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+.customer-account-payment { margin-bottom: 28px; }
+.customer-account-payment .payment-upload { padding: 0; border: 0; }
+.customer-account-payment .payment-upload > fieldset { background: var(--surface); }
 .customer-account-details { padding: 24px; margin-bottom: 28px; }
-.customer-account-details h2, .customer-account-section-heading h2, .customer-account-next h2 { margin: 0; font-size: 16px; }
+.customer-account-details h2, .customer-account-section-heading h2 { margin: 0; font-size: 16px; }
 .customer-account-details dl { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 20px; margin: 20px 0 0; }
 .customer-account-details dt { color: var(--muted); font-size: 12px; margin-bottom: 7px; }
 .customer-account-details dd { margin: 0; font-size: 14px; overflow-wrap: anywhere; }
 .customer-account-section-heading { margin-bottom: 16px; }
-.customer-account-section-heading p, .customer-account-next p { margin: 7px 0 0; color: var(--muted); font-size: 13px; line-height: 1.6; }
+.customer-account-section-heading p { margin: 7px 0 0; color: var(--muted); font-size: 13px; line-height: 1.6; }
 .customer-account-totals { margin-bottom: 12px; }
 .customer-account-note { margin: 0 0 28px; color: var(--muted); font-size: 12px; line-height: 1.6; }
-.customer-account-next { display: flex; align-items: center; justify-content: space-between; gap: 24px; padding: 24px; }
-.customer-account-next .button { flex-shrink: 0; }
 .customer-account-statement { display: inline-flex; align-items: center; gap: 8px; margin-top: 22px; }
+.customer-account-history, .customer-account-payment-error { margin-top: 28px; }
+.customer-account-payment-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 270px), 1fr)); gap: 16px; }
+.customer-account-payment-card { padding: 20px; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; }
+.customer-account-payment-card > div { display: flex; justify-content: space-between; align-items: center; gap: 12px; width: 100%; flex-wrap: wrap; }
+.customer-account-payment-card > div > strong { font-size: 18px; font-variant-numeric: tabular-nums; }
+.customer-account-payment-card time { margin-top: 12px; font-size: 13px; color: var(--muted); }
+.customer-account-payment-card p { margin: 12px 0 0; color: var(--text-secondary); font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.customer-account-payment-card > button { display: inline-flex; align-items: center; gap: 7px; margin-top: auto; padding-top: 18px; }
 @media (max-width: 620px) {
-  .customer-account-details, .customer-account-next { padding: 20px; }
+  .customer-account-actions { width: 100%; }
+  .customer-account-actions > .button { flex: 1; justify-content: center; }
+  .customer-account-payment .payment-upload-footer > .payment-actions { width: 100%; }
+  .customer-account-payment .payment-upload-footer > .payment-actions > .button { flex: 1; justify-content: center; }
+  .customer-account-details { padding: 20px; }
   .customer-account-details dl { grid-template-columns: 1fr; gap: 16px; }
-  .customer-account-next { flex-direction: column; align-items: stretch; gap: 18px; }
-  .customer-account-next .button { justify-content: center; }
 }

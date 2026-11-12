@@ -17,7 +17,7 @@ export interface InvoiceMetadata {
 
 /** Everything printed is captured at issue time; later edits never alter a PDF. */
 export interface InvoiceSnapshot extends InvoiceMetadata {
-  template_version: 1 | 2;
+  template_version: 1 | 2 | 3;
   organization: { id: string; name: string };
   customer: { id: string; name: string; email: string; phone?: string; customer_code: string };
   booking: {

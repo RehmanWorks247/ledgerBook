@@ -11,7 +11,7 @@ import { applyLocalEmailConfig, loadLocalEmailConfig, LocalEmailConfigError } fr
 async function main() {
   if(existsSync('.env')) loadEnvFile('.env');
   if(process.env.NODE_ENV==='production') throw new Error('Local mode cannot run with NODE_ENV=production.');
-  const {values}=parseArgs({options:{port:{type:'string'},name:{type:'string'},email:{type:'string'},currency:{type:'string'},verify:{type:'boolean'},'public-url':{type:'string'}}});
+  const {values}=parseArgs({options:{port:{type:'string'},name:{type:'string'},email:{type:'string'},currency:{type:'string'},verify:{type:'boolean'},'public-url':{type:'string'},'file-email':{type:'boolean'}}});
   const port=Number(values.port??process.env.PORT??3000);
   if(!Number.isSafeInteger(port)||port<1024||port>65535) throw new Error('Choose a local port from 1024 to 65535.');
   const origin=`http://localhost:${port}`;
@@ -19,7 +19,9 @@ async function main() {
   const publicUrl=new URL(publicOrigin);
   if(publicUrl.origin!==publicOrigin || (publicOrigin!==origin && publicUrl.protocol!=='https:')) throw new Error('Public URL must be an HTTPS origin without a trailing slash.');
   const local=resolve('.local');
-  const email=await loadLocalEmailConfig(local);
+  // A local test run can save mail to files without changing the user's saved
+  // delivery configuration or allowing a reminder test to contact customers.
+  const email=values['file-email']?{mode:'file' as const}:await loadLocalEmailConfig(local);
   const statusPath=resolve(local,'local-status.json');
   const owner=randomUUID();
   const stopPath=resolve(local,`stop-${owner}.json`);

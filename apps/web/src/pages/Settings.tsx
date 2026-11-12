@@ -48,6 +48,7 @@ function PalettePreview() {
 export function Settings({ standalone = false }: { standalone?: boolean }) {
   const { session } = useContext(AuthContext);
   const canManageWorkspaces = session?.can_create_workspaces || session?.memberships.some(member => member.role === "admin");
+  const accountPath = session?.memberships[0] ? `/o/${session.memberships[0].organization_id}` : "/";
   const { theme, preference, accent, setPreference, setAccent } = useTheme();
   const paletteName = palettes.find((palette) => palette.id === accent)!.label;
 
@@ -132,7 +133,7 @@ export function Settings({ standalone = false }: { standalone?: boolean }) {
       <Link to="/" className="brand-link account-brand">
         <Brand />
       </Link>
-      <Link to={canManageWorkspaces ? "/workspaces" : "/"} className="back-link">
+      <Link to={canManageWorkspaces ? "/workspaces" : accountPath} className="back-link">
         <ArrowLeft size={16} />
         {canManageWorkspaces ? "Back to your workspaces" : "Back to my account"}
       </Link>

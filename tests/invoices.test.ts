@@ -1,12 +1,15 @@
 import 'reflect-metadata';
 import { strict as assert } from 'node:assert';
 import { randomUUID } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
 import { after, before, describe, it } from 'node:test';
 import { AccessService } from '../apps/api/src/access/access.service';
 import { invoiceText, renderInvoicePdf } from '../apps/api/src/invoices/invoice-pdf';
 import { ensureBookingInvoice, InvoicesService, issueBookingInvoice, type InvoiceSnapshot } from '../apps/api/src/invoices/invoices.service';
 import { LedgerService } from '../apps/api/src/ledger/ledger.service';
 import { setupTestDatabase, type TestDatabase, type TestSeed } from './helpers';
+import { renumberExistingInvoices } from '../apps/api/src/database/invoice-number-migration';
+import { nextInvoiceNumber } from '../apps/api/src/invoices/invoice-number';
 
 describe('immutable invoice snapshots, legacy bookings and scoped history', () => {
   let database: TestDatabase;
@@ -69,7 +72,8 @@ describe('immutable invoice snapshots, legacy bookings and scoped history', () =
     assert.equal(pdf.content.subarray(0, 5).toString(), '%PDF-');
     assert.match(pdf.content.toString('latin1'), /%%EOF\s*$/);
     assert.match(pdf.content.toString('latin1'), /\/FontFile2\b/);
-    assert.match(pdf.filename, /^inv-[a-f0-9]{32}-v1\.pdf$/);
+    assert.equal(initial.invoice_number, 'Inv-up001');
+    assert.equal(pdf.filename, 'Inv-up001.pdf');
     assert.equal((await database.db.query('SELECT count(*)::int AS count FROM payment_email_outbox')).rows[0].count, beforeEmails);
   });
 
@@ -85,7 +89,7 @@ describe('immutable invoice snapshots, legacy bookings and scoped history', () =
     const old = await database.db.query('SELECT snapshot FROM booking_invoices WHERE id=$1', [first.id]);
     const latest = await database.db.query('SELECT snapshot FROM booking_invoices WHERE id=$1', [second.id]);
     assert.equal(old.rows[0].snapshot.customer.name, 'Aster Studio');
-    assert.equal(old.rows[0].snapshot.template_version, 2);
+    assert.equal(old.rows[0].snapshot.template_version, 3);
     assert.equal(old.rows[0].snapshot.customer.phone, '');
     assert.equal(latest.rows[0].snapshot.customer.name, 'Åster Studio – العربية');
     assert.equal(latest.rows[0].snapshot.customer.phone, '+44 7700 900123');
@@ -158,7 +162,7 @@ function invoiceFixture(): InvoiceSnapshot {
   return {
     id: randomUUID(), invoice_number: 'INV-TEST-V1', version: 1, reason: 'booking_created', issued_at: '2026-11-10T00:00:00Z',
     total_minor: '495000', paid_minor: '300000', balance_minor: '195000',
-    currency: 'GBP', status: 'partially_paid', filename: 'invoice.pdf', template_version: 2,
+    currency: 'GBP', status: 'partially_paid', filename: 'invoice.pdf', template_version: 3,
     organization: { id: randomUUID(), name: 'North Trading' },
     customer: { id: randomUUID(), name: 'Åster العربية', email: 'customer@example.test', phone: '+44 7700 900123', customer_code: 'C-1001' },
     booking: { id: randomUUID(), reference: 'UMR-2026-1042', departure_at: '2030-01-01T12:00:00Z', required_services: ['flight', 'makkah', 'visas'],
@@ -184,6 +188,69 @@ async function readPdf(content: Buffer) {
   } finally { await task.destroy(); }
 }
 
+it('renumbers existing invoices and their saved PDFs atomically in issue order, preserving financial snapshots', async () => {
+  const database = await setupTestDatabase({ throughMigration: 29 });
+  try {
+    const seed = await database.seed();
+    await database.db.query("UPDATE organizations SET currency='GBP'");
+    const access = new AccessService(database.db);
+    const admin = await access.membership(seed.adminId, seed.orgId);
+    const ledger = new LedgerService(database.db, access);
+    const charge = await ledger.post(admin, seed.customerId, { kind: 'charge', amount: '4950', effective_date: '2020-01-01',
+      description: 'Existing booking', idempotency_key: randomUUID() });
+    const bookingId = randomUUID();
+    await database.db.query(`INSERT INTO bookings(id,organization_id,customer_id,reference,departure_at,total_minor,charge_entry_id,created_by,idempotency_key,request_hash)
+      VALUES($1,$2,$3,'EXISTING','2030-01-01',495000,$4,$5,$6,$7)`,
+      [bookingId, seed.orgId, seed.customerId, charge.id, seed.adminId, randomUUID(), '0'.repeat(64)]);
+    for (const version of [2, 1]) {
+      const snapshot = invoiceFixture();
+      snapshot.organization.id = seed.orgId; snapshot.customer.id = seed.customerId; snapshot.booking.id = bookingId;
+      snapshot.version = version; snapshot.issued_at = `2020-01-0${version}T00:00:00Z`;
+      snapshot.invoice_number = `INV-${bookingId.replaceAll('-', '').toUpperCase()}-V${version}`;
+      snapshot.filename = `${snapshot.invoice_number.toLowerCase()}.pdf`;
+      await database.db.query(`INSERT INTO booking_invoices(id,organization_id,customer_id,booking_id,invoice_number,version,reason,event_key,
+        issued_at,total_minor,paid_minor,balance_minor,currency,status,filename,snapshot,pdf)
+        VALUES($1,$2,$3,$4,$5,$6,'booking_created',$7,$8,495000,300000,195000,'GBP','partially_paid',$9,$10::jsonb,$11)`,
+        [snapshot.id, seed.orgId, seed.customerId, bookingId, snapshot.invoice_number, version, `existing:${version}`,
+          snapshot.issued_at, snapshot.filename, JSON.stringify(snapshot), await renderInvoicePdf(snapshot)]);
+    }
+    const read = async () => (await database.db.query('SELECT * FROM booking_invoices ORDER BY issued_at,id')).rows;
+    const before = await read();
+    const sql = await readFile('apps/api/src/database/migrations/030_sequential_invoice_numbers.sql', 'utf8');
+    const migrate = () => database.db.transaction(async client => {
+      // PGlite's prepared-query adapter accepts one SQL statement at a time.
+      for (const statement of sql.split(';').filter(value => value.trim())) await client.query(statement);
+      await renumberExistingInvoices(client);
+    });
+    await database.applyMigration(`CREATE FUNCTION fail_invoice_renumber() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
+      IF NEW.action='invoice.renumbered' THEN RAISE EXCEPTION 'Simulated renumber failure'; END IF; RETURN NEW; END; $$;
+      CREATE TRIGGER fail_invoice_renumber BEFORE INSERT ON audit_events FOR EACH ROW EXECUTE FUNCTION fail_invoice_renumber();`);
+    await assert.rejects(migrate(), /Simulated renumber failure/);
+    assert.deepEqual(await read(), before);
+    await assert.rejects(database.db.query('UPDATE booking_invoices SET filename=filename'), /cannot be edited or deleted/);
+    await database.applyMigration('DROP TRIGGER fail_invoice_renumber ON audit_events; DROP FUNCTION fail_invoice_renumber();');
+    await migrate();
+    const after = await read();
+    for (let index = 0; index < after.length; index++) {
+      const row = after[index], old = before[index], number = `Inv-up00${index + 1}`;
+      assert.equal(row.invoice_number, number);
+      assert.equal(row.filename, `${number}.pdf`);
+      assert.deepEqual(row.snapshot, { ...old.snapshot, invoice_number: number, filename: `${number}.pdf` });
+      const { invoice_number: _number, filename: _filename, snapshot: _snapshot, pdf: _pdf, ...unchanged } = row;
+      const { invoice_number: _oldNumber, filename: _oldFilename, snapshot: _oldSnapshot, pdf: _oldPdf, ...original } = old;
+      assert.deepEqual(unchanged, original);
+      const text = (await readPdf(Buffer.from(row.pdf))).map(page => page.text).join(' ');
+      assert.ok(text.includes(number)); assert.ok(!text.includes(old.invoice_number));
+    }
+    assert.equal((await database.db.query("SELECT count(*)::int AS count FROM audit_events WHERE action='invoice.renumbered'")).rows[0].count, 2);
+    assert.equal((await database.db.query('SELECT count(*)::int AS count FROM ledger_entries')).rows[0].count, 1);
+    await assert.rejects(database.db.query('UPDATE booking_invoices SET filename=filename'), /cannot be edited or deleted/);
+    assert.equal(await database.db.transaction(client => nextInvoiceNumber(client)), 'Inv-up003');
+    await database.db.query("SELECT setval('invoice_number_sequence',999)");
+    assert.equal(await database.db.transaction(client => nextInvoiceNumber(client)), 'Inv-up1000');
+  } finally { await database.close(); }
+});
+
 describe('reference payment invoice PDF template', () => {
   it('keeps the company branding and essential booking/payment facts on one page', async () => {
     const pdf = await renderInvoicePdf(invoiceFixture());
@@ -198,7 +265,7 @@ describe('reference payment invoice PDF template', () => {
     assert.equal(pages.length, 1, 'A full instalment schedule must not add pages to the simplified invoice.');
     for (const expected of ['Payment Invoice', 'Date:10-November-2026', 'UMRAH PACAKGES UK LTD', '110 Hucknall Road',
       'info@umrahpackagseuk.com', 'Guest Name:', '+44 7700 900123', 'customer@example.test', 'UMR-2026-1042',
-      '01-January-2030', 'Flights, Makkah hotel, Visas', 'Total Amount £4950.00', 'Received Amount £3000.00',
+      '01-January-2030', 'Included services', 'Flight Tickets', 'Makkah Hotel', 'Visas', 'Total Amount £4950.00', 'Received Amount £3000.00',
       'Balance Amount £1950.00', 'INV-TEST-V1']) assert.ok(pages[0].text.includes(expected), expected);
     assert.doesNotMatch(pages[0].text, /Payment schedule|Invoice record|Only approved|Version 1|Booking created|C-1001|n\/a|Qty|Munaf|Qatar|Hilton/);
     const withoutPhone = invoiceFixture();
@@ -206,6 +273,43 @@ describe('reference payment invoice PDF template', () => {
     assert.doesNotMatch((await readPdf(await renderInvoicePdf(withoutPhone)))[0].text, /Contact number:/);
     assert.equal(invoiceText('Åster العربية (test) \\ line\nnew\u202E'), 'Åster العربية (test) \\ line new');
     assert.equal(invoiceText('旅'), '[U+65C5]');
+  });
+
+  it('prints only checked services once, in form order, and omits an empty checklist', async () => {
+    const snapshot = invoiceFixture();
+    snapshot.booking.required_services = ['extras', 'makkah', 'flight', 'flight'];
+    const selected = (await readPdf(await renderInvoicePdf(snapshot)))[0].text;
+    assert.match(selected, /Included services Flight Tickets Makkah Hotel Extras/);
+    assert.equal(selected.match(/Flight Tickets/g)?.length, 1);
+    assert.doesNotMatch(selected, /Madinah Hotel|Transfers|Visas|Travel package/);
+    snapshot.booking.required_services = ['madinah'];
+    const single = (await readPdf(await renderInvoicePdf(snapshot)))[0].text;
+    assert.match(single, /Included services Madinah Hotel/);
+    assert.doesNotMatch(single, /Flight Tickets|Makkah Hotel|Transfers|Visas|Extras/);
+    snapshot.booking.required_services = [];
+    const empty = (await readPdf(await renderInvoicePdf(snapshot)))[0].text;
+    assert.doesNotMatch(empty, /Included services|Flight Tickets|Makkah Hotel|Madinah Hotel|Transfers|Visas|Extras|Travel package/);
+    assert.match(empty, /Total Amount £4950\.00/);
+  });
+
+  it('fits all six checked services and payment totals on one page, including cancellation', async () => {
+    const snapshot = invoiceFixture();
+    snapshot.booking.required_services = ['extras', 'flight', 'madinah', 'makkah', 'transfers', 'visas'];
+    for (const cancelled of [false, true]) {
+      if (cancelled) {
+        snapshot.status = 'cancelled';
+        snapshot.booking.cancelled_at = snapshot.issued_at;
+        snapshot.total_minor = '0';
+        snapshot.balance_minor = '-300000';
+      }
+      const pages = await readPdf(await renderInvoicePdf(snapshot));
+      assert.equal(pages.length, 1);
+      assert.match(pages[0].text, /Included services Flight Tickets Makkah Hotel Madinah Hotel Transfers Visas Extras/);
+      assert.match(pages[0].text, /Received Amount £3000\.00/);
+      for (const item of pages[0].items.filter(item => item.str.includes('Amount') || item.str.includes('£'))) {
+        assert.ok(pages[0].height - item.transform[5] < pages[0].height - 74, item.str);
+      }
+    }
   });
 
   it('prints exact payment balances, credits and cancellation/reversal states', async () => {

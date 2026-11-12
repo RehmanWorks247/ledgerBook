@@ -15,7 +15,7 @@ async function authenticate(context: BrowserContext, email: string) {
   await context.route('**/api/auth/config', route => route.fulfill({ json: { provider: 'clerk', publishableKey: 'isolated-test-only' } }));
 }
 
-test('customers land on My Account with all booking totals and simple booking navigation', async ({ page, context, browser }) => {
+test('customers land on My bookings and can open My Account for totals and payments', async ({ page, context, browser }) => {
   const admin = await browser.newContext({ baseURL: origin });
   const customerBase = `${origin}/api/organizations/${seed.orgId}/customers/${seed.customerId}`;
   const root = `/o/${seed.orgId}`;
@@ -36,9 +36,16 @@ test('customers land on My Account with all booking totals and simple booking na
     await authenticate(context, 'customer@example.test');
     await page.setViewportSize({ width: 1440, height: 1000 });
     await page.goto('/');
-    await expect(page).toHaveURL(root);
+    await expect(page).toHaveURL(`${root}/users/${seed.customerId}`);
     const main = page.getByRole('main');
     const navigation = page.getByRole('navigation', { name: 'Main navigation' });
+    await expect(main.getByRole('heading', { name: 'My bookings', exact: true })).toBeVisible();
+    await expect(navigation.getByRole('link').first()).toHaveText('My bookings');
+    await expect(navigation.getByRole('link', { name: 'My bookings', exact: true })).toHaveAttribute('aria-current', 'page');
+    await page.goto('/login');
+    await expect(page).toHaveURL(`${root}/users/${seed.customerId}`);
+    await navigation.getByRole('link', { name: 'My account', exact: true }).click();
+    await expect(page).toHaveURL(root);
     await expect(navigation.getByRole('link', { name: 'My account', exact: true })).toHaveAttribute('aria-current', 'page');
     await expect(navigation.getByRole('link', { name: 'My bookings', exact: true })).toBeVisible();
     await expect(page.getByText('My files', { exact: true })).toHaveCount(0);
@@ -96,11 +103,29 @@ test('customers land on My Account with all booking totals and simple booking na
     expect(positions[0].top).toBeGreaterThan(detailsBox!.y + detailsBox!.height);
     await page.screenshot({ path: '.local/customer-account-desktop.png', fullPage: true, animations: 'disabled' });
 
-    await main.getByRole('link', { name: 'My bookings', exact: true }).click();
+    await expect(main.getByRole('link', { name: 'My bookings', exact: true })).toHaveCount(0);
+    await navigation.getByRole('link', { name: 'My bookings', exact: true }).click();
     await expect(main.getByRole('heading', { name: 'My bookings', exact: true })).toBeVisible();
-    const firstBooking = main.getByRole('row').filter({ hasText: bookings[0].reference });
+    const bookingList = main.getByRole('region', { name: 'Customer bookings', exact: true });
+    const firstBooking = bookingList.getByRole('article', { name: bookings[0].reference, exact: true });
+    await expect(firstBooking).toBeVisible();
+    await expect(bookingList.getByRole('table')).toHaveCount(0);
+    await expect(bookingList.getByRole('search')).toHaveCount(0);
+    await expect(bookingList.getByRole('searchbox')).toHaveCount(0);
+    await expect(bookingList.getByRole('combobox')).toHaveCount(0);
+    await expect(bookingList).not.toContainText('Booking total');
+    await expect(bookingList).not.toContainText('GBP');
     await firstBooking.getByRole('link', { name: 'View booking', exact: true }).click();
     await expect(main.getByRole('heading', { name: bookings[0].reference, exact: true })).toBeVisible();
+    await expect(main.getByRole('button', { name: 'Open Flight Tickets folder', exact: true })).toBeVisible();
+    await expect(main.getByRole('region', { name: 'Booking details', exact: true })).toHaveCount(0);
+    await expect(main.getByRole('region', { name: 'Invoice history', exact: true })).toHaveCount(0);
+    await expect(main.getByRole('region', { name: 'Payment history', exact: true })).toHaveCount(0);
+    await expect(main.getByRole('region', { name: 'Service availability', exact: true })).toHaveCount(0);
+    await expect(main.getByRole('heading', { name: 'Payment reminders', exact: true })).toHaveCount(0);
+    await expect(main.getByRole('form')).toHaveCount(0);
+    await expect(main.getByRole('button', { name: 'New folder', exact: true })).toHaveCount(0);
+    await main.getByRole('link', { name: 'My bookings', exact: true }).click();
     await main.getByRole('link', { name: 'My account', exact: true }).click();
     await expect(page).toHaveURL(root);
     await main.getByRole('link', { name: 'View account statement', exact: true }).click();
@@ -109,12 +134,21 @@ test('customers land on My Account with all booking totals and simple booking na
     await expect(total).toHaveText('GBP 1,250.00');
 
     await page.setViewportSize({ width: 390, height: 844 });
+    await page.locator('.topbar-brand').click();
+    await expect(page).toHaveURL(`${root}/users/${seed.customerId}`);
+    await expect(main.getByRole('heading', { name: 'My bookings', exact: true })).toBeVisible();
+    await main.getByRole('link', { name: 'My account', exact: true }).click();
     const viewport = await page.evaluate(() => ({ width: innerWidth, scrollWidth: document.documentElement.scrollWidth }));
     expect(viewport.scrollWidth).toBeLessThanOrEqual(viewport.width + 1);
     await page.screenshot({ path: '.local/customer-account-mobile.png', fullPage: true, animations: 'disabled' });
     await page.getByRole('button', { name: 'Open navigation', exact: true }).click();
+    await expect(navigation.getByRole('link').first()).toHaveText('My bookings');
     await navigation.getByRole('link', { name: 'My bookings', exact: true }).click();
     await expect(main.getByRole('heading', { name: 'My bookings', exact: true })).toBeVisible();
+    await expect(firstBooking).toBeVisible();
+    const bookingsViewport = await page.evaluate(() => ({ width: innerWidth, scrollWidth: document.documentElement.scrollWidth }));
+    expect(bookingsViewport.scrollWidth).toBeLessThanOrEqual(bookingsViewport.width + 1);
+    await page.screenshot({ path: '.local/customer-bookings-mobile.png', fullPage: true, animations: 'disabled' });
     await main.getByRole('link', { name: 'My account', exact: true }).click();
 
     await page.route(`**/customers/${seed.customerId}/statement?*`, route => route.fulfill({ status: 503, json: { message: 'Unable to load account totals.' } }), { times: 1 });
@@ -126,13 +160,17 @@ test('customers land on My Account with all booking totals and simple booking na
     await cancel(bookings[1]);
     await main.getByRole('button', { name: 'Refresh balance', exact: true }).click();
     await expect(total).toHaveText('GBP 500.00');
-    await expect(paid).toHaveText('GBP 200.00');
-    await expect(outstanding).toHaveText('GBP 300.00');
+    await expect(paid).toHaveText('GBP 125.00');
+    await expect(outstanding).toHaveText('GBP 375.00');
     await cancel(bookings[0]);
     await main.getByRole('button', { name: 'Refresh balance', exact: true }).click();
     await expect(total).toHaveText('GBP 0.00');
-    await expect(outstanding).toHaveText('−GBP 200.00');
-    await expect(totals).toContainText('Your account is in credit. Nothing to pay.');
+    await expect(paid).toHaveText('GBP 0.00');
+    await expect(outstanding).toHaveText('GBP 0.00');
+    await expect(totals).toContainText('Nothing left to pay');
+    await page.goto(`${root}/users/${seed.customerId}`);
+    await expect(bookingList.getByRole('article')).toHaveCount(0);
+    await expect(bookingList).not.toContainText('Cancelled bookings');
     expect(errors).toEqual([]);
   } finally {
     for (const booking of bookings) if (!booking.cancelled) await cancel(booking);
