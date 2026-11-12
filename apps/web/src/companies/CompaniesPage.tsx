@@ -86,7 +86,7 @@ function CompanyRecords({ organizationId, companyName }: { organizationId: strin
   return <div className="companies-page">
     <Link className="company-back-link" to={`/o/${organizationId}/companies`}><ArrowLeft size={16} aria-hidden="true" />All companies</Link>
     <PageHeading title={companyName} description="Customer records with hotel, voucher and payment details."
-      actions={<><button type="button" className="button secondary" onClick={() => setSpreadsheet(true)}><FileSpreadsheet size={17} />Preview Excel</button><button ref={addButton} type="button" className="button" disabled={!data} onClick={() => { if (data) setEditor({ currency: companyCurrency, exponent: data.currency_exponent }); }}><Plus size={17} />Add Voucher</button></>} />
+      actions={<><button type="button" className="button secondary" onClick={event => { event.currentTarget.focus(); setSpreadsheet(true); }}><FileSpreadsheet size={17} />Preview Excel</button><button ref={addButton} type="button" className="button" disabled={!data} onClick={() => { if (data) setEditor({ currency: companyCurrency, exponent: data.currency_exponent }); }}><Plus size={17} />Add Voucher</button></>} />
     {data && <section className="panel company-totals" aria-label="Company totals">
       <div className="company-totals-heading"><h2>Company totals</h2><button type="button" className="button secondary small" disabled={data.totals.paid_version === null} onClick={() => setPaidEditor({ paidMinor: data.totals.paid_minor, version: data.totals.paid_version!, currency: companyCurrency, exponent: data.currency_exponent })}><Pencil size={14} />Edit paid</button></div>
       <p>{data.totals.voucher_count} {data.totals.voucher_count === 1 ? "voucher" : "vouchers"} · All vouchers in {companyName}</p>
