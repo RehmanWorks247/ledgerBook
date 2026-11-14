@@ -143,12 +143,15 @@
 .booking-payments .panel-heading h2 { margin-bottom: 4px; }
 .payment-notice { margin: 0 24px 20px; }
 .payment-upload { padding: 0 24px 24px; border-bottom: 1px solid var(--line); }
-.payment-upload > fieldset { border: 1px solid var(--line); border-radius: var(--radius); padding: 20px; margin: 0; min-width: 0; display: grid; gap: 18px; }
+.payment-upload > fieldset { border: 1px solid var(--line); border-radius: var(--radius); padding: 20px; margin: 0; min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 18px; }
 .payment-upload legend { padding: 0 8px; font-weight: 600; font-size: 14px; }
 .payment-upload legend svg { vertical-align: middle; margin-right: 6px; }
 .payment-upload p { margin: 0; font-size: 13px; }
 .payment-upload label, .payment-confirmation label { display: flex; flex-direction: column; gap: 8px; font-size: 13px; font-weight: 500; }
 .payment-upload label small { font-weight: 400; color: var(--muted); }
+.payment-upload label { min-width: 0; }
+.payment-upload input:not([type="file"]), .payment-upload select, .payment-upload textarea { width: 100%; max-width: 100%; min-width: 0; min-height: 44px; padding: 11px 12px; border: 1px solid var(--line-strong); border-radius: 7px; background: var(--surface); color: var(--text); font: inherit; }
+.payment-upload textarea { resize: vertical; }
 .payment-file-picker { border: 1px dashed var(--line-strong); padding: 18px; border-radius: var(--radius); display: grid; gap: 12px; background: var(--surface-subtle); }
 .payment-file-picker > label { flex-direction: row; align-items: center; gap: 8px; }
 .payment-file-picker input[type="file"] { font-size: 13px; padding: 0; background: transparent; border: 0; width: 100%; min-width: 0; }

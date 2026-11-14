@@ -136,6 +136,10 @@ test('customer receipts, administrator approval and rejection, customer balance 
       // Account receipt deduplication spans bookings, so each transfer needs its own evidence bytes.
       const receipt = await sharp(randomBytes(31 * 33 * 3), { raw: { width: 31, height: 33, channels: 3 } }).png().toBuffer();
       await customer.getByRole('button', { name: 'Make a payment', exact: true }).click();
+      const invoices = await (await customerContext.request.get(`/api/organizations/${seed.orgId}/customers/${seed.customerId}/invoices/outstanding`)).json();
+      const invoice = invoices.invoices.find((item: { booking_reference: string }) => item.booking_reference === 'PAYMENT-E2E-001');
+      expect(invoice).toBeDefined();
+      await customer.getByRole('combobox', { name: 'Invoice to pay' }).selectOption(invoice.id);
       await customer.getByLabel('Amount paid (GBP)').fill(amount);
       await customer.getByLabel('Payment note').fill(note);
       await customer.getByLabel('Choose receipt files', { exact: true }).setInputFiles([
@@ -170,7 +174,7 @@ test('customer receipts, administrator approval and rejection, customer balance 
     await expect(page.getByRole('button', { name: 'Confirm approval' })).toBeDisabled();
     await page.getByLabel('I have checked the receipts and verified that the money was received.').check();
     await page.getByRole('button', { name: 'Confirm approval' }).click();
-    await expect(page.getByText('Account payment approved and recorded.', { exact: false })).toBeVisible();
+    await expect(page.getByText('Payment for PAYMENT-E2E-001 approved and recorded.', { exact: false })).toBeVisible();
     await customer.reload();
     await expect(customerPayments.getByRole('article').filter({ hasText: 'Bank transfer verified by browser workflow' })).toContainText(/approved/i);
     await submitReceipt('50.00', 'Duplicate transfer for rejection');
@@ -179,7 +183,7 @@ test('customer receipts, administrator approval and rejection, customer balance 
     await page.getByRole('button', { name: 'Reject submission' }).click();
     await page.getByLabel('Reason visible to the customer').fill('Duplicate receipt, please send the correct transfer.');
     await page.getByRole('button', { name: 'Confirm rejection' }).click();
-    await expect(page.getByText('Account payment rejected.', { exact: false })).toBeVisible();
+    await expect(page.getByText('Payment for PAYMENT-E2E-001 rejected.', { exact: false })).toBeVisible();
     await customer.reload();
     await expect(customerPayments.getByRole('article').filter({ hasText: 'Duplicate transfer for rejection' })).toContainText(/rejected/i);
     const own = await customerContext.request.get(`${origin}/api/organizations/${seed.orgId}/customers/${seed.customerId}/statement`);

@@ -131,12 +131,13 @@ test('admin corrects an advance, trashes, restores and permanently deletes payme
   expect((await payments.json()).items).toHaveLength(0);
 });
 
-test('a customer pays across two bookings from My Account and approval credits the account exactly once', async ({ page, context, browser }) => {
+test('a customer selects one of two invoices from My Account and approval credits that booking and account exactly once', async ({ page, context, browser }) => {
   await authenticate(context);
   const customerPath = `/api/organizations/${seed.orgId}/customers/${seed.customerId}`;
-  const accountPayments = `${customerPath}/payments`;
   const baseline = await (await context.request.get(`${customerPath}/statement`)).json();
   const bookings = [await createBooking(context), await createBooking(context)];
+  const selectedBooking = bookings[0];
+  const bookingPayments = `${selectedBooking.apiPath}/payments`;
   const note = `Account transfer ${randomUUID()}`;
   const customerContext = await browser.newContext({ baseURL: origin });
   let paymentEntryId: string | null = null;
@@ -161,17 +162,21 @@ test('a customer pays across two bookings from My Account and approval credits t
     await expect(customer.getByLabel('Amount paid (GBP)', { exact: true })).toBeFocused();
     const form = customer.getByRole('form', { name: 'Submit account payment', exact: true });
     await expect(form).toContainText('Receipt files are optional');
-    await expect(form.getByRole('combobox')).toHaveCount(0);
+    const invoices = await (await customerContext.request.get(`${customerPath}/invoices/outstanding`)).json();
+    const invoice = invoices.invoices.find((item: { booking_id: string }) => item.booking_id === selectedBooking.id);
+    expect(invoice).toBeDefined();
+    await form.getByRole('combobox', { name: 'Invoice to pay' }).selectOption(invoice.id);
     expect(await customer.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
     await form.getByLabel('Amount paid (GBP)', { exact: true }).fill('100.00');
     await form.getByLabel('Payment date', { exact: true }).fill('2020-01-01');
     await form.getByLabel('Payment note').fill(note);
-    const submissionResponse = customer.waitForResponse(response => response.url() === `${origin}${accountPayments}` && response.request().method() === 'POST');
+    const submissionResponse = customer.waitForResponse(response => response.url() === `${origin}${bookingPayments}` && response.request().method() === 'POST');
     await form.getByRole('button', { name: 'Submit payment for review', exact: true }).click();
     const submission = await submissionResponse;
     expect(submission.status(), await submission.text()).toBe(201);
     const payment = await submission.json();
-    expect(payment.booking_id).toBeNull();
+    expect(payment.booking_id).toBe(selectedBooking.id);
+    expect(payment.invoice_id).toBe(invoice.id);
     expect(payment.status).toBe('pending');
     await expect(customer.getByText('Payment submitted for review.', { exact: false })).toBeVisible();
     await expect(form).toHaveCount(0);
@@ -186,18 +191,18 @@ test('a customer pays across two bookings from My Account and approval credits t
     await customer.keyboard.press('Escape');
 
     await page.goto(`/o/${seed.orgId}/payment-reviews?q=${encodeURIComponent(note)}`);
-    await expect(page.getByRole('region', { name: 'Payment review queue', exact: true })).toContainText('Account payment');
+    await expect(page.getByRole('region', { name: 'Payment review queue', exact: true })).toContainText(selectedBooking.reference);
     await page.getByRole('button', { name: /^Review payment / }).click();
     const dialog = page.getByRole('dialog', { name: 'Review payment', exact: true });
     await dialog.getByRole('button', { name: 'Approve payment', exact: true }).click();
     await dialog.getByLabel('I have verified independently that the money was received.', { exact: true }).check();
-    const approvalResponse = page.waitForResponse(response => response.url() === `${origin}${accountPayments}/${payment.id}/approve` && response.request().method() === 'POST');
+    const approvalResponse = page.waitForResponse(response => response.url() === `${origin}${bookingPayments}/${payment.id}/approve` && response.request().method() === 'POST');
     await dialog.getByRole('button', { name: 'Confirm approval', exact: true }).click();
     const approval = await approvalResponse;
     expect(approval.status(), await approval.text()).toBe(201);
     paymentEntryId = (await approval.json()).ledger_entry_id;
     await expect(dialog).toHaveCount(0);
-    const repeated = await context.request.post(`${accountPayments}/${payment.id}/approve`, { headers });
+    const repeated = await context.request.post(`${bookingPayments}/${payment.id}/approve`, { headers });
     expect(repeated.ok(), await repeated.text()).toBe(true);
     expect((await repeated.json()).ledger_entry_id).toBe(paymentEntryId);
 
@@ -209,8 +214,8 @@ test('a customer pays across two bookings from My Account and approval credits t
     expect(statement.total_paid_minor).toBe((BigInt(baseline.total_paid_minor) + 10000n).toString());
     for (const booking of bookings) {
       const result = await (await customerContext.request.get(booking.apiPath)).json();
-      expect(result.paid_minor).toBe('0');
-      expect(result.remaining_minor).toBe('10000');
+      expect(result.paid_minor).toBe(booking.id === selectedBooking.id ? '10000' : '0');
+      expect(result.remaining_minor).toBe(booking.id === selectedBooking.id ? '0' : '10000');
     }
     await customer.screenshot({ path: '.local/e2e/account-payment-mobile.png', fullPage: true });
   } finally {
