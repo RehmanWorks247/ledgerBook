@@ -127,6 +127,43 @@ const pageSchema = z.object({
 export class InvoicesService {
   constructor(@Inject(DatabaseService) private readonly db: DatabaseService, @Inject(AccessService) private readonly access: AccessService) {}
 
+  async outstanding(member: Membership, customerId: string) {
+    if (!UUID_PATTERN.test(customerId)) throw new NotFoundException('Customer account was not found.');
+    return this.db.transaction(async client => {
+      await client.query('SELECT id FROM organizations WHERE id=$1 AND deleted_at IS NULL FOR SHARE', [member.organization_id]);
+      // Follow account revocation's organization -> customer -> membership order.
+      const authorized = await client.query(`SELECT c.id FROM customers c JOIN memberships m
+        ON m.organization_id=c.organization_id AND (m.customer_id=c.id OR m.role='admin')
+        WHERE c.organization_id=$1 AND c.id=$2 AND m.user_id=$3 AND m.is_active AND m.deleted_at IS NULL FOR UPDATE OF c`,
+      [member.organization_id, customerId, member.user_id]);
+      if (!authorized.rows.length) throw new NotFoundException('Customer account was not found.');
+      const active = await this.access.membership(member.user_id, member.organization_id, false, client);
+      const customer = await this.access.customer(active, customerId, client, true);
+      if (customer.status !== 'active') return { invoices: [] };
+      const bookings = await client.query<{id:string}>(`SELECT b.id FROM bookings b
+        WHERE b.organization_id=$1 AND b.customer_id=$2 AND b.deleted_at IS NULL
+          AND NOT EXISTS(SELECT 1 FROM ledger_entries r WHERE r.reversal_of=b.charge_entry_id)
+          AND NOT EXISTS(SELECT 1 FROM booking_invoices i WHERE i.booking_id=b.id)
+        ORDER BY b.id`, [active.organization_id, customerId]);
+      for (const booking of bookings.rows) await ensureBookingInvoice(client, {
+        organizationId: active.organization_id, customerId, bookingId: booking.id, actorId: active.user_id,
+      });
+      const result = await client.query(`SELECT i.id,i.invoice_number,i.version,i.reason,i.issued_at,i.filename,i.currency,i.status,
+          i.total_minor::text,i.paid_minor::text,i.balance_minor::text,b.id AS booking_id,b.reference AS booking_reference,
+          b.departure_at,GREATEST(0,b.total_minor-paid.amount)::text AS outstanding_minor
+        FROM bookings b CROSS JOIN LATERAL(SELECT * FROM booking_invoices i WHERE i.booking_id=b.id ORDER BY version DESC LIMIT 1) i
+        CROSS JOIN LATERAL(SELECT COALESCE(SUM(p.amount_minor),0) AS amount FROM booking_payments p
+          WHERE p.booking_id=b.id AND p.status='approved' AND p.deleted_at IS NULL
+            AND NOT EXISTS(SELECT 1 FROM ledger_entries r WHERE r.reversal_of=p.ledger_entry_id)) paid
+        WHERE b.organization_id=$1 AND b.customer_id=$2 AND b.deleted_at IS NULL
+          AND NOT EXISTS(SELECT 1 FROM ledger_entries r WHERE r.reversal_of=b.charge_entry_id)
+          AND i.status IN ('unpaid','partially_paid') AND i.balance_minor>0 AND b.total_minor>paid.amount
+          AND (SELECT COALESCE(SUM(e.amount_minor),0) FROM account_ledger_entries e WHERE e.organization_id=$1 AND e.customer_id=$2)>0
+        ORDER BY i.issued_at DESC,i.id`, [active.organization_id, customerId]);
+      return { invoices: result.rows };
+    });
+  }
+
   async list(member: Membership, customerId: string, bookingId: string, raw: unknown = {}) {
     const parsed = pageSchema.safeParse(raw);
     if (!parsed.success) throw new BadRequestException('Use limit 1–100 and a positive before_version cursor.');

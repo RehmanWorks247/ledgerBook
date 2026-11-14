@@ -43,7 +43,7 @@ function ReminderPreference({customerId}:{customerId:string}) {
     <label className="checkbox-label"><input type="checkbox" checked={checked??resource.data.enabled} disabled={busy||resource.loading}
       onChange={event=>{void toggle(event.target.checked);}}/> Receive automatic payment reminders</label>
     {resource.data.suppressed&&<p className="notice">Delivery is paused for this email address after a bounce or spam complaint. Contact the administrator to correct the address with the email provider.</p>}
-    <p className="muted">This preference applies to due and overdue reminders. Payment confirmation emails follow account activity.</p>
+    <p className="muted">This preference applies to due and overdue reminders, which stop when nothing is left to pay. Departure emails arrive three days before travel to prepare your luggage and six hours before travel to prepare for your taxi and the airport. No departure reminders are sent after departure.</p>
   </>}<p role="status">{notice}</p></>;
 }
 
@@ -90,6 +90,7 @@ function AdminNotificationSettings() {
       <SettingsForm key={member.organization_id} settings={settings.data} onSaved={refresh}/>
       <p className="muted">Last scheduled scan: {settings.data.last_scheduled_date?.slice(0,10)??'Not run yet'} · {settings.data.time_zone}</p>
     </>}
+    <h3>Departure reminders</h3><p className="muted">Automatic emails remind customers to prepare their luggage three days before departure and get ready for their taxi and the airport six hours before departure. Each is sent once for the scheduled departure. Cancelled trips and past departures are skipped. These emails are independent of payment reminders.</p>
     <h3>Customer reminder preferences</h3><CustomerPicker onSelect={setCustomer} activeOnly={false}/>
     {customer&&<ReminderPreference key={customer.id} customerId={customer.id}/>}
     <h3>Delivery activity</h3><p className="muted">Sent confirms provider acceptance. Delivered confirms the recipient’s mail server accepted the email; it does not confirm that the email was read. Bounces and spam complaints automatically suppress future delivery.</p>

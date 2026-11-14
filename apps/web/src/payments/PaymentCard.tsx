@@ -61,6 +61,7 @@ export function PaymentCard({ payment, organizationId, timeZone, canReview, show
     </div>
     {showBooking && <p className="payment-booking"><strong>{current.customer_name}</strong> <span>{current.customer_code} · {current.booking_reference || "Account payment"}</span></p>}
     <dl className="payment-metadata">
+      {current.invoice_number && <div><dt>Invoice paid</dt><dd>{current.invoice_number}</dd></div>}
       <div><dt>Payment date</dt><dd>{dateLabel(current.payment_date)}</dd></div>
       <div><dt>Uploaded</dt><dd>{departureLabel(current.submitted_at, timeZone)} <small>({timeZone})</small></dd></div>
       {current.reviewed_at && <div><dt>{current.status === "approved" ? "Approved" : "Reviewed"}</dt><dd>{departureLabel(current.reviewed_at, timeZone)}</dd></div>}

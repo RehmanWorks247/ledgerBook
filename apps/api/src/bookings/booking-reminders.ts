@@ -69,7 +69,7 @@ export async function saveBookingReminders(client:PoolClient,context:{organizati
     if(saved.payment_id) historicalRows.add(item.id);
   }
   await client.query(`UPDATE reminder_email_outbox SET state='cancelled',delivery_status='cancelled',lease_token=NULL,lease_until=NULL,
-    last_error='Booking reminders changed before notification delivery.' WHERE booking_id=$1 AND state IN ('pending','processing')`,[context.bookingId]);
+    last_error='Booking reminders changed before notification delivery.' WHERE booking_id=$1 AND kind='payment_due' AND state IN ('pending','processing')`,[context.bookingId]);
   // Keep legacy completed rows as history. In particular, never reverse their payments.
   await client.query('DELETE FROM booking_instalments WHERE booking_id=$1 AND payment_id IS NULL AND NOT(id=ANY($2::uuid[]))',[context.bookingId,[...used]]);
   for(const item of items) {

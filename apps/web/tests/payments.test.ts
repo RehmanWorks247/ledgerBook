@@ -26,7 +26,7 @@ test("multiple receipt uploads use authenticated multipart and reuse a lost resp
   const originalFetch = globalThis.fetch;
   const keys: string[] = [];
   setTokenProvider(async () => "payment-session");
-  const submission = { ...draft(), files: [file("first.png"), file("second.png")] };
+  const submission = { ...draft(), invoiceId:"66666666-6666-4666-8666-666666666666", files: [file("first.png"), file("second.png")] };
   let loseResponse = true;
   globalThis.fetch = async (input, options = {}) => {
     assert.equal(input, `/api${paymentsPath(context)}`);
@@ -40,6 +40,7 @@ test("multiple receipt uploads use authenticated multipart and reuse a lost resp
     assert.equal(options.body.get("amount"), "125.50");
     assert.equal(options.body.get("payment_date"), "2026-11-06");
     assert.equal(options.body.get("note"), "Bank transfer AB123");
+    assert.equal(options.body.get("invoice_id"),submission.invoiceId);
     assert.equal(options.body.getAll("receipts").length, 2);
     assert.deepEqual(options.body.getAll("receipts").map(value => (value as File).name), ["first.png", "second.png"]);
     keys.push(options.body.get("idempotency_key") as string);

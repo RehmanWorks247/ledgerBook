@@ -183,3 +183,61 @@ test('customers land on My bookings and can open My Account for totals and payme
     await admin.close();
   }
 });
+
+test('customers preview and choose current invoices, reject stale selections and retain the invoice on payment history', async ({page,context,browser}) => {
+  const admin=await browser.newContext({baseURL:origin});
+  const base=`${origin}/api/organizations/${seed.orgId}/customers/${seed.customerId}`;
+  const trips:{id:string;reference:string}[]=[];
+  try {
+    await authenticate(admin,'admin@example.test');await authenticate(context,'customer@example.test');
+    for(const amount of ['100','200']) {
+      const response=await admin.request.post(`${base}/bookings`,{headers,data:{reference:`INVOICE-${randomUUID().slice(0,8)}`,amount,
+        effective_date:'2026-11-10',departure_at:'2030-01-01T12:00:00Z',required_services:[],idempotency_key:randomUUID()}});
+      expect(response.status(),await response.text()).toBe(201);trips.push(await response.json());
+    }
+    const response=await context.request.get(`${base}/invoices/outstanding`);
+    expect(response.status()).toBe(200);
+    const {invoices}=await response.json() as {invoices:{id:string;booking_id:string;invoice_number:string;filename:string}[]};
+    const first=invoices.find(invoice=>invoice.booking_id===trips[0].id)!;
+    const second=invoices.find(invoice=>invoice.booking_id===trips[1].id)!;
+    await page.goto(`/o/${seed.orgId}`);
+    const section=page.getByRole('region',{name:'Outstanding invoices',exact:true});
+    await expect(section.getByRole('article')).toHaveCount(2);
+    await section.getByRole('button',{name:`View invoice ${first.invoice_number}`,exact:true}).click();
+    const preview=page.getByRole('dialog',{name:first.filename,exact:true});
+    await expect(preview).toBeVisible();await preview.getByRole('button',{name:'Close preview',exact:true}).click();
+    await section.getByRole('article').filter({hasText:first.invoice_number}).getByRole('button',{name:'Pay this invoice',exact:true}).click();
+    const form=page.getByRole('form',{name:'Submit account payment',exact:true});
+    const picker=form.getByRole('combobox',{name:'Invoice to pay'});
+    await expect(picker).toHaveValue(first.id);
+    await picker.selectOption(second.id);
+    await form.getByLabel('Amount paid (GBP)',{exact:true}).fill('25');
+    await form.getByLabel('Payment date',{exact:true}).fill('2026-11-10');
+    // A newly issued invoice while this form is open must invalidate its old selection.
+    const recorded=await admin.request.post(`${base}/bookings/${trips[1].id}/payments/record`,{headers,data:{amount:'10',payment_date:'2026-11-10',idempotency_key:randomUUID()}});
+    expect(recorded.status(),await recorded.text()).toBe(201);
+    await form.getByRole('button',{name:'Submit payment for review',exact:true}).click();
+    await expect(form.getByRole('alert')).toContainText('no longer the latest invoice');
+    await expect(form.getByRole('option',{name:new RegExp(second.invoice_number)})).toHaveCount(0);
+    await expect(form.getByRole('button',{name:'Submit payment for review',exact:true})).toBeDisabled();
+    const current=(await (await context.request.get(`${base}/invoices/outstanding`)).json()).invoices.find((invoice:{booking_id:string})=>invoice.booking_id===trips[1].id);
+    await picker.selectOption(current.id);
+    const submitted=page.waitForResponse(response=>response.url()===`${base}/bookings/${trips[1].id}/payments`&&response.request().method()==='POST');
+    await form.getByRole('button',{name:'Submit payment for review',exact:true}).click();
+    const submittedResponse=await submitted;expect(submittedResponse.status()).toBe(201);
+    const payment=await submittedResponse.json();expect(payment.invoice_id).toBe(current.id);expect(payment.booking_id).toBe(trips[1].id);
+    await expect(page.getByRole('status').filter({hasText:'Payment submitted for review'})).toBeVisible();
+    await expect(page.getByRole('region',{name:'Payment history',exact:true})).toContainText(current.invoice_number);
+    await page.setViewportSize({width:390,height:844});
+    expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1)).toBe(true);
+    await page.screenshot({path:'.local/consumer-invoice-payment-mobile.png',fullPage:true,animations:'disabled'});
+  } finally {
+    for(const trip of trips) {
+      const detail=await (await admin.request.get(`${base}/bookings/${trip.id}`)).json();
+      const cancelled=await admin.request.delete(`${base}/bookings/${trip.id}`,{headers,data:{confirmation:trip.reference,
+        effective_date:'2026-11-10',expected_version:detail.version,reason:'Clean consumer invoice test',idempotency_key:randomUUID()}});
+      expect(cancelled.status(),await cancelled.text()).toBe(200);
+    }
+    await admin.close();
+  }
+});

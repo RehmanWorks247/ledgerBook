@@ -312,6 +312,94 @@
           }
         }
       }
+    },
+    "/organizations/{orgId}/customers/{customerId}/invoices/outstanding": {
+      "parameters": [
+        {
+          "name": "orgId",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        {
+          "name": "customerId",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "listOutstandingCustomerInvoices",
+        "summary": "Latest payable invoice per active booking",
+        "description": "Customer owner or administrator only. Returns the newest invoice version for each active, non-reversed booking with a positive remaining balance. Fully settled accounts return no invoices, including accounts settled by unallocated account payments. Results are newest-issued first. Missing legacy invoices are snapshotted once. Historical versions remain downloadable but cannot be selected for a new invoice payment.",
+        "responses": {
+          "200": {
+            "description": "Current outstanding invoices",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "invoices"
+                  ],
+                  "properties": {
+                    "invoices": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "id",
+                          "invoice_number",
+                          "booking_id",
+                          "booking_reference",
+                          "version",
+                          "outstanding_minor"
+                        ],
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "format": "uuid"
+                          },
+                          "invoice_number": {
+                            "type": "string"
+                          },
+                          "booking_id": {
+                            "type": "string",
+                            "format": "uuid"
+                          },
+                          "booking_reference": {
+                            "type": "string"
+                          },
+                          "version": {
+                            "type": "integer"
+                          },
+                          "outstanding_minor": {
+                            "type": "string",
+                            "pattern": "^[0-9]+$",
+                            "description": "Live approved booking balance in GBP minor units."
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Inactive or unauthorized membership"
+          },
+          "404": {
+            "description": "Customer is outside the caller scope"
+          }
+        }
+      }
     }
   },
   "components": {

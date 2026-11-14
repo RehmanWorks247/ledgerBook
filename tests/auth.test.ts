@@ -8,6 +8,7 @@ import { RateLimitService } from '../apps/api/src/auth/rate-limit.service';
 import { config } from '../apps/api/src/config';
 import { InvitationService } from '../apps/api/src/invitations/invitation.service';
 import { NotificationsService, type EmailMessage } from '../apps/api/src/notifications/notifications.service';
+import { PaymentEmailOutbox } from '../apps/api/src/payments/email-outbox.service';
 import { setupTestDatabase, type TestDatabase, type TestSeed, testPassword } from './helpers';
 
 class CapturedNotifications extends NotificationsService {
@@ -110,6 +111,10 @@ describe('Authentication, invitations, recovery and abuse controls', () => {
     assert.deepEqual(await invitations.inspect(token), { status: 'accepted' });
     await assert.rejects(invitations.accept(token, undefined, testPassword), /already been accepted/);
     await assert.rejects(invitations.invite(seed.admin, customerId), /already has active access/);
+    const alerts=await context.db.query('SELECT * FROM payment_email_outbox WHERE dedupe_key LIKE $1',[`invitation-accepted:${invitation.id}:%`]);
+    assert.equal(alerts.rows.length,1);assert.equal(alerts.rows[0].recipient,'admin@example.test');
+    assert.ok(alerts.rows[0].body.includes(email));assert.match(alerts.rows[0].body,/just accepted/);
+    assert.equal(alerts.rows[0].state,'pending');
   });
 
   it('requires an existing identity to authenticate the invited email and preserves its password', async () => {
@@ -128,6 +133,30 @@ describe('Authentication, invitations, recovery and abuse controls', () => {
     const identities = await context.db.query('SELECT count(*) FROM users WHERE email=$1', ['customer@example.test']);
     assert.equal(identities.rows[0].count, '1');
     assert.equal((await access.membership(seed.customerUserId, seed.otherOrgId)).customer_id, customerId);
+  });
+
+  it('keeps acceptance committed through email outages and cancels an alert after admin access is revoked',async()=>{
+    await context.db.query("UPDATE payment_email_outbox SET next_attempt_at=now()+interval '1 day' WHERE state='pending'");
+    const customerId=await customer(),invitation=await invitations.invite(seed.admin,customerId),token=notifications.token();
+    notifications.fail=true;
+    const accepted=await invitations.accept(token,undefined,testPassword);
+    assert.ok(accepted.membershipId);
+    const worker=new PaymentEmailOutbox(context.db,notifications,access,false);
+    try {
+      assert.equal(await worker.flush(),0);
+      const alert=(await context.db.query('SELECT * FROM payment_email_outbox WHERE dedupe_key LIKE $1',[`invitation-accepted:${invitation.id}:%`])).rows[0];
+      assert.equal(alert.state,'pending');assert.equal(alert.attempts,1);assert.equal(alert.source_customer_id,customerId);
+      assert.equal((await invitations.inspect(token)).status,'accepted');
+      notifications.fail=false;
+      await context.db.query('UPDATE payment_email_outbox SET next_attempt_at=now() WHERE id=$1',[alert.id]);
+      await context.db.query('UPDATE memberships SET is_active=false WHERE organization_id=$1 AND user_id=$2',[seed.orgId,seed.adminId]);
+      assert.equal(await worker.flush(),0);
+      assert.equal((await context.db.query('SELECT state FROM payment_email_outbox WHERE id=$1',[alert.id])).rows[0].state,'cancelled');
+    } finally {
+      notifications.fail=false;
+      await context.db.query('UPDATE memberships SET is_active=true WHERE organization_id=$1 AND user_id=$2',[seed.orgId,seed.adminId]);
+      await worker.beforeApplicationShutdown();
+    }
   });
 
   it('resending invalidates old links and revocation leaves the customer intact', async () => {

@@ -1,6 +1,7 @@
-import { useEffect, useId, useRef, useState, type FormEvent } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type FormEvent } from "react";
 import { FileText, ImagePlus, RefreshCw, Upload, X } from "lucide-react";
-import { errorMessage, useResource } from "../api";
+import { ApiError, errorMessage, money, useResource } from "../api";
+import { outstandingInvoicesPath, type OutstandingInvoicesResponse } from "../invoices/outstanding";
 import { Empty, ErrorNotice, TableSkeleton, Pagination } from "../components";
 import { Link } from "../router";
 import { useOrganization } from "../state";
@@ -21,10 +22,16 @@ function FilePreview({ file, index, onRemove, disabled }: { file: File; index: n
   return <div className="payment-preview">{file.type === "application/pdf" ? <FileText size={40} aria-label="PDF receipt" /> : url && <img src={url} alt={`Selected receipt ${index + 1}`} />}<div><strong>{file.name}</strong><small>{Math.ceil(file.size / 1024).toLocaleString()} KB</small></div><button type="button" className="icon-button" onClick={onRemove} disabled={disabled} aria-label={`Remove ${file.name}`}><X size={17} /></button></div>;
 }
 
-export function ReceiptUploadForm({ organizationId, customerId, bookingId, timeZone, paymentRequest = 0, onSubmitted, onCancel }: {
-  organizationId: string; customerId: string; bookingId?: string; timeZone: string; paymentRequest?: number; onSubmitted: (payment: Payment) => void; onCancel?: () => void;
+export function ReceiptUploadForm({ organizationId, customerId, bookingId, selectedInvoiceId, timeZone, paymentRequest = 0, onSubmitted, onCancel }: {
+  organizationId: string; customerId: string; bookingId?: string; selectedInvoiceId?: string; timeZone: string; paymentRequest?: number; onSubmitted: (payment: Payment) => void; onCancel?: () => void;
 }) {
-  const [uploader] = useState(() => new PaymentUploader({ organizationId, customerId, bookingId }));
+  const invoices = useResource<OutstandingInvoicesResponse>(outstandingInvoicesPath(organizationId,customerId));
+  const options = (invoices.data?.invoices ?? []).filter(invoice => !bookingId || invoice.booking_id === bookingId);
+  const [invoiceId,setInvoiceId] = useState(selectedInvoiceId ?? "");
+  useEffect(() => { setInvoiceId(selectedInvoiceId ?? ""); }, [selectedInvoiceId]);
+  const invoice = invoiceId ? options.find(option => option.id === invoiceId) : options[0];
+  const targetBookingId = invoice?.booking_id ?? bookingId;
+  const uploader = useMemo(() => new PaymentUploader({ organizationId, customerId, bookingId:targetBookingId }), [organizationId,customerId,targetBookingId]);
   const [amount, setAmount] = useState("");
   const [paymentDate, setPaymentDate] = useState(() => businessDate(timeZone));
   const [note, setNote] = useState("");
@@ -51,29 +58,41 @@ export function ReceiptUploadForm({ organizationId, customerId, bookingId, timeZ
   async function submit(event: FormEvent) {
     event.preventDefault();
     if (submitting.current) return;
+    if (!invoice || invoices.loading || invoices.error) { setError("Select a current outstanding invoice before submitting a payment."); return; }
     submitting.current = true;
     setBusy(true);
     setError("");
     try {
-      const result = await uploader.submit({ amount, paymentDate, note, files }, businessDate(timeZone));
+      const result = await uploader.submit({ amount, paymentDate, note, files, invoiceId:invoice.id }, businessDate(timeZone));
       setFiles([]);
       setAmount("");
       setNote("");
       setPaymentDate(businessDate(timeZone));
       onSubmitted(result);
-    } catch (error) { setError(errorMessage(error)); }
+      invoices.refresh();
+    } catch (error) {
+      setError(errorMessage(error));
+      if (error instanceof ApiError && error.status === 409) { setInvoiceId(invoice.id); invoices.refresh(); }
+    }
     finally { submitting.current = false; setBusy(false); }
   }
   return <form ref={form} id={bookingId ? "booking-payment-form" : "account-payment-form"} className="payment-upload" onSubmit={submit} aria-busy={busy} aria-label={bookingId ? "Submit booking payment" : "Submit account payment"}>
     <fieldset disabled={busy}>
       <legend><Upload size={18} />Submit a payment for review</legend>
       <p className="muted">Already made a transfer? Enter the amount and payment date. Once approved, it reduces your total account balance across all bookings. Receipt files are optional.</p>
+      <label>Invoice to pay<select required value={invoice?.id ?? ""} onChange={event => { changed(); setInvoiceId(event.target.value); }} disabled={invoices.loading || Boolean(invoices.error)}>
+        <option value="" disabled>{invoices.loading ? "Loading invoices…" : "Select an outstanding invoice"}</option>
+        {options.map(option => <option key={option.id} value={option.id}>{option.invoice_number} · {option.booking_reference} · {money(option.outstanding_minor,option.currency,2)} outstanding</option>)}
+      </select><small>Only the latest unpaid invoice for each booking can be selected.</small></label>
+      {invoice && <p className="muted">Paying {invoice.invoice_number} for booking {invoice.booking_reference}. Outstanding: {money(invoice.outstanding_minor,invoice.currency,2)}.</p>}
+      {!invoices.loading && !invoices.error && !options.length && <p role="status">No outstanding invoices are available for payment.</p>}
+      <ErrorNotice message={invoices.error}/><button type="button" className="text-link" disabled={invoices.loading} onClick={invoices.refresh}>Refresh invoices</button>
       <div className="form-columns"><label>Amount paid (GBP)<input required inputMode="decimal" pattern="[0-9]+([.][0-9]{1,2})?" maxLength={20} placeholder="0.00" value={amount} onChange={event => { changed(); setAmount(event.target.value); }} /></label><label>Payment date<input aria-label="Payment date" required type="date" max={today} value={paymentDate} onChange={event => { changed(); setPaymentDate(event.target.value); }} /><small>Dates use {timeZone}.</small></label></div>
       <label>Payment note <span className="muted">(optional)</span><textarea rows={2} maxLength={1000} placeholder="Transfer reference or anything your administrator should know" value={note} onChange={event => { changed(); setNote(event.target.value); }} /></label>
       <div className="payment-file-picker"><label htmlFor={inputId}><ImagePlus size={20} />{files.length ? "Add more receipt files" : "Choose receipt files"}</label><input id={inputId} type="file" multiple accept={RECEIPT_ACCEPT} disabled={busy || files.length >= MAX_RECEIPT_FILES} aria-describedby={helpId} onChange={event => { selectFiles(event.target.files); event.target.value = ""; }} /><p id={helpId}>Optional · up to 5 PDF, JPG, PNG or WebP files · up to 5 MB each. You can submit a payment without an attachment.</p></div>
       {!!files.length && <div className="payment-previews" aria-label="Selected receipt files">{files.map((file, index) => <FilePreview key={`${index}/${file.name}/${file.lastModified}`} file={file} index={index} disabled={busy} onRemove={() => { changed(); setFiles(previous => previous.filter((_, fileIndex) => fileIndex !== index)); }} />)}</div>}
       <ErrorNotice message={error} />
-      <div className="payment-upload-footer"><span>{files.length ? `${files.length} of ${MAX_RECEIPT_FILES} files selected` : "No attachments · optional"}</span><div className="payment-actions">{onCancel && <button type="button" className="button secondary" disabled={busy} onClick={onCancel}>Cancel</button>}<button className="button" disabled={busy}><Upload size={16} />{busy ? "Submitting payment…" : "Submit payment for review"}</button></div></div>
+      <div className="payment-upload-footer"><span>{files.length ? `${files.length} of ${MAX_RECEIPT_FILES} files selected` : "No attachments · optional"}</span><div className="payment-actions">{onCancel && <button type="button" className="button secondary" disabled={busy} onClick={onCancel}>Cancel</button>}<button className="button" disabled={busy || !invoice || invoices.loading || Boolean(invoices.error)}><Upload size={16} />{busy ? "Submitting payment…" : "Submit payment for review"}</button></div></div>
     </fieldset>
   </form>;
 }

@@ -58,7 +58,7 @@ export class PaymentsController {
   @Post()
   @UseGuards(PaymentUploadGuard)
   @UseInterceptors(FilesInterceptor('receipts',MAX_RECEIPTS,{
-    limits:{fileSize:MAX_RECEIPT_BYTES,files:MAX_RECEIPTS,fields:4,fieldSize:4096,parts:MAX_RECEIPTS+4,fieldNameSize:100},
+    limits:{fileSize:MAX_RECEIPT_BYTES,files:MAX_RECEIPTS,fields:5,fieldSize:4096,parts:MAX_RECEIPTS+5,fieldNameSize:100},
     fileFilter:(_req,file,callback)=>{
       if(!['image/jpeg','image/png','image/webp','application/pdf'].includes(file.mimetype)) {
         callback(new BadRequestException('Receipts must be PDF, JPEG, PNG, or WebP files.'),false);

@@ -9,6 +9,8 @@ export type Payment = {
   id: string;
   booking_id: string | null;
   booking_reference: string | null;
+  invoice_id?: string | null;
+  invoice_number?: string | null;
   customer_id: string;
   customer_name: string;
   customer_code: string;
@@ -43,7 +45,7 @@ export type PaymentsResponse = { items: Payment[]; time_zone: string; total?: nu
   page_size?: number; total_pages?: number; counts?: PaymentReviewCounts };
 export type PaymentReviewResponse = PaymentsResponse & { total: number; page: number; page_size: number;
   total_pages: number; counts: PaymentReviewCounts };
-export type PaymentDraft = { amount: string; paymentDate: string; note: string; files: readonly File[] };
+export type PaymentDraft = { amount: string; paymentDate: string; note: string; files: readonly File[]; invoiceId?: string };
 
 export function validateReceiptFiles(files: readonly File[]) {
   if (files.length > MAX_RECEIPT_FILES)
@@ -100,7 +102,7 @@ export class PaymentUploader {
 
   async submit(draft: PaymentDraft, today: string): Promise<Payment> {
     validatePaymentDraft(draft, today);
-    const signature = JSON.stringify([draft.amount, draft.paymentDate, draft.note, draft.files.map(file => {
+    const signature = JSON.stringify([draft.amount, draft.paymentDate, draft.note, draft.invoiceId, draft.files.map(file => {
       if (!this.fileIds.has(file)) this.fileIds.set(file, crypto.randomUUID());
       return this.fileIds.get(file);
     })]);
@@ -113,6 +115,7 @@ export class PaymentUploader {
     form.set("payment_date", draft.paymentDate);
     form.set("note", draft.note);
     form.set("idempotency_key", this.key);
+    if (draft.invoiceId) form.set("invoice_id", draft.invoiceId);
     draft.files.forEach(file => form.append("receipts", file, file.name));
     const response = await authenticatedFetch(this.path, {
       method: "POST", body: form,

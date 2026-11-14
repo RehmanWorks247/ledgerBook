@@ -66,10 +66,12 @@ describe('booking invoice lifecycle and private HTTP downloads', () => {
     await ledger.post(seed.admin,seed.customerId,reverse);await ledger.post(seed.admin,seed.customerId,reverse);
     history=await versions(trip.id);assert.equal(history.length,3);
     assert.equal(history[2].reason,'payment_reversed');assert.equal(String(history[2].paid_minor),'0');
+    const rejected=await submit(trip.id,'5.00');
     const overpaid=await submit(trip.id,'120.00');await payments.approve(seed.admin,seed.customerId,trip.id,overpaid.id);
     history=await versions(trip.id);assert.equal(history.length,4);
     assert.equal(history[3].status,'overpaid');assert.equal(String(history[3].balance_minor),'-2000');
-    const rejected=await submit(trip.id,'5.00');await payments.reject(seed.admin,seed.customerId,trip.id,rejected.id,{reason:'Wrong evidence'});
+    await assert.rejects(submit(trip.id,'5.00'),/no outstanding balance/);
+    await payments.reject(seed.admin,seed.customerId,trip.id,rejected.id,{reason:'Wrong evidence'});
     assert.equal((await versions(trip.id)).length,4,'Rejected evidence must not change the invoice.');
   });
 

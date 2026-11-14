@@ -7,6 +7,18 @@ import { InvoicesService } from './invoices.service';
 
 type AuthRequest = Request & { user: { id: string } };
 
+@Controller('organizations/:orgId/customers/:customerId/invoices')
+@UseGuards(SessionGuard)
+export class CustomerInvoicesController {
+  constructor(@Inject(AccessService) private readonly access: AccessService, @Inject(InvoicesService) private readonly invoices: InvoicesService) {}
+
+  @Get('outstanding')
+  async outstanding(@Req() req: AuthRequest, @Param('orgId', ParseUUIDPipe) orgId: string,
+    @Param('customerId', ParseUUIDPipe) customerId: string) {
+    return this.invoices.outstanding(await this.access.membership(req.user.id, orgId), customerId);
+  }
+}
+
 @Controller('organizations/:orgId/customers/:customerId/bookings/:bookingId/invoices')
 @UseGuards(SessionGuard)
 export class InvoicesController {

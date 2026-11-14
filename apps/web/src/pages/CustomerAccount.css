@@ -1,6 +1,8 @@
 .customer-account { min-width: 0; }
 .customer-account-actions { display: flex; gap: 10px; flex-wrap: wrap; }
 .customer-account-payment { margin-bottom: 28px; }
+.customer-account-invoices { margin-bottom: 28px; }
+.customer-account-invoices .payment-actions { margin-top: 16px; }
 .customer-account-payment .payment-upload { padding: 0; border: 0; }
 .customer-account-payment .payment-upload > fieldset { background: var(--surface); }
 .customer-account-details { padding: 24px; margin-bottom: 28px; }

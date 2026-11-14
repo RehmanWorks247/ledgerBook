@@ -49,6 +49,16 @@ export class PaymentEmailOutbox implements OnApplicationBootstrap, BeforeApplica
 
   private async cancellationReason(client:PoolClient,email:QueuedPaymentEmail):Promise<string|null> {
     const [kind,paymentId,submittedBy]=email.dedupe_key.split(':');
+    if(kind==='invitation-accepted') {
+      if(!UUID_PATTERN.test(paymentId??'') || !UUID_PATTERN.test(submittedBy??'')) return 'Invitation notification source is invalid.';
+      const source=await client.query(`SELECT c.id FROM customers c JOIN invitations i ON i.customer_id=c.id AND i.organization_id=c.organization_id
+        WHERE i.id=$1 AND i.organization_id=$2 AND i.accepted_at IS NOT NULL AND c.status='active' FOR SHARE OF c`,[paymentId,email.organization_id]);
+      if(!source.rows.length) return 'Invitation notification account is no longer active.';
+      const recipient=await client.query(`SELECT 1 FROM memberships m JOIN users u ON u.id=m.user_id
+        WHERE m.organization_id=$1 AND m.user_id=$2 AND m.role='admin' AND m.is_active AND m.deleted_at IS NULL
+          AND u.email=$3 FOR SHARE OF m,u`,[email.organization_id,submittedBy,email.recipient]);
+      return recipient.rows.length?null:'Notification cancelled because administrator access changed.';
+    }
     if(kind==='booking-created') {
       if(!UUID_PATTERN.test(paymentId??'') || !email.invoice_id) return 'Booking notification source is invalid.';
       // Admin-created customers may not yet have a login. The booking email is

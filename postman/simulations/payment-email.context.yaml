@@ -114,7 +114,18 @@ assumptions:
     verification: On 2026-11-12 both provider simulation scripts passed. The log recorded 39 POST /emails calls in thirteen 500, 200, 200 sequences; each scenario asserted one modeled acceptance, and the reminder scenario verified signed synthetic delivery correlation. No real provider or inbox delivery was exercised (fingerprint combined-release-2026-11-12).
     source: tests/payment-provider.simulation.ts; tests/reminder-provider.simulation.ts; postman/mocks/resend-email/default.js; .local/release-20261112/provider.ndjson
     updated_at: "2026-11-12"
+  - id: consumer-departure-and-invitation-notifications
+    status: supported
+    claim: The two departure stages and invitation-acceptance administrator email preserve their bodies and keys through modeled provider failure, retry and replay with one modeled acceptance per event.
+    reason: The real SQL schedulers, acceptance transaction, durable workers and NotificationsService HTTP adapter ran against the existing committed loopback Resend contract stand-in with an isolated PGlite database and synthetic credentials.
+    verification: On 2026-11-13 tests/consumer-notifications.simulation.ts passed the 72-hour luggage reminder, six-hour taxi/airport reminder and administrator acceptance alert. Each scenario independently asserted HTTP 500, 200, 200, a stable provider key and one modeled acceptance. Repeated scans and repeated acceptance queued no duplicates; departure-time scans sent nothing. The simulation was rerun after adding customer deletion cleanup. Existing reminder-provider.simulation.ts and all twelve payment-provider.simulation.ts scenarios also passed. No live provider or inbox delivery was exercised (fingerprint consumer-reminders-2026-11-13).
+    source: tests/consumer-notifications.simulation.ts; tests/departure-reminders.test.ts; tests/auth.test.ts; apps/api/src/notifications/departure-reminders.ts; apps/api/src/invitations/invitation.service.ts; .local/consumer-notification-verification/provider.ndjson
+    updated_at: "2026-11-13"
 fingerprints:
+  - id: consumer-reminders-2026-11-13
+    date: "2026-11-13"
+    commit: 82753ddaa6cedf36dbabafac185a3810b723e60e (working tree with consumer invoice selection and departure/invitation notifications)
+    cli: "1.75.0"
   - id: combined-release-2026-11-12
     date: "2026-11-12"
     commit: b82fc1c1dbd4ca866d9107e39eac30d401ef3bad (dirty working tree containing the combined production release)

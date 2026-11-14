@@ -179,7 +179,7 @@ export async function saveBookingInstalments(client:PoolClient,context:Context,i
     if(!activeCharge.rows.length) throw new ConflictException('This booking charge was reversed. Resolve its ledger correction before recording an instalment payment.');
   }
   await client.query(`UPDATE reminder_email_outbox SET state='cancelled',delivery_status='cancelled',lease_token=NULL,lease_until=NULL,
-    last_error='Booking schedule changed before notification delivery.' WHERE booking_id=$1 AND state IN ('pending','processing')`,[context.bookingId]);
+    last_error='Booking schedule changed before notification delivery.' WHERE booking_id=$1 AND kind='payment_due' AND state IN ('pending','processing')`,[context.bookingId]);
   // Unchanged legacy rows keep their identities; omitted paid rows were rejected
   // above, so deleting an unpaid row cannot accidentally discard received money.
   const removed=existing.filter(row=>!used.has(row.id)).map(row=>row.id);

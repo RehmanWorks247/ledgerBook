@@ -20,11 +20,13 @@ export const MAX_BOOKING_RECEIPT_BYTES = 100 * 1024 * 1024;
 export type PaymentUpload = { originalname:string; mimetype:string; buffer:Buffer; size:number };
 type Receipt = {name:string;content:Buffer;mimeType:'image/webp'|'application/pdf';originalSha256:string;originalName:string;originalMime:string};
 type PaymentRow = QueryResultRow & {id:string;organization_id:string;customer_id:string;booking_id:string|null;
+  invoice_id:string|null;invoice_number:string|null;
   amount_minor:string;currency:string;payment_date:string;note:string;status:'pending'|'approved'|'rejected';
   submitted_at:Date|string;reviewed_at:Date|string|null;reviewed_by:string|null;rejection_reason:string|null;
   ledger_entry_id:string|null;request_hash:string;booking_reference:string|null;customer_name:string;customer_code:string;submitted_by:string;
   source:'booking_instalment'|'customer_receipt';version:number;deleted_at:Date|string|null;deletion_reason:string|null;restore_credit:boolean|null;reversed:boolean};
-const paymentColumns = `p.id,p.organization_id,p.customer_id,p.booking_id,p.amount_minor::text AS amount_minor,p.currency,
+const paymentColumns = `p.id,p.organization_id,p.customer_id,p.booking_id,p.invoice_id,
+  (SELECT i.invoice_number FROM booking_invoices i WHERE i.id=p.invoice_id) AS invoice_number,p.amount_minor::text AS amount_minor,p.currency,
   p.payment_date::text AS payment_date,p.note,p.status,p.submitted_at,p.reviewed_at,p.reviewed_by,p.rejection_reason,
   p.ledger_entry_id::text AS ledger_entry_id,p.request_hash,p.submitted_by,p.source,p.version,p.deleted_at,p.deletion_reason,p.restore_credit,
   EXISTS(SELECT 1 FROM ledger_entries reversed WHERE reversed.reversal_of=p.ledger_entry_id) AS reversed,
@@ -32,7 +34,7 @@ const paymentColumns = `p.id,p.organization_id,p.customer_id,p.booking_id,p.amou
 const paymentJoins = `FROM booking_payments p LEFT JOIN bookings b ON b.id=p.booking_id AND b.organization_id=p.organization_id
   JOIN customers c ON c.id=p.customer_id AND c.organization_id=p.organization_id`;
 const submitSchema = z.object({amount:z.string().max(24),payment_date:z.string().refine(validDate,'Enter a valid payment date.'),
-  note:z.string().trim().max(1000).default(''),idempotency_key:z.uuid()}).strict();
+  note:z.string().trim().max(1000).default(''),idempotency_key:z.uuid(),invoice_id:z.uuid().optional()}).strict();
 const linkSchema=z.object({payment_entry_id:z.string().regex(/^[1-9]\d{0,18}$/)
   .refine(value=>/^[1-9]\d{0,18}$/.test(value)&&BigInt(value)<=9_223_372_036_854_775_807n,'Choose a valid existing payment.'),idempotency_key:z.uuid()}).strict();
 type RecordedPaymentInput={operation:'record';amount:string;payment_date:string;note:string;idempotency_key:string}
@@ -253,7 +255,7 @@ export class PaymentsService {
 
   /** Confirm received money separately from the reminder schedule. */
   async record(member:Membership,customerId:string,bookingId:string,raw:unknown) {
-    const data=parse(submitSchema,raw),amount=parseMoney(data.amount,2).toString();
+    const data=parse(submitSchema.omit({invoice_id:true}),raw),amount=parseMoney(data.amount,2).toString();
     if(data.payment_date>businessDate()) throw new BadRequestException('Payment date cannot be in the future.');
     return this.saveRecordedPayment(member,customerId,bookingId,{...data,amount,operation:'record'});
   }
@@ -324,13 +326,14 @@ export class PaymentsService {
 
   async submit(member:Membership,customerId:string,bookingId:string|null,raw:unknown,files:PaymentUpload[]) {
     const data=parse(submitSchema,raw);
+    if(data.invoice_id && !bookingId) throw new BadRequestException('Choose the booking for this invoice.');
     const amount=parseMoney(data.amount,2);
     if(data.payment_date>businessDate()) throw new BadRequestException('Payment date cannot be in the future.');
     // Direct service callers receive the same authorization-before-decoding guarantee as HTTP callers.
     await this.authorizeUpload(member,customerId,bookingId);
     const receipts=await this.normalizeFiles(files??[]);
     const fingerprint=digest(JSON.stringify({organization:member.organization_id,customer:customerId,booking:bookingId,
-      user:member.user_id,amount:amount.toString(),date:data.payment_date,note:data.note,
+      user:member.user_id,amount:amount.toString(),date:data.payment_date,note:data.note,...(data.invoice_id?{invoice:data.invoice_id}:{}),
       receipts:receipts.map(receipt=>({sha:receipt.originalSha256,name:receipt.originalName,mime:receipt.originalMime}))}));
     return this.db.transaction(async client=>{
       const {active,customer,booking}=await this.context(client,member,customerId,bookingId,'submit');
@@ -346,6 +349,18 @@ export class PaymentsService {
         AND metadata->'before'->>'idempotency_key'=$2`,[active.organization_id,data.idempotency_key]);
       if(purged.rows.length) throw new ConflictException('This payment submission was permanently deleted. Use a new submission for a new payment.');
       if(booking) await this.assertChargeActive(client,booking.charge_entry_id);
+      const invoice=bookingId?await ensureBookingInvoice(client,{organizationId:active.organization_id,customerId,bookingId,actorId:active.user_id}):null;
+      if(data.invoice_id && invoice?.id!==data.invoice_id) {
+        throw new ConflictException('This invoice is no longer the latest invoice for this booking. Refresh the invoices and select the latest version.');
+      }
+      if(invoice && (BigInt(invoice.balance_minor)<=0n || !['unpaid','partially_paid'].includes(invoice.status))) {
+        throw new ConflictException('This invoice has no outstanding balance. Refresh the invoices before submitting a payment.');
+      }
+      if(invoice) {
+        const balance=await client.query<{balance:string}>(`SELECT COALESCE(SUM(amount_minor),0)::text AS balance
+          FROM account_ledger_entries WHERE organization_id=$1 AND customer_id=$2`,[active.organization_id,customerId]);
+        if(BigInt(balance.rows[0].balance)<=0n) throw new ConflictException('Your account has no outstanding balance. Refresh your account before submitting a payment.');
+      }
       const limits=await client.query<{total:number;pending:number}>(`SELECT count(*)::integer AS total,count(*) FILTER (WHERE status='pending')::integer AS pending
         FROM booking_payments WHERE organization_id=$1 AND customer_id=$2 AND booking_id IS NOT DISTINCT FROM $3::uuid
           AND source='customer_receipt' AND deleted_at IS NULL`,[active.organization_id,customerId,bookingId]);
@@ -363,11 +378,11 @@ export class PaymentsService {
         [active.organization_id,customerId,bookingId,receipts.map(receipt=>receipt.originalSha256)]);
       if(duplicate.rows.length) throw new ConflictException(`A receipt is already attached to a pending or approved payment in this ${scope}. Check its existing status.`);
       const id=randomUUID();
-      const inserted=await client.query<{submitted_at:Date}>(`INSERT INTO booking_payments(id,organization_id,customer_id,booking_id,amount_minor,payment_date,note,submitted_by,idempotency_key,request_hash)
-        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING submitted_at`,[id,active.organization_id,customerId,bookingId,amount.toString(),data.payment_date,data.note,active.user_id,data.idempotency_key,fingerprint]);
+      const inserted=await client.query<{submitted_at:Date}>(`INSERT INTO booking_payments(id,organization_id,customer_id,booking_id,amount_minor,payment_date,note,submitted_by,idempotency_key,request_hash,invoice_id)
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING submitted_at`,[id,active.organization_id,customerId,bookingId,amount.toString(),data.payment_date,data.note,active.user_id,data.idempotency_key,fingerprint,invoice?.id??null]);
       for(const receipt of receipts) await client.query(`INSERT INTO booking_payment_receipts(id,organization_id,customer_id,booking_id,payment_id,name,size,content,original_sha256,mime_type)
         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,[randomUUID(),active.organization_id,customerId,bookingId,id,receipt.name,receipt.content.length,receipt.content,receipt.originalSha256,receipt.mimeType]);
-      await this.audit(client,active,'payment.submitted',id,{customer_id:customerId,booking_id:bookingId,amount_minor:amount.toString(),receipt_count:receipts.length});
+      await this.audit(client,active,'payment.submitted',id,{customer_id:customerId,booking_id:bookingId,invoice_id:invoice?.id??null,amount_minor:amount.toString(),receipt_count:receipts.length});
       const submittedAt=new Date(inserted.rows[0].submitted_at).toISOString();
       const link=booking?`${config.appUrl}/o/${active.organization_id}/users/${customerId}/bookings/${bookingId}`:
         `${config.appUrl}/o/${active.organization_id}/payment-reviews?q=${id}`;

@@ -74,3 +74,17 @@ Verification on 10 November 2026: the full suite passed 356 backend tests agains
 All 20 Chromium browser scenarios passed, including creating a booking through the UI, downloading the actual PDF, approving a payment and seeing the next version without reload, preserving earlier bytes, customer downloads, a 390 px mobile layout, and access after cancellation. The focused invoice scenario also passed on WebKit.
 
 A restricted PostgreSQL runtime role could create/read invoices, while invoice update/delete, direct purge-context writes, private purge-helper calls and nonadministrator purges were rejected. Authorized customer deletion removed all invoice versions and attachment outbox records. A local compiled-code sample measured invoice creation/persistence at a 22.66 ms median / 31.59 ms p95 (20 sequential samples), rendering at a 14.89 ms median (50 samples), and paginated history/download reads around 3 ms. These measurements establish local behavior, not production throughput guarantees.
+
+## Consumer invoice payments
+
+My Account lists the latest outstanding invoice for each active booking, newest first, with its booking reference, remaining balance, PDF preview and payment action. The payment form requires selecting a current invoice and submits to that booking's payment endpoint with `invoice_id`. Older, settled, cancelled and foreign invoice selections are rejected inside the payment transaction. Fully settled accounts have no payable invoices, including those settled by independent account credits.
+
+`GET /organizations/:orgId/customers/:customerId/invoices/outstanding` supplies the picker. A selected invoice remains attached to payment history after approval issues a newer invoice. Retrying the original submission key returns the original payment even after a newer invoice exists. Legacy booking clients omitting the ID are bound to the latest invoice automatically; the existing independent account-payment API remains available for unallocated transfers. Payments continue to use transfer details and optional receipt uploads with administrator approval.
+
+## Departure and acceptance emails
+
+The reminder worker scans every 30 seconds. Active trips receive a luggage preparation email at 72 hours before their departure timestamp and a taxi/airport preparation email at six hours before departure. Each stage is deduplicated per booking and departure timestamp. Late scans send only the currently applicable stage. Delivery rechecks the current timestamp, account, recipient and cancellation status; queued reminders expire at the next stage or departure. Rescheduling creates a fresh schedule for the new departure timestamp. No travel reminders are sent after departure.
+
+Departure reminders are automatic and independent of payment-reminder settings and paid balances. Due reminders retain their opt-in settings and recheck both the due amount and live account balance before sending. Settled accounts receive no due reminders. Payment schedule changes and payment corrections invalidate only due reminders.
+
+Invitation acceptance atomically queues one email per active workspace administrator, including the customer's name and email and a link to their record. The existing durable email worker retries failures and rechecks administrator access before sending. Notification history distinguishes departure, payment and invitation emails.

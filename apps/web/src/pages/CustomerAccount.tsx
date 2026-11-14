@@ -8,6 +8,8 @@ import { useOrganization } from "../state";
 import { ReceiptUploadForm } from "../payments/BookingPayments";
 import { PaymentDetailsDialog, PaymentStatusBadge } from "../payments/PaymentTable";
 import { paymentsPath, type Payment, type PaymentsResponse } from "../payments/model";
+import { OutstandingInvoices } from "../invoices/OutstandingInvoices";
+import { outstandingInvoicesPath, type OutstandingInvoicesResponse } from "../invoices/outstanding";
 import "./Bookings.css";
 import "./CustomerAccount.css";
 
@@ -22,6 +24,7 @@ function AccountOverview({ customerId }: { customerId: string }) {
   const root = `/o/${member.organization_id}`;
   const money = useLedgerMoney();
   const [paying, setPaying] = useState(false);
+  const [invoiceId,setInvoiceId] = useState<string>();
   const [notice, setNotice] = useState("");
   const [selected, setSelected] = useState<Payment | null>(null);
   const paymentButton = useRef<HTMLButtonElement>(null);
@@ -29,7 +32,8 @@ function AccountOverview({ customerId }: { customerId: string }) {
     `/organizations/${member.organization_id}/customers/${customerId}/statement?page_size=1`, { cache: true },
   );
   const payments = useResource<PaymentsResponse>(paymentsPath({ organizationId: member.organization_id, customerId }));
-  function refreshAccount() { refresh(); payments.refresh(); }
+  const invoices = useResource<OutstandingInvoicesResponse>(outstandingInvoicesPath(member.organization_id,customerId));
+  function refreshAccount() { refresh(); payments.refresh(); invoices.refresh(); }
   function closePaymentForm() { setPaying(false); requestAnimationFrame(() => paymentButton.current?.focus()); }
   function submitted() {
     closePaymentForm();
@@ -51,7 +55,8 @@ function AccountOverview({ customerId }: { customerId: string }) {
       <div className="customer-account-actions"><button ref={paymentButton} className="button" disabled={paying} aria-expanded={paying} aria-controls="account-payment-form" onClick={() => { setNotice(""); setPaying(true); }}><Banknote size={17} aria-hidden="true" />Make a payment</button><button className="button secondary" disabled={loading || payments.loading} onClick={refreshAccount}><RefreshCw size={16} aria-hidden="true" />{loading ? "Updating…" : "Refresh balance"}</button></div>
     } />
     {notice && <div className="notice success payment-result-notice" role="status"><span>{notice}</span><button type="button" className="icon-button" aria-label="Dismiss payment notification" onClick={() => setNotice("")}><X size={16} /></button></div>}
-    {paying && <div className="customer-account-payment"><ReceiptUploadForm organizationId={member.organization_id} customerId={customerId} timeZone={payments.data?.time_zone || member.time_zone || "UTC"} paymentRequest={1} onSubmitted={submitted} onCancel={closePaymentForm} /></div>}
+    {paying && <div className="customer-account-payment"><ReceiptUploadForm organizationId={member.organization_id} customerId={customerId} selectedInvoiceId={invoiceId} timeZone={payments.data?.time_zone || member.time_zone || "UTC"} paymentRequest={1} onSubmitted={submitted} onCancel={closePaymentForm} /></div>}
+    <OutstandingInvoices organizationId={member.organization_id} customerId={customerId} invoices={invoices.data?.invoices??[]} loading={invoices.loading} error={invoices.error} onRefresh={invoices.refresh} onPay={invoice=>{setInvoiceId(invoice.id);setNotice("");setPaying(true);}}/>
     <section className="panel customer-account-details" aria-labelledby="account-details-title">
       <h2 id="account-details-title">Account details</h2>
       <dl>
@@ -77,6 +82,7 @@ function AccountOverview({ customerId }: { customerId: string }) {
       <div className="customer-account-payment-grid">{payments.data.items.map(payment => <article key={payment.id} className="panel customer-account-payment-card" aria-label={`${paymentMoney(payment.amount_minor, payment.currency, 2)} payment ${payment.reversed ? "reversed" : payment.status}`}>
         <div><strong>{paymentMoney(payment.amount_minor, payment.currency, 2)}</strong><PaymentStatusBadge status={payment.status} reversed={payment.reversed} deleted_at={payment.deleted_at} /></div>
         <time dateTime={payment.payment_date}>{dateLabel(payment.payment_date)}</time>
+        {payment.invoice_number && <p>Invoice {payment.invoice_number} · {payment.booking_reference}</p>}
         {payment.note && <p>{payment.note}</p>}
         <button type="button" className="text-link" onClick={() => setSelected(payment)}>View payment<ArrowRight size={15} aria-hidden="true" /></button>
       </article>)}</div>

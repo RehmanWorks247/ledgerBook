@@ -150,7 +150,7 @@
       "post": {
         "operationId": "submitBookingPayment",
         "summary": "Customer submits a payment with optional attachments",
-        "description": "Customer owner only. Creates a pending review; no money is posted before admin approval. Repeat the same idempotency key with the same values/files to recover a lost response.",
+        "description": "Customer owner only. Creates a pending review; no money is posted before admin approval. Repeat the same idempotency key with the same values/files to recover a lost response. Invoice payments retain the selected invoice_id. Only the latest outstanding invoice is eligible; stale selections or fully settled invoices/accounts return 409. Historical account submissions remain supported without an invoice.",
         "requestBody": {
           "required": true,
           "content": {
@@ -2297,6 +2297,11 @@
               "format": "binary"
             },
             "description": "Optional PDF, JPEG, PNG or WebP attachments, at most 5 MiB each."
+          },
+          "invoice_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Selected latest outstanding invoice. Only valid on a matching booking payment route. If omitted on a legacy booking submission, the server binds the current invoice. Stale, foreign, paid or cancelled selections are rejected; idempotent replay still returns the original payment after newer versions are issued."
           }
         }
       },
@@ -2464,6 +2469,20 @@
               "null"
             ],
             "description": "For trashed records, true only when moving to trash removed active credit; restoration otherwise preserves an existing reversal. Null for active records."
+          },
+          "invoice_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Original selected invoice, retained through approval and later invoice revisions."
+          },
+          "invoice_number": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Original selected invoice, retained through approval and later invoice revisions."
           }
         }
       },

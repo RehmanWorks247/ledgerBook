@@ -302,6 +302,12 @@ export class InvitationService {
         }
       }
       await client.query(`UPDATE invitations SET accepted_at=now() WHERE id=$1`, [invitation.id]);
+      await client.query(`INSERT INTO payment_email_outbox(organization_id,recipient,subject,body,dedupe_key,source_customer_id)
+        SELECT m.organization_id,u.email,$2,$3,$4||u.id::text,$5::uuid FROM memberships m JOIN users u ON u.id=m.user_id
+        WHERE m.organization_id=$1 AND m.role='admin' AND m.is_active AND m.deleted_at IS NULL
+        ON CONFLICT(dedupe_key) DO NOTHING`, [invitation.organization_id,'Invitation accepted · '+invitation.customer_name,
+        `${invitation.customer_name} (${invitation.email}) just accepted their invitation to ${invitation.organization_name}.\n\nThey can now sign in to view their account and submit payments.\n\nView customer:\n${config.appUrl}/o/${invitation.organization_id}/users/${invitation.customer_id}`,
+        `invitation-accepted:${invitation.id}:`,invitation.customer_id]);
       await client.query(
         `INSERT INTO audit_events (organization_id,actor_id,action,object_id,metadata) VALUES ($1,$2,'invitation.accepted',$3,$4)`,
         [invitation.organization_id, user.id, invitation.id, JSON.stringify({ customerId: invitation.customer_id, membershipId })],

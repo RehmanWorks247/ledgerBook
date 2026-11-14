@@ -45,7 +45,7 @@ import { PaymentEmailStatusController } from './payments/email-status.controller
 import { OrganizationsController } from './organizations/organizations.controller';
 import { OrganizationsService } from './organizations/organizations.service';
 import { InvoicesService } from './invoices/invoices.service';
-import { InvoicesController } from './invoices/invoices.controller';
+import { CustomerInvoicesController, InvoicesController } from './invoices/invoices.controller';
 import { CompaniesController } from './companies/companies.controller';
 import { CompaniesService } from './companies/companies.service';
 
@@ -80,7 +80,7 @@ class SafeExceptionFilter implements ExceptionFilter {
 
 export async function createApp(options:{database?:DatabaseService;documentStorage?:DocumentStorage;logger?:false;paymentEmails?:boolean;reminderEmails?:boolean}={}) {
   @Module({imports:[DatabaseModule.forRoot(options.database),AuthModule,InvitationsModule],
-    controllers:[HealthController,OrganizationsController,CompaniesController,CustomersController,UsersController,CurrencyController,BookingsController,BookingManagementController,InvoicesController,DocumentVersionsController,DocumentPreviewController,ResendWebhookController,NotificationSettingsController,ReminderPreferencesController,PaymentsController,PaymentReviewController,PaymentEmailStatusController],
+    controllers:[HealthController,OrganizationsController,CompaniesController,CustomersController,UsersController,CurrencyController,BookingsController,BookingManagementController,InvoicesController,CustomerInvoicesController,DocumentVersionsController,DocumentPreviewController,ResendWebhookController,NotificationSettingsController,ReminderPreferencesController,PaymentsController,PaymentReviewController,PaymentEmailStatusController],
     providers:[AccessService,OrganizationsService,CompaniesService,LedgerService,CustomersService,UsersService,AccountDeletionService,CurrencyService,RatesService,BookingsService,BookingManagementService,DocumentVersionsService,EmailDeliveryService,ReminderService,
       options.documentStorage ? {provide:DocumentStorage,useValue:options.documentStorage} : DocumentStorage,DocumentCleanupWorker,DocumentUploadInterceptor,DocumentDownloadInterceptor,DocumentPreviewService,DashboardService,
       InvoicesService,PaymentsService,PaymentUploadGuard,PaymentEmailOutbox,{provide:'PAYMENT_EMAIL_WORKER_ENABLED',useValue:options.paymentEmails ?? true},{provide:'REMINDER_WORKER_ENABLED',useValue:options.reminderEmails ?? options.paymentEmails ?? true}]})

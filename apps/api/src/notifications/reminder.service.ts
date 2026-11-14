@@ -9,13 +9,14 @@ import { businessDate } from '../dashboard/time';
 import { DatabaseService } from '../database/database.service';
 import { EmailDeliveryService } from './email-delivery.service';
 import { NotificationsService } from './notifications.service';
+import { departureStillCurrent, scheduleDepartures } from './departure-reminders';
 
 const settingsSchema=z.object({enabled:z.boolean(),due_soon_days:z.number().int().min(0).max(14),repeat_days:z.number().int().min(1).max(30),
   send_hour:z.number().int().min(0).max(23),time_zone:z.string().max(100).refine(value=>{
     try {if(/^[+-]/.test(value))return false;new Intl.DateTimeFormat('en',{timeZone:value}).format();return true;} catch {return false;}
   },'Use a valid IANA time zone.').transform(value=>new Intl.DateTimeFormat('en',{timeZone:value}).resolvedOptions().timeZone),expected_version:z.number().int().nonnegative().optional()}).strict();
 type Settings=z.infer<typeof settingsSchema>&{organization_id:string;last_scheduled_date:string|null;updated_at:Date;version:number};
-type Reminder={id:string;organization_id:string;customer_id:string;booking_id:string;instalment_id:string|null;recipient:string;subject:string;body:string;attempts:number;first_attempt_at:Date};
+type Reminder={id:string;organization_id:string;customer_id:string;booking_id:string;instalment_id:string|null;recipient:string;subject:string;body:string;attempts:number;first_attempt_at:Date;kind:string;departure_at:Date|string|null};
 const defaults={version:0,enabled:false,due_soon_days:3,repeat_days:7,send_hour:9,time_zone:config.businessTimeZone,last_scheduled_date:null};
 function parse<T>(schema:z.ZodType<T>,raw:unknown):T {
   const value=schema.safeParse(raw);
@@ -42,7 +43,9 @@ export class ReminderService implements OnApplicationBootstrap,BeforeApplication
     if(this.running)return this.running;
     this.running=this.run(now).finally(()=>{this.running=undefined;});return this.running;
   }
-  private async run(now:Date) {const queued=await this.schedule(now);const sent=await this.deliver();return {queued,sent};}
+  private async run(now:Date) {const queued=await this.schedule(now)+await this.scheduleDepartures(now);const sent=await this.deliver();return {queued,sent};}
+
+  async scheduleDepartures(now=new Date()) {return scheduleDepartures(this.db,now);}
 
   async settings(member:Membership) {
     return this.db.transaction(async client=>{
@@ -90,9 +93,11 @@ export class ReminderService implements OnApplicationBootstrap,BeforeApplication
   async history(member:Membership) {
     return this.db.transaction(async client=>{
       const active=await this.access.membership(member.user_id,member.organization_id,true,client);
-      const base=`SELECT id,recipient,subject,state,attempts,last_error,created_at,sent_at,delivery_status,delivery_updated_at,'reminder'::text AS kind
+      const base=`SELECT id,recipient,subject,state,attempts,last_error,created_at,sent_at,delivery_status,delivery_updated_at,
+        CASE WHEN kind='payment_due' THEN 'reminder' ELSE 'departure' END AS kind
         FROM reminder_email_outbox WHERE organization_id=$1 UNION ALL
-        SELECT id,recipient,subject,state,attempts,last_error,created_at,sent_at,delivery_status,delivery_updated_at,'payment'::text AS kind
+        SELECT id,recipient,subject,state,attempts,last_error,created_at,sent_at,delivery_status,delivery_updated_at,
+        CASE WHEN dedupe_key LIKE 'invitation-accepted:%' THEN 'invitation' ELSE 'payment' END AS kind
         FROM payment_email_outbox WHERE organization_id=$1`;
       const rows=await client.query(`SELECT * FROM (${base}) emails ORDER BY created_at DESC,id LIMIT 100`,[active.organization_id]);
       const summary=await client.query(`SELECT count(*) FILTER(WHERE state IN ('pending','processing'))::int AS queued,
@@ -137,7 +142,7 @@ export class ReminderService implements OnApplicationBootstrap,BeforeApplication
           WHERE p.unpaid>0 AND p.due_date<=$2::date+$3::integer AND c.status='active' AND COALESCE(pref.enabled,true)
             AND (SELECT COALESCE(SUM(e.amount_minor),0) FROM account_ledger_entries e WHERE e.organization_id=$1 AND e.customer_id=c.id)>0
             AND NOT EXISTS(SELECT 1 FROM email_suppressions s WHERE s.organization_id=$1 AND s.recipient_hash=encode(sha256(convert_to(lower(c.email),'UTF8')),'hex'))
-            AND NOT EXISTS(SELECT 1 FROM reminder_email_outbox e WHERE e.customer_id=p.customer_id
+            AND NOT EXISTS(SELECT 1 FROM reminder_email_outbox e WHERE e.customer_id=p.customer_id AND e.kind='payment_due'
               AND (e.state IN ('pending','processing') OR (e.state<>'cancelled' AND e.scheduled_date>$2::date-$4::integer)))
           ORDER BY p.customer_id,p.due_date,p.id
         ) INSERT INTO reminder_email_outbox(organization_id,customer_id,booking_id,instalment_id,scheduled_date,recipient,subject,body)
@@ -164,7 +169,7 @@ export class ReminderService implements OnApplicationBootstrap,BeforeApplication
       [email.organization_id,`reminder.${status}`,email.id,JSON.stringify({customer_id:email.customer_id,booking_id:email.booking_id,instalment_id:email.instalment_id,status})]);
   }
 
-  async deliver() {
+  async deliver(now?:Date) {
     let sent=0;
     for(let index=0;index<20&&!this.stopping;index++) {
       const token=randomUUID();
@@ -195,16 +200,21 @@ export class ReminderService implements OnApplicationBootstrap,BeforeApplication
               last_error='Automatic retries stopped before the provider idempotency window expired. Check provider delivery records.' WHERE id=$1`,[email.id]);
             await this.audit(client,email,'failed');return false;
           }
-          const due=await client.query(`WITH ${positionCtes} SELECT p.id FROM positioned p JOIN customers c ON c.id=p.customer_id
-            LEFT JOIN customer_reminder_preferences pref ON pref.customer_id=c.id
-            WHERE p.id=$2 AND p.unpaid>0 AND c.status='active' AND COALESCE(pref.enabled,true) AND lower(c.email)=lower($5::text)
-              AND (SELECT COALESCE(SUM(e.amount_minor),0) FROM account_ledger_entries e WHERE e.organization_id=$1 AND e.customer_id=c.id)>0
-              AND p.due_date<=$3::date+$4::integer AND NOT EXISTS(SELECT 1 FROM email_suppressions s
-                WHERE s.organization_id=$1 AND s.recipient_hash=encode(sha256(convert_to(lower(c.email),'UTF8')),'hex'))`,
-          [email.organization_id,email.instalment_id,businessDate(new Date(),settings?.time_zone??config.businessTimeZone),settings?.due_soon_days??0,email.recipient]);
-          if(!settings?.enabled || !due.rows.length) {
+          let valid:boolean;
+          if(email.kind!=='payment_due') valid=await departureStillCurrent(client,email,now??new Date());
+          else {
+            const due=await client.query(`WITH ${positionCtes} SELECT p.id FROM positioned p JOIN customers c ON c.id=p.customer_id
+              LEFT JOIN customer_reminder_preferences pref ON pref.customer_id=c.id
+              WHERE p.id=$2 AND p.unpaid>0 AND c.status='active' AND COALESCE(pref.enabled,true) AND lower(c.email)=lower($5::text)
+                AND (SELECT COALESCE(SUM(e.amount_minor),0) FROM account_ledger_entries e WHERE e.organization_id=$1 AND e.customer_id=c.id)>0
+                AND p.due_date<=$3::date+$4::integer AND NOT EXISTS(SELECT 1 FROM email_suppressions s
+                  WHERE s.organization_id=$1 AND s.recipient_hash=encode(sha256(convert_to(lower(c.email),'UTF8')),'hex'))`,
+            [email.organization_id,email.instalment_id,businessDate(now??new Date(),settings?.time_zone??config.businessTimeZone),settings?.due_soon_days??0,email.recipient]);
+            valid=Boolean(settings?.enabled && due.rows.length);
+          }
+          if(!valid) {
             await client.query(`UPDATE reminder_email_outbox SET state='cancelled',delivery_status='cancelled',lease_token=NULL,lease_until=NULL,
-              last_error='Reminder cancelled because the balance, account or reminder preference changed.' WHERE id=$1`,[email.id]);
+              last_error='Reminder cancelled because its balance, departure, account or reminder preference changed.' WHERE id=$1`,[email.id]);
             await this.audit(client,email,'cancelled');return false;
           }
           // The customer's lock is held through provider acceptance, using the
